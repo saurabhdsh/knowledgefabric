@@ -1,0 +1,29 @@
+[
+  {
+    "id": "fabric_2554cd5bdfbd42d7a03d4ec880ac6474_pdf_1753184749",
+    "name": "Knowledge_Fabric_1",
+    "source_type": "pdf",
+    "description": "Knowledge fabric created from 1 files",
+    "tags": [
+      "pdf",
+      "knowledge-fabric"
+    ],
+    "created_at": "2025-07-22 11:45:49",
+    "updated_at": "2025-07-22 11:45:49",
+    "document_count": 1,
+    "status": "active",
+    "model_status": "training",
+    "last_training": null,
+    "total_chunks": 10,
+    "processed_files": [
+      {
+        "filename": "2554cd5bdfbd42d7a03d4ec880ac6474.pdf",
+        "doc_id": "fabric_2554cd5bdfbd42d7a03d4ec880ac6474_pdf_1753184749",
+        "chunks": 10,
+        "readable_name": "Knowledge_Fabric_1"
+      }
+    ],
+    "model_id": "knowledge_fabric_20250722_114549",
+    "training_started": "2025-07-22 11:45:49"
+  }
+]
