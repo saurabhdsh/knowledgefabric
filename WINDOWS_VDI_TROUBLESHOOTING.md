@@ -4,6 +4,43 @@ This guide addresses common issues when running Knowledge-Fabric on Windows VDI 
 
 ## 🚨 Common Error: Pip Installation Issues
 
+### Error: `setuptools.build_meta` BackendUnavailable Error
+
+**Symptoms:**
+- Error: `Cannot import 'setuptools.build_meta'`
+- Error: `BackendUnavailable: Cannot import 'setuptools.build_meta'`
+- Build dependency failures during package installation
+
+**Solutions:**
+
+#### 1. Use the VDI-Optimized Setup Script
+```cmd
+# Use the VDI-specific setup script
+setup_without_docker_vdi_fixed.bat
+```
+
+#### 2. Use the Build Error Fix Script
+```cmd
+# If you already have a virtual environment with errors
+fix_build_error.bat
+```
+
+#### 3. Manual Fix for Build Dependencies
+```cmd
+cd backend
+call venv\Scripts\activate.bat
+
+# Remove problematic packages
+python -m pip uninstall pandas numpy scikit-learn -y
+
+# Install build tools
+python -m pip install --upgrade pip setuptools wheel setuptools_scm --timeout 300
+
+# Install with pre-compiled wheels only
+python -m pip install numpy pandas scikit-learn --only-binary=all --timeout 300
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu --only-binary=all --timeout 600
+```
+
 ### Error: `pip._internal.cli.base_command.py` Resolution Error
 
 **Symptoms:**
