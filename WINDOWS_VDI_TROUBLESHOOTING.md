@@ -4,12 +4,50 @@ This guide addresses common issues when running Knowledge-Fabric on Windows VDI 
 
 ## 🚨 Common Error: Pip Installation Issues
 
-### Error: `setuptools.build_meta` BackendUnavailable Error
+### Error: Python 3.12 Compatibility Issues
 
 **Symptoms:**
+- Error: `AttributeError: module 'pkgutil' has no attribute 'ImpImporter'`
 - Error: `Cannot import 'setuptools.build_meta'`
 - Error: `BackendUnavailable: Cannot import 'setuptools.build_meta'`
 - Build dependency failures during package installation
+- Python 3.12 compatibility issues
+
+**Solutions:**
+
+#### 1. Use Python 3.12 Specific Setup
+```cmd
+# Use the Python 3.12 optimized setup script
+setup_python312.bat
+```
+
+#### 2. Use Python 3.12 Compatibility Fix
+```cmd
+# If you already have a virtual environment with Python 3.12 issues
+fix_python312_compatibility.bat
+```
+
+#### 3. Manual Fix for Python 3.12
+```cmd
+cd backend
+call venv\Scripts\activate.bat
+
+# Remove all packages that might have compatibility issues
+python -m pip uninstall setuptools wheel pip -y
+
+# Install latest versions of build tools
+python -m pip install --upgrade pip setuptools wheel --timeout 300
+
+# Install packages compatible with Python 3.12
+python -m pip install fastapi uvicorn pydantic python-dotenv aiofiles --timeout 300
+python -m pip install numpy pandas scikit-learn --timeout 300
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu --timeout 600
+python -m pip install transformers sentence-transformers --timeout 600
+python -m pip install chromadb sqlalchemy psycopg2-binary mysql-connector-python --timeout 300
+python -m pip install pypdf2 python-jose[cryptography] passlib[bcrypt] datasets accelerate pyarrow openai --timeout 300
+```
+
+### Error: `setuptools.build_meta` BackendUnavailable Error (Python 3.11 and below)
 
 **Solutions:**
 
