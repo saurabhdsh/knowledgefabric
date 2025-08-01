@@ -26,24 +26,24 @@ python -m venv venv
 call venv\Scripts\activate.bat
 
 # Upgrade pip first
-pip install --upgrade pip --timeout 300
+python -m pip install --upgrade pip --timeout 300
 
 # Install packages individually
-pip install fastapi==0.104.1 --timeout 300
-pip install uvicorn[standard]==0.24.0 --timeout 300
-pip install pydantic==2.5.0 --timeout 300
-pip install python-dotenv==1.0.0 --timeout 300
-pip install aiofiles==23.2.1 --timeout 300
-pip install numpy==1.24.3 --timeout 300
-pip install pandas==2.0.3 --timeout 300
-pip install scikit-learn==1.3.0 --timeout 300
-pip install torch==2.1.0 --timeout 600
-pip install transformers==4.35.0 --timeout 600
-pip install sentence-transformers==2.2.2 --timeout 600
-pip install chromadb==0.4.15 --timeout 300
-pip install sqlalchemy==2.0.23 --timeout 300
-pip install pypdf2==3.0.1 --timeout 300
-pip install openai==0.28.1 --timeout 300
+python -m pip install fastapi==0.104.1 --timeout 300
+python -m pip install uvicorn[standard]==0.24.0 --timeout 300
+python -m pip install pydantic==2.5.0 --timeout 300
+python -m pip install python-dotenv==1.0.0 --timeout 300
+python -m pip install aiofiles==23.2.1 --timeout 300
+python -m pip install numpy==1.24.3 --timeout 300
+python -m pip install pandas==2.0.3 --timeout 300
+python -m pip install scikit-learn==1.3.0 --timeout 300
+python -m pip install torch==2.1.0 --timeout 600
+python -m pip install transformers==4.35.0 --timeout 600
+python -m pip install sentence-transformers==2.2.2 --timeout 600
+python -m pip install chromadb==0.4.15 --timeout 300
+python -m pip install sqlalchemy==2.0.23 --timeout 300
+python -m pip install pypdf2==3.0.1 --timeout 300
+python -m pip install openai==0.28.1 --timeout 300
 ```
 
 #### 3. Network Proxy Issues
@@ -61,7 +61,7 @@ pip install --proxy http://proxy.company.com:8080 package_name
 #### 4. Use Alternative Package Index
 ```cmd
 # Use a different PyPI mirror
-pip install -i https://pypi.tuna.tsinghua.edu.cn/simple/ package_name
+python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple/ package_name
 
 # Or use conda-forge
 conda install -c conda-forge package_name
@@ -87,19 +87,19 @@ pip install sentence-transformers chromadb openai
 ### Method 2: Use pip with --no-deps
 ```cmd
 # Install packages without dependencies first
-pip install --no-deps torch==2.1.0
-pip install --no-deps transformers==4.35.0
-pip install sentence-transformers==2.2.2
+python -m pip install --no-deps torch==2.1.0
+python -m pip install --no-deps transformers==4.35.0
+python -m pip install sentence-transformers==2.2.2
 
 # Then install remaining packages
-pip install fastapi uvicorn pydantic python-dotenv
+python -m pip install fastapi uvicorn pydantic python-dotenv
 ```
 
 ### Method 3: Use Virtual Environment with --user
 ```cmd
 # Install packages to user directory
-pip install --user fastapi uvicorn pydantic
-pip install --user torch transformers sentence-transformers
+python -m pip install --user fastapi uvicorn pydantic
+python -m pip install --user torch transformers sentence-transformers
 ```
 
 ## 🌐 Network and Firewall Issues
@@ -110,7 +110,7 @@ pip install --user torch transformers sentence-transformers
 ping google.com
 
 # Test pip connectivity
-pip install --dry-run fastapi
+python -m pip install --dry-run fastapi
 
 # Check if ports are blocked
 telnet pypi.org 443
@@ -119,7 +119,7 @@ telnet pypi.org 443
 ### Corporate Firewall Solutions
 ```cmd
 # Use corporate proxy
-pip install --proxy http://proxy.company.com:8080 package_name
+python -m pip install --proxy http://proxy.company.com:8080 package_name
 
 # Or configure pip.conf
 # Create file: %APPDATA%\pip\pip.ini
@@ -135,7 +135,7 @@ proxy = http://proxy.company.com:8080
 dir C:\
 
 # Clean pip cache
-pip cache purge
+python -m pip cache purge
 
 # Clean temporary files
 del /s /q %TEMP%\*
@@ -185,10 +185,10 @@ BATCH_SIZE=16
 ### Use CPU-Only PyTorch
 ```cmd
 # Uninstall GPU version
-pip uninstall torch
+python -m pip uninstall torch
 
 # Install CPU-only version
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
 ## 🛠️ Manual Installation Steps
@@ -201,7 +201,7 @@ If automated scripts fail, try this manual approach:
 rmdir /s backend\venv
 
 # Clear pip cache
-pip cache purge
+python -m pip cache purge
 ```
 
 ### Step 2: Create Fresh Environment
@@ -209,31 +209,31 @@ pip cache purge
 cd backend
 python -m venv venv
 call venv\Scripts\activate.bat
-pip install --upgrade pip
+python -m pip install --upgrade pip
 ```
 
 ### Step 3: Install Core Dependencies
 ```cmd
 # Install essential packages first
-pip install fastapi uvicorn pydantic python-dotenv aiofiles
-pip install numpy pandas scikit-learn
+python -m pip install fastapi uvicorn pydantic python-dotenv aiofiles
+python -m pip install numpy pandas scikit-learn
 ```
 
 ### Step 4: Install ML Dependencies
 ```cmd
 # Install PyTorch CPU version
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 # Install transformers
-pip install transformers
+python -m pip install transformers
 
 # Install sentence-transformers
-pip install sentence-transformers
+python -m pip install sentence-transformers
 ```
 
 ### Step 5: Install Remaining Packages
 ```cmd
-pip install chromadb sqlalchemy pypdf2 openai
+python -m pip install chromadb sqlalchemy pypdf2 openai
 ```
 
 ## 📞 Getting Help
@@ -244,7 +244,7 @@ pip install chromadb sqlalchemy pypdf2 openai
 python --version
 
 # Pip version
-pip --version
+python -m pip --version
 
 # Network connectivity
 ping pypi.org
@@ -275,10 +275,10 @@ echo %HTTPS_PROXY%
 cd backend
 python -m venv venv
 call venv\Scripts\activate.bat
-pip install fastapi uvicorn pydantic python-dotenv
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-pip install sentence-transformers
-pip install chromadb openai
+python -m pip install fastapi uvicorn pydantic python-dotenv
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install sentence-transformers
+python -m pip install chromadb openai
 
 cd ..\frontend
 npm install

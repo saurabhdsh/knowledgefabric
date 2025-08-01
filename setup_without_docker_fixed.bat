@@ -65,42 +65,42 @@ call venv\Scripts\activate.bat
 
 REM Upgrade pip first
 echo [INFO] Upgrading pip...
-pip install --upgrade pip --timeout 300
+python -m pip install --upgrade pip --timeout 300
 
 REM Install packages one by one to identify problematic ones
 echo [INFO] Installing core packages...
-pip install fastapi==0.104.1 --timeout 300
-pip install uvicorn[standard]==0.24.0 --timeout 300
-pip install pydantic==2.5.0 --timeout 300
-pip install pydantic-settings==2.1.0 --timeout 300
-pip install python-multipart==0.0.6 --timeout 300
-pip install python-dotenv==1.0.0 --timeout 300
-pip install aiofiles==23.2.1 --timeout 300
+python -m pip install fastapi==0.104.1 --timeout 300
+python -m pip install uvicorn[standard]==0.24.0 --timeout 300
+python -m pip install pydantic==2.5.0 --timeout 300
+python -m pip install pydantic-settings==2.1.0 --timeout 300
+python -m pip install python-multipart==0.0.6 --timeout 300
+python -m pip install python-dotenv==1.0.0 --timeout 300
+python -m pip install aiofiles==23.2.1 --timeout 300
 
 echo [INFO] Installing ML packages...
-pip install numpy==1.24.3 --timeout 300
-pip install pandas==2.0.3 --timeout 300
-pip install scikit-learn==1.3.0 --timeout 300
+python -m pip install numpy==1.24.3 --timeout 300
+python -m pip install pandas==2.0.3 --timeout 300
+python -m pip install scikit-learn==1.3.0 --timeout 300
 
 echo [INFO] Installing PyTorch and transformers...
-pip install torch==2.1.0 --timeout 600
-pip install transformers==4.35.0 --timeout 600
-pip install sentence-transformers==2.2.2 --timeout 600
+python -m pip install torch==2.1.0 --timeout 600
+python -m pip install transformers==4.35.0 --timeout 600
+python -m pip install sentence-transformers==2.2.2 --timeout 600
 
 echo [INFO] Installing database packages...
-pip install chromadb==0.4.15 --timeout 300
-pip install sqlalchemy==2.0.23 --timeout 300
-pip install psycopg2-binary==2.9.9 --timeout 300
-pip install mysql-connector-python==8.2.0 --timeout 300
+python -m pip install chromadb==0.4.15 --timeout 300
+python -m pip install sqlalchemy==2.0.23 --timeout 300
+python -m pip install psycopg2-binary==2.9.9 --timeout 300
+python -m pip install mysql-connector-python==8.2.0 --timeout 300
 
 echo [INFO] Installing remaining packages...
-pip install pypdf2==3.0.1 --timeout 300
-pip install python-jose[cryptography]==3.3.0 --timeout 300
-pip install passlib[bcrypt]==1.7.4 --timeout 300
-pip install datasets==2.14.5 --timeout 300
-pip install accelerate==0.24.1 --timeout 300
-pip install pyarrow==12.0.1 --timeout 300
-pip install openai==0.28.1 --timeout 300
+python -m pip install pypdf2==3.0.1 --timeout 300
+python -m pip install python-jose[cryptography]==3.3.0 --timeout 300
+python -m pip install passlib[bcrypt]==1.7.4 --timeout 300
+python -m pip install datasets==2.14.5 --timeout 300
+python -m pip install accelerate==0.24.1 --timeout 300
+python -m pip install pyarrow==12.0.1 --timeout 300
+python -m pip install openai==0.28.1 --timeout 300
 
 cd ..
 echo [SUCCESS] Python dependencies installed

@@ -60,10 +60,14 @@ REM Activate virtual environment and install dependencies
 echo [INFO] Installing Python packages...
 cd backend
 call venv\Scripts\activate.bat
-pip install --upgrade pip
-pip install -r requirements.txt
-cd ..
 
+REM Upgrade pip
+python -m pip install --upgrade pip
+
+REM Install requirements
+python -m pip install -r requirements.txt
+
+cd ..
 echo [SUCCESS] Python dependencies installed
 
 REM Install Node.js dependencies
