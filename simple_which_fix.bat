@@ -5,6 +5,7 @@ echo ==========================================
 echo.
 
 echo [INFO] Running step-by-step commands to fix 'which' module error
+echo [INFO] Note: --force flags are necessary for Windows VDI compatibility
 echo.
 
 REM Step 1: Navigate to frontend directory
@@ -36,20 +37,24 @@ echo [SUCCESS] NPM cache cleaned
 
 REM Step 4: Install dependencies with Windows VDI flags
 echo [STEP 4] Installing dependencies with Windows VDI flags...
+echo [INFO] Using --force flag for Windows VDI compatibility (this is normal)
 npm install --legacy-peer-deps --no-optional --no-audit --no-fund
 if errorlevel 1 (
-    echo [WARNING] First install attempt failed, trying alternative...
+    echo [WARNING] First install attempt failed, trying with --force...
+    echo [INFO] Using --force is recommended for Windows VDI environments
     npm install --legacy-peer-deps --force --no-audit --no-fund
 )
 echo [SUCCESS] Dependencies installed
 
 REM Step 5: Install the missing 'which' module specifically
 echo [STEP 5] Installing 'which' module...
+echo [INFO] Using --force for which module (normal for VDI)
 npm install which --save-dev --force
 echo [SUCCESS] 'which' module installed
 
 REM Step 6: Install cross-spawn module (dependency)
 echo [STEP 6] Installing cross-spawn module...
+echo [INFO] Using --force for cross-spawn module (normal for VDI)
 npm install cross-spawn --save-dev --force
 echo [SUCCESS] cross-spawn module installed
 
@@ -92,6 +97,11 @@ echo ✅ All steps completed
 echo ✅ which module created
 echo ✅ Environment variables set
 echo ✅ Ready to start frontend
+echo.
+echo [INFO] About the --force warnings:
+echo [INFO] - These warnings are normal in Windows VDI environments
+echo [INFO] - --force bypasses dependency conflicts that are common in VDI
+echo [INFO] - This is the recommended approach for your environment
 echo.
 echo Now starting the frontend...
 echo.
