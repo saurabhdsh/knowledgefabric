@@ -1,6 +1,6 @@
 # Knowledge-Fabric: Narration Script Based on Actual Features
 
-## 🎬 **3-Minute Video Script (Actual Implementation)**
+## 🎬 **4-Minute Video Script (Actual Implementation)**
 
 ### **0:00-0:45 - INTRODUCTION & MARKET POSITIONING**
 
@@ -44,7 +44,7 @@
 
 ---
 
-### **1:30-2:15 - CORE FEATURES (ACTUALLY IMPLEMENTED)**
+### **1:30-2:00 - CORE FEATURES OVERVIEW (ACTUALLY IMPLEMENTED)**
 
 **[VISUAL: Knowledge page showing three options]**
 
@@ -65,31 +65,61 @@
 
 ---
 
-### **2:15-2:45 - LIVE DEMONSTRATION**
+### **2:00-4:00 - COMPREHENSIVE LIVE DEMONSTRATION (2 MINUTES)**
 
-**[VISUAL: Live application demo]**
+**[VISUAL: Live application demo - Dashboard overview]**
 
 **VOICE-OVER:**
-"Let me show you Knowledge-Fabric in action. Here's the intuitive dashboard showing your knowledge statistics and recent activity."
+"Now let me show you Knowledge-Fabric in action. Here's the intuitive dashboard showing your knowledge statistics and recent activity. You can see we have over 1,200 documents processed, 45 knowledge sources connected, and nearly 900 search queries performed."
 
-**[VISUAL: PDF upload process]**
-"Watch as I upload multiple PDF documents. The drag-and-drop interface accepts multiple files, and you can see real-time progress tracking for each document."
+**[VISUAL: Navigate to Knowledge page and show options]**
+"Let me navigate to the Knowledge creation page. Here you can see our three approaches: PDF processing, database connection, and hybrid approach. I'll demonstrate the PDF processing since it's the most visual."
 
-**[VISUAL: Knowledge fabric creation]**
-"Now I'll create a knowledge fabric. The system processes each document, extracts text, creates intelligent chunks, and generates embeddings. This happens automatically in the background."
+**[VISUAL: PDF upload interface with drag-and-drop]**
+"Watch as I upload multiple PDF documents. The drag-and-drop interface accepts multiple files simultaneously. I can select several documents at once, and the system will process them in parallel."
 
-**[VISUAL: TestLLM interface]**
-"Here's the powerful TestLLM interface. I can select any knowledge fabric and test queries with different AI providers. Let me ask: 'What are the key features of our system?'"
+**[VISUAL: File selection and validation]**
+"Notice how the system validates each file type and shows you exactly what's being uploaded. It supports PDFs, Word documents, and other text-based formats. I'll select these technical manuals and company policies."
 
-**[VISUAL: AI response with confidence score]**
-"Instant response with confidence scoring and processing time metrics. The system shows relevant chunks, confidence levels, and even suggests alternative queries."
+**[VISUAL: Upload progress and real-time tracking]**
+"Now watch the real-time progress tracking. Each document shows individual progress bars, status indicators, and processing stages. You can see text extraction happening, then chunking, and finally embedding generation."
 
-**[VISUAL: Search functionality]**
-"The semantic search goes beyond keywords. It understands context and provides relevant results with similarity scores, making it easy to find exactly what you need."
+**[VISUAL: Knowledge fabric creation process]**
+"The system is now creating a knowledge fabric. This involves several steps: extracting text from each PDF, breaking content into intelligent chunks, generating semantic embeddings using our AI models, and storing everything in our vector database."
+
+**[VISUAL: Processing completion and status]**
+"Perfect! The knowledge fabric has been created successfully. You can see the processing time, number of chunks generated, and the confidence level of our embeddings. This entire process took just under 2 minutes for multiple documents."
+
+**[VISUAL: Navigate to TestLLM interface]**
+"Now let's test our newly created knowledge fabric. I'll navigate to the TestLLM interface where we can ask questions and get AI-powered answers based on our actual documents."
+
+**[VISUAL: Fabric selection and LLM provider choice]**
+"First, I'll select our newly created knowledge fabric from the dropdown. Notice we can also choose different AI providers - OpenAI, Anthropic, or others. I'll use OpenAI for this demonstration."
+
+**[VISUAL: Query input and submission]**
+"Let me ask a specific question: 'What are our company's remote work policies regarding security?' This is exactly the type of question employees ask daily, and now they'll get instant answers from our actual company documents."
+
+**[VISUAL: AI response with detailed breakdown]**
+"Look at this comprehensive response! The AI didn't just find keywords - it understood the context of my question and provided a detailed answer citing specific sections from our actual company policies. Notice the confidence score of 94% and the processing time of just 1.2 seconds."
+
+**[VISUAL: Show relevant chunks and source documents]**
+"Here's what's really powerful - the system shows you exactly which documents and sections it used to generate this answer. You can see the relevant chunks with similarity scores, so you know the information is accurate and traceable."
+
+**[VISUAL: Demonstrate semantic search capabilities]**
+"Let me also show you the semantic search. Instead of asking a question, I'll search for 'employee benefits' and see how the system finds relevant content even when I don't use the exact words from the documents."
+
+**[VISUAL: Search results with similarity scoring]**
+"Amazing! The search found relevant sections about employee benefits, health insurance, and workplace policies, even though I didn't use those exact terms. This is semantic understanding in action - the AI grasps the meaning, not just the words."
+
+**[VISUAL: Show dashboard statistics update]**
+"Notice how our dashboard statistics have updated in real-time. The search queries count increased, and you can see the recent activity showing our new knowledge fabric creation and search operations."
+
+**[VISUAL: Demonstrate error handling and robustness]**
+"Let me also show you what happens when something goes wrong. I'll try to query a non-existent fabric to demonstrate our robust error handling and user-friendly error messages."
 
 ---
 
-### **2:45-3:00 - CALL TO ACTION & MARKET OPPORTUNITY**
+### **4:00-4:15 - CALL TO ACTION & MARKET OPPORTUNITY**
 
 **[VISUAL: Benefits summary and market positioning]**
 
@@ -133,34 +163,31 @@
 
 ---
 
-## 🎬 **VISUAL DEMONSTRATION SEQUENCE**
+## 🎬 **VISUAL DEMONSTRATION SEQUENCE (4 MINUTES)**
 
-### **Section 1: Problem Statement (0:00-0:30)**
+### **Section 1: Problem Statement & Market Positioning (0:00-0:45)**
 - Show current AI ecosystem limitations
 - Highlight the gap in organizational knowledge
 - Position Knowledge-Fabric as the solution
 
-### **Section 2: Market Differentiation (0:30-0:45)**
+### **Section 2: Market Differentiation (0:45-1:30)**
 - Compare with generic AI tools
 - Show enterprise-ready features
 - Highlight plug-and-play simplicity
 
-### **Section 3: Core Features (0:45-1:30)**
+### **Section 3: Core Features Overview (1:30-2:00)**
 - Navigate through knowledge options
 - Show PDF processing capabilities
 - Demonstrate database integration
 
-### **Section 4: Live Demo (1:30-2:15)**
-- Show dashboard and statistics
-- Demonstrate PDF upload process
-- Test AI queries with confidence scoring
+### **Section 4: Comprehensive Live Demo (2:00-4:00) - 2 MINUTES**
+- **Dashboard Overview** (2:00-2:15) - Show statistics and navigation
+- **PDF Upload Process** (2:15-2:45) - Demonstrate file selection and validation
+- **Knowledge Fabric Creation** (2:45-3:15) - Show real-time processing and completion
+- **TestLLM Interface** (3:15-3:45) - Demonstrate AI queries with confidence scoring
+- **Semantic Search** (3:45-4:00) - Show search capabilities and results
 
-### **Section 5: Value Proposition (2:15-2:45)**
-- Show search results and semantic understanding
-- Demonstrate real-time processing
-- Highlight enterprise benefits
-
-### **Section 6: Call to Action (2:45-3:00)**
+### **Section 5: Call to Action (4:00-4:15)**
 - Summarize market opportunity
 - Show GitHub repository
 - End with compelling vision
@@ -184,12 +211,18 @@
 - "Real-time processing"
 - "Enterprise compatibility"
 
-### **Demo Flow:**
-1. **Start with Problem** - Establish the need
-2. **Show Differentiation** - Why Knowledge-Fabric is unique
-3. **Demonstrate Features** - What it actually does
-4. **Live Demo** - Show it working
-5. **Value Proposition** - Why it matters
-6. **Call to Action** - How to get started
+### **Demo Flow (4 Minutes):**
+1. **Start with Problem** (0:00-0:45) - Establish the need
+2. **Show Differentiation** (0:45-1:30) - Why Knowledge-Fabric is unique
+3. **Feature Overview** (1:30-2:00) - What it actually does
+4. **Comprehensive Live Demo** (2:00-4:00) - 2 minutes of detailed demonstration
+5. **Call to Action** (4:00-4:15) - How to get started
 
-This enhanced script now includes compelling market positioning and explains why Knowledge-Fabric fills a critical gap in the AI ecosystem! 🚀 
+### **Live Demo Timing (2 Minutes):**
+- **Dashboard & Navigation** (30 seconds)
+- **PDF Upload & Processing** (45 seconds)
+- **Knowledge Fabric Creation** (30 seconds)
+- **TestLLM & AI Queries** (45 seconds)
+- **Semantic Search & Results** (30 seconds)
+
+This enhanced 4-minute script now provides a comprehensive demonstration while maintaining the compelling market positioning! 🚀 
