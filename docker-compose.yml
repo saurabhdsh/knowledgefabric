@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build: ./backend
@@ -7,20 +5,37 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
-      - knowledge_uploads:/app/uploads
-      - knowledge_chroma:/app/chroma_db
-      - knowledge_models:/app/models
-      - knowledge_data:/app/data
+      - ./backend/uploads:/app/uploads
+      - ./backend/chroma_db:/app/chroma_db
+      - ./backend/models:/app/models
+      - ./backend/data:/app/data
+      - ./backend/ontology_data:/app/ontology_data
     environment:
       - PYTHONPATH=/app
+      - KF_DATA_DIR=/app/data
+      - KF_MODELS_DIR=/app/models
+      - KF_UPLOAD_DIR=/app/uploads
+      - KF_CHROMA_DIR=/app/chroma_db
+      - KF_ONTOLOGY_DATA_DIR=/app/ontology_data
+      - KF_ONTOLOGY_UPLOAD_DIR=/app/ontology_data/uploads
+      - DATABASE_URL=postgresql://knowledge_user:knowledge_pass@postgres:5432/knowledge_fabric
+      - USE_GRAPH_RETRIEVAL=true
       - CHROMA_PERSIST_DIRECTORY=/app/chroma_db
       - UPLOAD_DIR=/app/uploads
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - DEFAULT_LLM_PROVIDER=${DEFAULT_LLM_PROVIDER:-openai}
+      - BEDROCK_ENABLED=${BEDROCK_ENABLED:-false}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - BEDROCK_MODEL_ID=${BEDROCK_MODEL_ID:-anthropic.claude-3-5-sonnet-20241022-v2:0}
+      - BEDROCK_ONTOLOGY_MODEL_ID=${BEDROCK_ONTOLOGY_MODEL_ID:-}
+      - ONTOLOGY_LLM_PROVIDER=${ONTOLOGY_LLM_PROVIDER:-}
+      - ENABLED_LLM_PROVIDERS=${ENABLED_LLM_PROVIDERS:-openai,bedrock}
     networks:
       - knowledge_fabric
+    depends_on:
+      - postgres
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -62,8 +77,6 @@ services:
       - "5432:5432"
     networks:
       - knowledge_fabric
-    profiles:
-      - database
 
   # Optional: Add Redis for caching
   redis:
@@ -78,17 +91,13 @@ services:
       - cache
 
 volumes:
-  knowledge_uploads:
-    driver: local
-  knowledge_chroma:
-    driver: local
-  knowledge_models:
-    driver: local
+  # Backend state (uploads / chroma / models / data / ontology_data) now lives
+  # in the repo at ./backend/* via bind mounts on the backend service above,
+  # so it's shared with the native uvicorn workflow. Only Postgres/Redis —
+  # which are opt-in via profiles — still use named volumes.
   postgres_data:
     driver: local
   redis_data:
-    driver: local
-  knowledge_data:
     driver: local
 
 networks:

@@ -34,6 +34,26 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Select a compatible Python command (3.10/3.11) for backend setup.
+select_python_command() {
+    if [ -n "${PYTHON_BIN:-}" ] && command_exists "${PYTHON_BIN}"; then
+        echo "${PYTHON_BIN}"
+        return
+    fi
+
+    for candidate in python3.11 python3.10 python3; do
+        if command_exists "$candidate"; then
+            version_minor=$("$candidate" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null || true)
+            if [ "$version_minor" = "3.11" ] || [ "$version_minor" = "3.10" ]; then
+                echo "$candidate"
+                return
+            fi
+        fi
+    done
+
+    echo ""
+}
+
 # Function to check OS
 get_os() {
     case "$(uname -s)" in
@@ -48,27 +68,24 @@ get_os() {
 install_python_deps() {
     print_status "Installing Python dependencies..."
     
-    if ! command_exists python3; then
-        print_error "Python 3 is not installed. Please install Python 3.8+ first."
+    PYTHON_CMD="$(select_python_command)"
+    if [ -z "$PYTHON_CMD" ]; then
+        print_error "Could not find a compatible Python runtime (3.10 or 3.11)."
+        print_error "Install Python 3.11 (recommended) and rerun this script."
+        print_error "macOS (Homebrew): brew install python@3.11"
+        print_error "Optional override: PYTHON_BIN=python3.11 ./setup_without_docker.sh"
         exit 1
     fi
     
-    # Check Python version
-    python_version=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-    required_version="3.8"
+    python_version=$("$PYTHON_CMD" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')
     
-    if [ "$(printf '%s\n' "$required_version" "$python_version" | sort -V | head -n1)" != "$required_version" ]; then
-        print_error "Python version $python_version is too old. Please install Python 3.8+"
-        exit 1
-    fi
-    
-    print_success "Python version $python_version is compatible"
+    print_success "Using Python ${python_version} via '${PYTHON_CMD}'"
     
     # Create virtual environment
     if [ ! -d "backend/venv" ]; then
         print_status "Creating Python virtual environment..."
         cd backend
-        python3 -m venv venv
+        "$PYTHON_CMD" -m venv venv
         cd ..
         print_success "Virtual environment created"
     else

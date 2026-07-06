@@ -3,6 +3,12 @@
 @tailwind utilities;
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+
+html {
+  /* Slightly tighter global type scale for sleek UI density */
+  font-size: 15px;
+}
 
 body {
   margin: 0;
@@ -11,7 +17,30 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #f8fafc;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  letter-spacing: 0.005em;
+  background: radial-gradient(circle at top, #162033 0%, #0d1420 46%, #090e16 100%);
+  color: #cbd5e1;
+}
+
+/* Page titles use the Knowledge Operations style family */
+h1 {
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  letter-spacing: 0.01em;
+}
+
+/* Sidebar nav uses Jakarta for a more fluid, product-like feel */
+.sidebar-nav {
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
+}
+
+/* Global muted surfaces to reduce harsh white UI */
+#root {
+  min-height: 100vh;
+  background: linear-gradient(180deg, rgba(6, 11, 19, 0.92), rgba(8, 12, 20, 0.96));
 }
 
 code {
@@ -25,16 +54,16 @@ code {
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: #111827;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: #475569;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: #64748b;
 }
 
 /* Custom animations */
@@ -67,7 +96,9 @@ code {
 }
 
 .card {
-  @apply bg-white rounded-xl shadow-sm border border-gray-200 p-6;
+  @apply rounded-xl shadow-sm border border-gray-200 p-6;
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(8px);
 }
 
 .input-field {

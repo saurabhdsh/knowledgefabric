@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { authenticatedFetch } from '../utils/api';
 import { XMarkIcon, DocumentDuplicateIcon, CheckIcon, CodeBracketIcon, CommandLineIcon } from '@heroicons/react/24/outline';
 
 interface FabricEndpointsDialogProps {
@@ -16,6 +17,7 @@ const FabricEndpointsDialog: React.FC<FabricEndpointsDialogProps> = ({
 }) => {
   const [copiedEndpoint, setCopiedEndpoint] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'endpoints' | 'langchain' | 'python' | 'javascript'>('endpoints');
+  const baseUrl = 'http://localhost:8000';
 
   const endpoints = [
     {
@@ -357,7 +359,7 @@ except Exception as e:
     
     async query(question) {
         const url = \`\${this.baseUrl}/api/v1/knowledge/query/\${this.fabricId}\`;
-        const response = await fetch(url, {
+        const response = await authenticatedFetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -369,7 +371,7 @@ except Exception as e:
     
     async validate(questions) {
         const url = \`\${this.baseUrl}/api/v1/knowledge/validate-knowledge/\${this.fabricId}\`;
-        const response = await fetch(url, {
+        const response = await authenticatedFetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -399,7 +401,7 @@ client.query('What are the key stakeholders?')
     
     async query(question, llmProvider = 'openai') {
         const url = \`\${this.baseUrl}/api/v1/knowledge/query/\${this.fabricId}\`;
-        const response = await fetch(url, {
+        const response = await authenticatedFetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -427,7 +429,7 @@ client.query('What are the key stakeholders?')
     
     async validateKnowledge(questions) {
         const url = \`\${this.baseUrl}/api/v1/knowledge/validate-knowledge/\${this.fabricId}\`;
-        const response = await fetch(url, {
+        const response = await authenticatedFetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -439,7 +441,7 @@ client.query('What are the key stakeholders?')
     
     async getStatus() {
         const url = \`\${this.baseUrl}/api/v1/knowledge/\`;
-        const response = await fetch(url);
+        const response = await authenticatedFetch(url);
         return await response.json();
     }
 }
@@ -481,23 +483,23 @@ example();`
     }
   };
 
-  const getFullUrl = (endpoint: string) => {
-    return `http://localhost:8000${endpoint}`;
-  };
+  const getFullUrl = (endpoint: string) => `${baseUrl}${endpoint}`;
 
   const renderEndpoints = () => (
     <div className="space-y-6">
       {endpoints.map((endpoint, index) => (
-        <div key={index} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div key={index} className="bg-[#10141d]/80 rounded-lg border border-[rgba(148,163,184,0.2)] overflow-hidden">
           {/* Endpoint Header */}
-          <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
+          <div className="bg-white/[0.03] px-4 py-3 border-b border-[rgba(148,163,184,0.11)]">
             <div className="flex items-center justify-between">
               <div>
-                <h4 className="font-semibold text-gray-900">{endpoint.name}</h4>
-                <p className="text-sm text-gray-600">{endpoint.description}</p>
+                <h4 className="font-semibold text-[#e8edf4]">{endpoint.name}</h4>
+                <p className="text-sm text-[#8b9cb0]">{endpoint.description}</p>
               </div>
               <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                endpoint.method === 'GET' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'
+                endpoint.method === 'GET'
+                  ? 'border border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.14)] text-[#3ecf9b]'
+                  : 'border border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.14)] text-[#5ec8f2]'
               }`}>
                 {endpoint.method}
               </span>
@@ -505,14 +507,14 @@ example();`
           </div>
 
           {/* Endpoint URL */}
-          <div className="px-4 py-3 border-b border-gray-200">
+          <div className="px-4 py-3 border-b border-[rgba(148,163,184,0.11)]">
             <div className="flex items-center justify-between">
-              <code className="text-sm bg-gray-100 px-3 py-2 rounded flex-1 mr-3">
+              <code className="text-sm bg-[#040508] text-[#cbd5e1] px-3 py-2 rounded flex-1 mr-3 border border-[rgba(148,163,184,0.2)]">
                 {getFullUrl(endpoint.endpoint)}
               </code>
               <button
                 onClick={() => copyToClipboard(getFullUrl(endpoint.endpoint), endpoint.name)}
-                className="flex items-center space-x-1 text-blue-600 hover:text-blue-800 transition-colors"
+                className="flex items-center space-x-1 text-[#5ec8f2] hover:text-[#9b8bd4] transition-colors"
               >
                 {copiedEndpoint === endpoint.name ? (
                   <CheckIcon className="w-4 h-4" />
@@ -531,16 +533,16 @@ example();`
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {/* Request */}
               <div>
-                <h5 className="text-sm font-medium text-gray-700 mb-2">Request Example:</h5>
-                <div className="bg-gray-900 text-green-400 p-3 rounded text-xs overflow-x-auto">
+                <h5 className="text-sm font-medium text-[#cbd5e1] mb-2">Request Example:</h5>
+                <div className="bg-[#040508] text-[#cbd5e1] p-3 rounded text-xs overflow-x-auto border border-[rgba(148,163,184,0.2)]">
                   <pre>{JSON.stringify(endpoint.example.request, null, 2)}</pre>
                 </div>
               </div>
 
               {/* Response */}
               <div>
-                <h5 className="text-sm font-medium text-gray-700 mb-2">Response Example:</h5>
-                <div className="bg-gray-900 text-green-400 p-3 rounded text-xs overflow-x-auto">
+                <h5 className="text-sm font-medium text-[#cbd5e1] mb-2">Response Example:</h5>
+                <div className="bg-[#040508] text-[#cbd5e1] p-3 rounded text-xs overflow-x-auto border border-[rgba(148,163,184,0.2)]">
                   <pre>{JSON.stringify(endpoint.example.response, null, 2)}</pre>
                 </div>
               </div>
@@ -553,18 +555,18 @@ example();`
 
   const renderLangChain = () => (
     <div className="space-y-6">
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="bg-blue-50 px-4 py-3 border-b border-gray-200">
-          <h4 className="font-semibold text-blue-900">Basic LangChain Integration</h4>
-          <p className="text-sm text-blue-700">Simple tool integration for agents</p>
+      <div className="bg-[#10141d]/80 rounded-lg border border-[rgba(148,163,184,0.2)] overflow-hidden">
+        <div className="bg-[rgba(94,200,242,0.08)] px-4 py-3 border-b border-[rgba(148,163,184,0.11)]">
+          <h4 className="font-semibold text-[#5ec8f2]">Basic LangChain Integration</h4>
+          <p className="text-sm text-[#8b9cb0]">Simple tool integration for agents</p>
         </div>
         <div className="p-4">
-          <div className="bg-gray-900 text-green-400 p-4 rounded text-sm overflow-x-auto">
+          <div className="bg-[#040508] text-[#cbd5e1] p-4 rounded text-sm overflow-x-auto border border-[rgba(148,163,184,0.2)]">
             <pre>{langchainExamples.basic}</pre>
           </div>
           <button
             onClick={() => copyToClipboard(langchainExamples.basic, 'langchain-basic')}
-            className="mt-3 flex items-center space-x-1 text-blue-600 hover:text-blue-800 transition-colors"
+            className="mt-3 flex items-center space-x-1 text-[#5ec8f2] hover:text-[#9b8bd4] transition-colors"
           >
             {copiedEndpoint === 'langchain-basic' ? (
               <CheckIcon className="w-4 h-4" />
@@ -578,18 +580,18 @@ example();`
         </div>
       </div>
 
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="bg-purple-50 px-4 py-3 border-b border-gray-200">
-          <h4 className="font-semibold text-purple-900">Advanced LangChain Integration</h4>
-          <p className="text-sm text-purple-700">Multiple tools with custom prompts</p>
+      <div className="bg-[#10141d]/80 rounded-lg border border-[rgba(148,163,184,0.2)] overflow-hidden">
+        <div className="bg-[rgba(155,139,212,0.08)] px-4 py-3 border-b border-[rgba(148,163,184,0.11)]">
+          <h4 className="font-semibold text-[#9b8bd4]">Advanced LangChain Integration</h4>
+          <p className="text-sm text-[#8b9cb0]">Multiple tools with custom prompts</p>
         </div>
         <div className="p-4">
-          <div className="bg-gray-900 text-green-400 p-4 rounded text-sm overflow-x-auto">
+          <div className="bg-[#040508] text-[#cbd5e1] p-4 rounded text-sm overflow-x-auto border border-[rgba(148,163,184,0.2)]">
             <pre>{langchainExamples.advanced}</pre>
           </div>
           <button
             onClick={() => copyToClipboard(langchainExamples.advanced, 'langchain-advanced')}
-            className="mt-3 flex items-center space-x-1 text-blue-600 hover:text-blue-800 transition-colors"
+            className="mt-3 flex items-center space-x-1 text-[#5ec8f2] hover:text-[#9b8bd4] transition-colors"
           >
             {copiedEndpoint === 'langchain-advanced' ? (
               <CheckIcon className="w-4 h-4" />
@@ -607,18 +609,18 @@ example();`
 
   const renderPython = () => (
     <div className="space-y-6">
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="bg-green-50 px-4 py-3 border-b border-gray-200">
-          <h4 className="font-semibold text-green-900">Basic Python Client</h4>
-          <p className="text-sm text-green-700">Simple HTTP client for knowledge fabric</p>
+      <div className="bg-[#10141d]/80 rounded-lg border border-[rgba(148,163,184,0.2)] overflow-hidden">
+        <div className="bg-[rgba(62,207,155,0.08)] px-4 py-3 border-b border-[rgba(148,163,184,0.11)]">
+          <h4 className="font-semibold text-[#3ecf9b]">Basic Python Client</h4>
+          <p className="text-sm text-[#8b9cb0]">Simple HTTP client for knowledge fabric</p>
         </div>
         <div className="p-4">
-          <div className="bg-gray-900 text-green-400 p-4 rounded text-sm overflow-x-auto">
+          <div className="bg-[#040508] text-[#cbd5e1] p-4 rounded text-sm overflow-x-auto border border-[rgba(148,163,184,0.2)]">
             <pre>{pythonExamples.basic}</pre>
           </div>
           <button
             onClick={() => copyToClipboard(pythonExamples.basic, 'python-basic')}
-            className="mt-3 flex items-center space-x-1 text-blue-600 hover:text-blue-800 transition-colors"
+            className="mt-3 flex items-center space-x-1 text-[#5ec8f2] hover:text-[#9b8bd4] transition-colors"
           >
             {copiedEndpoint === 'python-basic' ? (
               <CheckIcon className="w-4 h-4" />
@@ -632,18 +634,18 @@ example();`
         </div>
       </div>
 
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="bg-orange-50 px-4 py-3 border-b border-gray-200">
-          <h4 className="font-semibold text-orange-900">Advanced Python Client</h4>
-          <p className="text-sm text-orange-700">Type-safe client with error handling</p>
+      <div className="bg-[#10141d]/80 rounded-lg border border-[rgba(148,163,184,0.2)] overflow-hidden">
+        <div className="bg-[rgba(232,184,74,0.08)] px-4 py-3 border-b border-[rgba(148,163,184,0.11)]">
+          <h4 className="font-semibold text-[#e8b84a]">Advanced Python Client</h4>
+          <p className="text-sm text-[#8b9cb0]">Type-safe client with error handling</p>
         </div>
         <div className="p-4">
-          <div className="bg-gray-900 text-green-400 p-4 rounded text-sm overflow-x-auto">
+          <div className="bg-[#040508] text-[#cbd5e1] p-4 rounded text-sm overflow-x-auto border border-[rgba(148,163,184,0.2)]">
             <pre>{pythonExamples.advanced}</pre>
           </div>
           <button
             onClick={() => copyToClipboard(pythonExamples.advanced, 'python-advanced')}
-            className="mt-3 flex items-center space-x-1 text-blue-600 hover:text-blue-800 transition-colors"
+            className="mt-3 flex items-center space-x-1 text-[#5ec8f2] hover:text-[#9b8bd4] transition-colors"
           >
             {copiedEndpoint === 'python-advanced' ? (
               <CheckIcon className="w-4 h-4" />
@@ -661,18 +663,18 @@ example();`
 
   const renderJavaScript = () => (
     <div className="space-y-6">
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="bg-yellow-50 px-4 py-3 border-b border-gray-200">
-          <h4 className="font-semibold text-yellow-900">Basic JavaScript Client</h4>
-          <p className="text-sm text-yellow-700">Simple fetch-based client</p>
+      <div className="bg-[#10141d]/80 rounded-lg border border-[rgba(148,163,184,0.2)] overflow-hidden">
+        <div className="bg-[rgba(94,200,242,0.08)] px-4 py-3 border-b border-[rgba(148,163,184,0.11)]">
+          <h4 className="font-semibold text-[#5ec8f2]">Basic JavaScript Client</h4>
+          <p className="text-sm text-[#8b9cb0]">Simple fetch-based client</p>
         </div>
         <div className="p-4">
-          <div className="bg-gray-900 text-green-400 p-4 rounded text-sm overflow-x-auto">
+          <div className="bg-[#040508] text-[#cbd5e1] p-4 rounded text-sm overflow-x-auto border border-[rgba(148,163,184,0.2)]">
             <pre>{javascriptExamples.basic}</pre>
           </div>
           <button
             onClick={() => copyToClipboard(javascriptExamples.basic, 'javascript-basic')}
-            className="mt-3 flex items-center space-x-1 text-blue-600 hover:text-blue-800 transition-colors"
+            className="mt-3 flex items-center space-x-1 text-[#5ec8f2] hover:text-[#9b8bd4] transition-colors"
           >
             {copiedEndpoint === 'javascript-basic' ? (
               <CheckIcon className="w-4 h-4" />
@@ -686,18 +688,18 @@ example();`
         </div>
       </div>
 
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="bg-indigo-50 px-4 py-3 border-b border-gray-200">
-          <h4 className="font-semibold text-indigo-900">Advanced JavaScript Client</h4>
-          <p className="text-sm text-indigo-700">Async/await with error handling</p>
+      <div className="bg-[#10141d]/80 rounded-lg border border-[rgba(148,163,184,0.2)] overflow-hidden">
+        <div className="bg-[rgba(155,139,212,0.08)] px-4 py-3 border-b border-[rgba(148,163,184,0.11)]">
+          <h4 className="font-semibold text-[#9b8bd4]">Advanced JavaScript Client</h4>
+          <p className="text-sm text-[#8b9cb0]">Async/await with error handling</p>
         </div>
         <div className="p-4">
-          <div className="bg-gray-900 text-green-400 p-4 rounded text-sm overflow-x-auto">
+          <div className="bg-[#040508] text-[#cbd5e1] p-4 rounded text-sm overflow-x-auto border border-[rgba(148,163,184,0.2)]">
             <pre>{javascriptExamples.advanced}</pre>
           </div>
           <button
             onClick={() => copyToClipboard(javascriptExamples.advanced, 'javascript-advanced')}
-            className="mt-3 flex items-center space-x-1 text-blue-600 hover:text-blue-800 transition-colors"
+            className="mt-3 flex items-center space-x-1 text-[#5ec8f2] hover:text-[#9b8bd4] transition-colors"
           >
             {copiedEndpoint === 'javascript-advanced' ? (
               <CheckIcon className="w-4 h-4" />
@@ -719,24 +721,25 @@ example();`
     <div className="fixed inset-0 z-50 overflow-y-auto">
       <div className="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
         <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-          <div className="absolute inset-0 bg-gray-900 opacity-75"></div>
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-md"></div>
         </div>
 
-        <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-7xl sm:w-full">
+        <div className="inline-block align-bottom bg-[#080a10]/95 rounded-2xl text-left overflow-hidden shadow-2xl border border-[rgba(148,163,184,0.2)] transform transition-all sm:my-8 sm:align-middle sm:max-w-7xl sm:w-full">
           {/* Header */}
-          <div className="bg-gradient-to-r from-green-600 to-blue-600 px-6 py-4">
+          <div className="bg-gradient-to-r from-[#5ec8f2]/20 to-[#9b8bd4]/20 px-6 py-4 border-b border-[rgba(148,163,184,0.2)]">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-lg font-semibold text-white">
+                <h3 className="text-lg font-semibold text-[#e8edf4]">
                   Agent Integration for {fabricName}
                 </h3>
-                <p className="text-sm text-green-100">
+                <p className="text-sm text-[#8b9cb0]">
                   Complete integration examples for LangChain, Python, and JavaScript
                 </p>
+                <p className="text-xs text-[#8b9cb0] mt-1 font-mono">Fabric ID: {fabricId} | Base URL: {baseUrl}</p>
               </div>
               <button
                 onClick={onClose}
-                className="text-white hover:text-gray-200 transition-colors"
+                className="text-[#cbd5e1] hover:text-[#e8edf4] transition-colors"
               >
                 <XMarkIcon className="w-6 h-6" />
               </button>
@@ -744,14 +747,14 @@ example();`
           </div>
 
           {/* Tabs */}
-          <div className="bg-gray-100 px-6 py-3 border-b border-gray-200">
+          <div className="bg-white/[0.03] px-6 py-3 border-b border-[rgba(148,163,184,0.11)]">
             <div className="flex space-x-1">
               <button
                 onClick={() => setActiveTab('endpoints')}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeTab === 'endpoints'
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-[#10141d] text-[#e8edf4] border border-[rgba(94,200,242,0.35)]'
+                    : 'text-[#8b9cb0] hover:text-[#e8edf4]'
                 }`}
               >
                 <CommandLineIcon className="w-4 h-4 inline mr-2" />
@@ -761,8 +764,8 @@ example();`
                 onClick={() => setActiveTab('langchain')}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeTab === 'langchain'
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-[#10141d] text-[#e8edf4] border border-[rgba(94,200,242,0.35)]'
+                    : 'text-[#8b9cb0] hover:text-[#e8edf4]'
                 }`}
               >
                 <CodeBracketIcon className="w-4 h-4 inline mr-2" />
@@ -772,8 +775,8 @@ example();`
                 onClick={() => setActiveTab('python')}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeTab === 'python'
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-[#10141d] text-[#e8edf4] border border-[rgba(94,200,242,0.35)]'
+                    : 'text-[#8b9cb0] hover:text-[#e8edf4]'
                 }`}
               >
                 <CodeBracketIcon className="w-4 h-4 inline mr-2" />
@@ -783,8 +786,8 @@ example();`
                 onClick={() => setActiveTab('javascript')}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   activeTab === 'javascript'
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
+                    ? 'bg-[#10141d] text-[#e8edf4] border border-[rgba(94,200,242,0.35)]'
+                    : 'text-[#8b9cb0] hover:text-[#e8edf4]'
                 }`}
               >
                 <CodeBracketIcon className="w-4 h-4 inline mr-2" />
@@ -794,22 +797,23 @@ example();`
           </div>
 
           {/* Content */}
-          <div className="bg-gray-50 max-h-96 overflow-y-auto p-6">
+          <div className="bg-[#080a10]/70 max-h-[70vh] overflow-y-auto p-6">
             {activeTab === 'endpoints' && renderEndpoints()}
             {activeTab === 'langchain' && renderLangChain()}
             {activeTab === 'python' && renderPython()}
             {activeTab === 'javascript' && renderJavaScript()}
 
             {/* Integration Tips */}
-            <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <h4 className="font-semibold text-blue-900 mb-2">🚀 Agent Integration Tips:</h4>
-              <ul className="text-sm text-blue-800 space-y-1">
+            <div className="mt-6 bg-[rgba(94,200,242,0.08)] border border-[rgba(94,200,242,0.25)] rounded-lg p-4">
+              <h4 className="font-semibold text-[#5ec8f2] mb-2">Agent Integration Checklist</h4>
+              <ul className="text-sm text-[#cbd5e1] space-y-1">
                 <li>• <strong>LangChain:</strong> Use as a tool in your agent for knowledge retrieval</li>
                 <li>• <strong>Python:</strong> Perfect for custom agents and automation scripts</li>
                 <li>• <strong>JavaScript:</strong> Great for web-based agents and Node.js applications</li>
                 <li>• <strong>Error Handling:</strong> Always check response.success before using data</li>
                 <li>• <strong>Rate Limiting:</strong> Implement proper delays between requests</li>
                 <li>• <strong>Authentication:</strong> Add API keys for production deployments</li>
+                <li>• <strong>Environment:</strong> Set base URL and fabric ID from env variables</li>
               </ul>
             </div>
           </div>

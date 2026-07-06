@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ChatBubbleLeftRightIcon, SparklesIcon, DocumentTextIcon, CpuChipIcon } from '@heroicons/react/24/outline';
+import { apiRequest } from '../utils/api';
 
 interface KnowledgeFabric {
   id: string;
@@ -14,41 +15,81 @@ interface KnowledgeFabric {
 const TestLLM: React.FC = () => {
   const [selectedFabric, setSelectedFabric] = useState<string>('');
   const [selectedLLM, setSelectedLLM] = useState<string>('openai');
+  const [llmProviders, setLlmProviders] = useState<Array<{ id: string; name: string; description?: string }>>([]);
   const [testQuery, setTestQuery] = useState<string>('');
   const [testResults, setTestResults] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [fabrics, setFabrics] = useState<KnowledgeFabric[]>([]);
   const [loadingFabrics, setLoadingFabrics] = useState(true);
+  const [statusBanner, setStatusBanner] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
   // Fetch available fabrics on component mount
   useEffect(() => {
     const fetchFabrics = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/v1/knowledge/');
+        const response = await apiRequest('api/v1/knowledge/');
         const data = await response.json();
         
         if (data.success && data.data) {
           setFabrics(data.data);
+          if (selectedFabric && !data.data.some((fabric: KnowledgeFabric) => fabric.id === selectedFabric)) {
+            setSelectedFabric('');
+            setStatusBanner({
+              type: 'error',
+              message: 'Previously selected fabric is no longer available. Please select another fabric.',
+            });
+          }
         } else {
           console.error('Failed to fetch fabrics:', data.message);
+          setStatusBanner({
+            type: 'error',
+            message: data.message || 'Unable to load knowledge fabrics.',
+          });
         }
       } catch (error) {
         console.error('Error fetching fabrics:', error);
+        setStatusBanner({
+          type: 'error',
+          message: 'Unable to load knowledge fabrics. Please check backend connectivity.',
+        });
       } finally {
         setLoadingFabrics(false);
       }
     };
 
     fetchFabrics();
+
+    const fetchProviders = async () => {
+      try {
+        const response = await apiRequest('api/v1/knowledge/api-keys/providers');
+        const data = await response.json();
+        const providers = data?.data?.providers || data?.providers || [];
+        if (Array.isArray(providers) && providers.length > 0) {
+          setLlmProviders(providers);
+          setSelectedLLM(data?.data?.default_provider || providers[0].id);
+        }
+      } catch (error) {
+        console.error('Error fetching LLM providers:', error);
+      }
+    };
+    fetchProviders();
   }, []);
 
   const handleTestQuery = async () => {
-    if (!selectedFabric || !testQuery.trim() || !selectedLLM) return;
+    if (!selectedFabric) {
+      setStatusBanner({ type: 'info', message: 'Select a knowledge fabric before running a test.' });
+      return;
+    }
+    if (!testQuery.trim() || !selectedLLM) {
+      setStatusBanner({ type: 'info', message: 'Enter a query to run a test.' });
+      return;
+    }
 
     setIsLoading(true);
+    setStatusBanner(null);
     
     try {
-      const response = await fetch(`http://localhost:8000/api/v1/knowledge/query/${selectedFabric}`, {
+      const response = await apiRequest(`api/v1/knowledge/query/${selectedFabric}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -65,14 +106,18 @@ const TestLLM: React.FC = () => {
         fabricId: selectedFabric,
         llmProvider: selectedLLM,
         query: testQuery,
-        response: data.success ? data.data.answer : 'Sorry, I encountered an error. Please try again.',
+        response: data.success ? data.data.answer : (data.error || data.message || 'Sorry, I encountered an error. Please try again.'),
         confidence: data.success ? data.data.confidence || 0.85 : 0.0,
         timestamp: new Date().toISOString(),
-        relevantChunks: data.success ? data.data.relevant_chunks || 3 : 0,
+        relevantChunks: data.success ? (data.data.relevant_chunks ?? data.data.relevant_chunks_found ?? 0) : 0,
         processingTime: data.success ? data.data.processing_time || '1.2s' : '0s'
       };
 
       setTestResults(prev => [result, ...prev]);
+      setStatusBanner({
+        type: data.success ? 'success' : 'error',
+        message: data.success ? 'Query completed successfully.' : (data.error || data.message || 'Query failed.'),
+      });
     } catch (error) {
       const errorResult = {
         fabricId: selectedFabric,
@@ -85,13 +130,17 @@ const TestLLM: React.FC = () => {
         processingTime: '0s'
       };
       setTestResults(prev => [errorResult, ...prev]);
+      setStatusBanner({
+        type: 'error',
+        message: 'Query failed. Please try again.',
+      });
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 text-[#cbd5e1] [&_.bg-white]:bg-[#10141d]/75 [&_.bg-gray-50]:bg-white/[0.03] [&_.bg-gray-100]:bg-white/[0.05] [&_.text-gray-900]:text-[#e8edf4] [&_.text-gray-800]:text-[#cbd5e1] [&_.text-gray-700]:text-[#cbd5e1] [&_.text-gray-600]:text-[#8b9cb0] [&_.text-gray-500]:text-[#8b9cb0] [&_.text-gray-400]:text-[#8b9cb0] [&_.text-gray-300]:text-[#8b9cb0] [&_.border-gray-200]:border-[rgba(148,163,184,0.11)] [&_.border-gray-300]:border-[rgba(148,163,184,0.2)] [&_input]:bg-[#10141d]/70 [&_input]:text-[#e8edf4] [&_input]:border-[rgba(148,163,184,0.2)] [&_input]:placeholder:text-[#8b9cb0] [&_textarea]:bg-[#10141d]/70 [&_textarea]:text-[#e8edf4] [&_textarea]:border-[rgba(148,163,184,0.2)] [&_textarea]:placeholder:text-[#8b9cb0] [&_select]:bg-[#10141d]/70 [&_select]:text-[#e8edf4] [&_select]:border-[rgba(148,163,184,0.2)]">
       <div className="mb-8">
         <div className="flex items-center space-x-3 mb-4">
           <div className="w-12 h-12 bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-xl flex items-center justify-center">
@@ -103,6 +152,19 @@ const TestLLM: React.FC = () => {
           </div>
         </div>
       </div>
+      {statusBanner && (
+        <div
+          className={`mb-6 rounded-xl border px-4 py-3 text-sm ${
+            statusBanner.type === 'success'
+              ? 'border-emerald-400/35 bg-emerald-500/10 text-emerald-200'
+              : statusBanner.type === 'error'
+                ? 'border-rose-400/35 bg-rose-500/10 text-rose-200'
+                : 'border-cyan-400/35 bg-cyan-500/10 text-cyan-100'
+          }`}
+        >
+          {statusBanner.message}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Test Configuration */}
@@ -150,11 +212,17 @@ const TestLLM: React.FC = () => {
                   onChange={(e) => setSelectedLLM(e.target.value)}
                   className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
                 >
-                  <option value="openai">OpenAI GPT-4</option>
-                  <option value="gemini" disabled>Gemini (Coming Soon)</option>
+                  {(llmProviders.length > 0 ? llmProviders : [{ id: 'openai', name: 'OpenAI GPT-4' }]).map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name}
+                    </option>
+                  ))}
                 </select>
                 <p className="text-xs text-gray-500 mt-1">
-                  {selectedLLM === 'openai' ? 'Using OpenAI GPT-4 for advanced reasoning' : 'Gemini integration coming soon'}
+                  {llmProviders.find((p) => p.id === selectedLLM)?.description
+                    || (selectedLLM === 'bedrock'
+                      ? 'Using AWS Bedrock via IAM (no OpenAI key required on AWS)'
+                      : 'Using OpenAI for advanced reasoning')}
                 </p>
               </div>
 

@@ -1,0 +1,89 @@
+# Production compose for a single EC2 instance.
+# Access via http://<EC2_PUBLIC_IP> (port 80).
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: knowledge_fabric
+      POSTGRES_USER: knowledge_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-knowledge_pass}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - weave
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    expose:
+      - "8000"
+    volumes:
+      - backend_uploads:/app/uploads
+      - backend_chroma:/app/chroma_db
+      - backend_models:/app/models
+      - backend_data:/app/data
+      - backend_ontology:/app/ontology_data
+    environment:
+      - PYTHONPATH=/app
+      - HOST=0.0.0.0
+      - PORT=8000
+      - KF_DATA_DIR=/app/data
+      - KF_MODELS_DIR=/app/models
+      - KF_UPLOAD_DIR=/app/uploads
+      - KF_CHROMA_DIR=/app/chroma_db
+      - KF_ONTOLOGY_DATA_DIR=/app/ontology_data
+      - KF_ONTOLOGY_UPLOAD_DIR=/app/ontology_data/uploads
+      - DATABASE_URL=postgresql://knowledge_user:${POSTGRES_PASSWORD:-knowledge_pass}@postgres:5432/knowledge_fabric
+      - USE_GRAPH_RETRIEVAL=true
+      - CHROMA_PERSIST_DIRECTORY=/app/chroma_db
+      - UPLOAD_DIR=/app/uploads
+      - SECRET_KEY=${SECRET_KEY}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      - KF_CORS_ORIGINS=${KF_CORS_ORIGINS}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DEFAULT_LLM_PROVIDER=${DEFAULT_LLM_PROVIDER:-bedrock}
+      - BEDROCK_ENABLED=${BEDROCK_ENABLED:-true}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - BEDROCK_MODEL_ID=${BEDROCK_MODEL_ID:-anthropic.claude-3-5-sonnet-20241022-v2:0}
+      - BEDROCK_ONTOLOGY_MODEL_ID=${BEDROCK_ONTOLOGY_MODEL_ID:-}
+      - ONTOLOGY_LLM_PROVIDER=${ONTOLOGY_LLM_PROVIDER:-}
+      - ENABLED_LLM_PROVIDERS=${ENABLED_LLM_PROVIDERS:-openai,bedrock}
+    depends_on:
+      - postgres
+    networks:
+      - weave
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile.prod
+      args:
+        REACT_APP_API_URL: ${REACT_APP_API_URL}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - weave
+
+volumes:
+  postgres_data:
+  backend_uploads:
+  backend_chroma:
+  backend_models:
+  backend_data:
+  backend_ontology:
+
+networks:
+  weave:
+    driver: bridge

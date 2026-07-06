@@ -1,8 +1,3 @@
-import torch
-from transformers import AutoTokenizer, AutoModel, TrainingArguments, Trainer
-from sentence_transformers import SentenceTransformer
-from datasets import Dataset
-import numpy as np
 from typing import List, Dict, Any, Optional
 import os
 import json
@@ -14,8 +9,8 @@ from app.core.config import settings
 class TrainingService:
     def __init__(self):
         """Initialize the training service"""
-        self.model_dir = "/app/models"
-        self.models_dir = "/app/models"  # Keep both for compatibility
+        self.model_dir = settings.MODELS_DIR
+        self.models_dir = settings.MODELS_DIR  # Keep both for compatibility
         os.makedirs(self.model_dir, exist_ok=True)
         
         # Don't load large models on startup to avoid memory issues
@@ -219,7 +214,8 @@ class TrainingService:
     def create_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Create embeddings using the current model"""
         try:
-            # Use sentence transformers for easier embedding generation
+            # Lazy import to avoid loading heavy ML runtime at API startup.
+            from sentence_transformers import SentenceTransformer
             model = SentenceTransformer(self.model_name)
             embeddings = model.encode(texts, convert_to_tensor=False)
             return embeddings.tolist()
@@ -281,6 +277,7 @@ class TrainingService:
                 return False
             
             # Load the model
+            from sentence_transformers import SentenceTransformer
             self.model = SentenceTransformer(model_path)
             self.current_model_id = model_id
             

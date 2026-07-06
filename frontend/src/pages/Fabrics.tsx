@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   DocumentTextIcon,
   ServerIcon,
@@ -10,12 +11,14 @@ import {
   TrashIcon,
   EyeIcon,
   ArrowDownTrayIcon,
-  PlayIcon,
   ArrowPathIcon,
   MagnifyingGlassIcon,
   CubeIcon,
+  PencilSquareIcon,
 } from '@heroicons/react/24/outline';
 import FabricEndpointsDialog from '../components/FabricEndpointsDialog';
+import { apiRequest, authenticatedFetch, getApiUrl } from '../utils/api';
+import { jobStatusColor, jobTypeLabel, platformApi, PlatformJob } from '../utils/platformApi';
 
 interface KnowledgeFabric {
   id: string;
@@ -30,89 +33,108 @@ interface KnowledgeFabric {
   status: string;
   model_status?: string;
   last_training?: string;
+  ontology_project_id?: string | null;
+  approved_ontology_version_id?: string | null;
 }
 
 const Fabrics: React.FC = () => {
+  const navigate = useNavigate();
   const [fabrics, setFabrics] = useState<KnowledgeFabric[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [showEndpointsDialog, setShowEndpointsDialog] = useState(false);
   const [selectedFabricForEndpoints, setSelectedFabricForEndpoints] = useState<KnowledgeFabric | null>(null);
+  const [fabricJobs, setFabricJobs] = useState<Record<string, PlatformJob[]>>({});
 
-  // Fetch real data from API
+  const fetchFabricsFromApi = async () => {
+    const response = await apiRequest('api/v1/knowledge/');
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (data.success && data.data) return data.data as KnowledgeFabric[];
+    return null;
+  };
+
+  const loadFabricJobs = async (fabricId: string) => {
+    try {
+      const jobs = await platformApi.listFabricJobs(fabricId);
+      setFabricJobs((prev) => ({ ...prev, [fabricId]: jobs }));
+    } catch {
+      /* optional */
+    }
+  };
   useEffect(() => {
-    const fetchFabrics = async () => {
+    const fetchFabrics = async (options?: { silent?: boolean }) => {
+      const isSilent = options?.silent ?? false;
       try {
-        setLoading(true);
-        const response = await fetch('http://localhost:8000/api/v1/knowledge/');
-        
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && data.data) {
-            setFabrics(data.data);
-          } else {
-            console.error('Failed to fetch fabrics:', data.message);
-            setFabrics([]);
-          }
+        if (isSilent) {
+          setRefreshing(true);
         } else {
-          console.error('Failed to fetch fabrics');
+          setInitialLoading(true);
+        }
+
+        const list = await fetchFabricsFromApi();
+        if (list) {
+          setFabrics(list);
+          list.slice(0, 6).forEach((f) => loadFabricJobs(f.id));
+        } else {
           setFabrics([]);
         }
       } catch (error) {
         console.error('Error fetching fabrics:', error);
         setFabrics([]);
       } finally {
-        setLoading(false);
+        if (isSilent) {
+          setRefreshing(false);
+        } else {
+          setInitialLoading(false);
+        }
       }
     };
 
     fetchFabrics();
     
     // Refresh data every 10 seconds to get updated training status
-    const interval = setInterval(fetchFabrics, 10000);
+    const interval = setInterval(() => {
+      fetchFabrics({ silent: true });
+    }, 10000);
     return () => clearInterval(interval);
   }, []);
 
   const handleRefresh = async () => {
     try {
-      setLoading(true);
-      const response = await fetch('http://localhost:8000/api/v1/knowledge/');
-      
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && data.data) {
-          setFabrics(data.data);
-        }
-      }
+      setRefreshing(true);
+      const list = await fetchFabricsFromApi();
+      if (list) setFabrics(list);
     } catch (error) {
       console.error('Error refreshing fabrics:', error);
     } finally {
-      setLoading(false);
+      setRefreshing(false);
     }
   };
 
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'active':
-        return 'bg-green-100 text-green-800';
+        return 'border border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.14)] text-[#3ecf9b]';
       case 'training':
-        return 'bg-blue-100 text-blue-800';
+        return 'border border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.14)] text-[#5ec8f2]';
       case 'error':
-        return 'bg-red-100 text-red-800';
+        return 'border border-[rgba(240,137,132,0.35)] bg-[rgba(240,137,132,0.14)] text-[#f08984]';
       default:
-        return 'bg-gray-100 text-gray-800';
+        return 'border border-[rgba(148,163,184,0.2)] bg-white/[0.03] text-[#8b9cb0]';
     }
   };
 
   const getModelStatusColor = (status?: string) => {
     switch (status) {
       case 'trained':
-        return 'bg-green-100 text-green-800';
+        return 'border border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.14)] text-[#3ecf9b]';
       case 'training':
-        return 'bg-blue-100 text-blue-800';
+        return 'border border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.14)] text-[#5ec8f2]';
       case 'failed':
-        return 'bg-red-100 text-red-800';
+        return 'border border-[rgba(240,137,132,0.35)] bg-[rgba(240,137,132,0.14)] text-[#f08984]';
       default:
-        return 'bg-gray-100 text-gray-800';
+        return 'border border-[rgba(148,163,184,0.2)] bg-white/[0.03] text-[#8b9cb0]';
     }
   };
 
@@ -129,13 +151,26 @@ const Fabrics: React.FC = () => {
     }
   };
 
+  const parseApiDate = (raw: string): Date | null => {
+    if (!raw) return null;
+    const trimmed = raw.trim();
+    // Backend often returns UTC timestamps without timezone marker.
+    // If timezone is missing, treat it as UTC so local display is correct.
+    const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(trimmed);
+    const normalized = hasTimezone ? trimmed : `${trimmed}Z`;
+    const parsed = new Date(normalized);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    const parsed = parseApiDate(dateString);
+    if (!parsed) return dateString;
+    return parsed.toLocaleString(undefined, {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
-      minute: '2-digit'
+      minute: '2-digit',
     });
   };
 
@@ -148,7 +183,7 @@ const Fabrics: React.FC = () => {
     if (window.confirm('Are you sure you want to delete this knowledge fabric?')) {
       try {
         // API call to delete fabric
-        const response = await fetch(`http://localhost:8000/api/v1/knowledge/${fabricId}`, {
+        const response = await authenticatedFetch(getApiUrl(`api/v1/knowledge/${fabricId}`), {
           method: 'DELETE'
         });
         
@@ -164,7 +199,7 @@ const Fabrics: React.FC = () => {
   const handleExportFabric = async (fabricId: string) => {
     try {
       // API call to export fabric
-      const response = await fetch(`http://localhost:8000/api/v1/knowledge/${fabricId}/export`);
+      const response = await authenticatedFetch(getApiUrl(`api/v1/knowledge/${fabricId}/export`));
       
       if (response.ok) {
         const blob = await response.blob();
@@ -184,7 +219,7 @@ const Fabrics: React.FC = () => {
 
   const handleValidateFabric = async (fabricId: string, fabricName: string) => {
     try {
-      const response = await fetch(`http://localhost:8000/api/v1/knowledge/validate-knowledge/${fabricId}`, {
+      const response = await authenticatedFetch(getApiUrl(`api/v1/knowledge/validate-knowledge/${fabricId}`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -224,12 +259,35 @@ const Fabrics: React.FC = () => {
     setShowEndpointsDialog(true);
   };
 
-  if (loading) {
+  const handleRenameFabric = async (fabric: KnowledgeFabric) => {
+    const current = fabric.name || '';
+    const nextName = window.prompt('Enter new fabric name', current);
+    if (nextName == null) return;
+    const trimmed = nextName.trim();
+    if (!trimmed || trimmed === current) return;
+    try {
+      const response = await authenticatedFetch(getApiUrl(`api/v1/knowledge/${fabric.id}/rename`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error || result?.message || 'Rename failed');
+      }
+      setFabrics((prev) => prev.map((f) => (f.id === fabric.id ? { ...f, name: result.data?.name || trimmed } : f)));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Error renaming fabric';
+      alert(`❌ ${message}`);
+    }
+  };
+
+  if (initialLoading) {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading knowledge fabrics...</p>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#5ec8f2] mx-auto"></div>
+          <p className="mt-4 text-[#8b9cb0]">Loading knowledge fabrics...</p>
         </div>
       </div>
     );
@@ -237,93 +295,101 @@ const Fabrics: React.FC = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+        <div className="absolute inset-0 bg-[linear-gradient(130deg,rgba(255,255,255,0.02),transparent_52%)]" />
+        <div className="absolute -top-32 left-1/4 h-72 w-72 rounded-full bg-[#5ec8f2]/10 blur-3xl" />
+        <div className="absolute top-1/3 -right-24 h-80 w-80 rounded-full bg-[#9b8bd4]/10 blur-3xl" />
+        <div className="absolute -bottom-28 left-1/3 h-72 w-72 rounded-full bg-[#3ecf9b]/10 blur-3xl" />
+      </div>
+
       {/* Header */}
       <div className="text-center mb-12">
         <div className="flex items-center justify-center mb-4">
-          <div className="p-3 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-full">
-            <SparklesIcon className="h-8 w-8 text-white" />
+          <div className="p-3 rounded-full bg-[#10141d]/80 backdrop-blur-xl border border-[rgba(148,163,184,0.11)] shadow-lg shadow-black/30">
+            <SparklesIcon className="h-8 w-8 text-[#5ec8f2]" />
           </div>
         </div>
-        <h1 className="text-4xl font-bold text-gray-900 mb-4">
+        <p className="mb-3 text-[10px] uppercase tracking-[0.2em] text-[#8b9cb0]">Knowledge Operations</p>
+        <h1 className="text-4xl font-semibold text-[#e8edf4] mb-4">
           Available Knowledge Fabrics
         </h1>
-        <p className="text-xl text-gray-600 max-w-3xl mx-auto mb-6">
+        <p className="text-base text-[#cbd5e1] max-w-3xl mx-auto mb-6">
           Manage and explore your created knowledge fabrics
         </p>
         <button
           onClick={handleRefresh}
-          disabled={loading}
-          className="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          disabled={refreshing}
+          className="inline-flex items-center rounded-xl border border-[rgba(148,163,184,0.11)] bg-white/[0.03] px-4 py-2 text-sm font-medium text-[#cbd5e1] backdrop-blur-xl transition-all hover:border-[rgba(148,163,184,0.2)] hover:bg-white/[0.05] hover:text-[#e8edf4] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <ArrowPathIcon className="h-5 w-5 mr-2" />
-          {loading ? 'Refreshing...' : 'Refresh'}
+          <ArrowPathIcon className={`mr-2 h-5 w-5 ${refreshing ? 'animate-spin' : ''}`} />
+          {refreshing ? 'Refreshing...' : 'Refresh'}
         </button>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8">
-        <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200">
+      <div className="grid grid-cols-1 gap-4 mb-8 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="rounded-2xl border border-[rgba(148,163,184,0.11)] bg-[#10141d]/75 p-4 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
           <div className="flex items-center">
-            <div className="p-3 bg-blue-100 rounded-lg">
+            <div className="rounded-xl bg-[#5ec8f2]/15 p-2.5">
               <SparklesIcon className="h-6 w-6 text-blue-600" />
             </div>
             <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">Total Fabrics</p>
-              <p className="text-2xl font-bold text-gray-900">{fabrics.length}</p>
+              <p className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">Total Fabrics</p>
+              <p className="text-xl font-semibold text-[#e8edf4]">{fabrics.length}</p>
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200">
+        <div className="rounded-2xl border border-[rgba(148,163,184,0.11)] bg-[#10141d]/75 p-4 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
           <div className="flex items-center">
-            <div className="p-3 bg-green-100 rounded-lg">
+            <div className="rounded-xl bg-[#3ecf9b]/15 p-2.5">
               <CheckCircleIcon className="h-6 w-6 text-green-600" />
             </div>
             <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">Active</p>
-              <p className="text-2xl font-bold text-gray-900">
+              <p className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">Active</p>
+              <p className="text-xl font-semibold text-[#e8edf4]">
                 {fabrics.filter(f => f.status === 'active').length}
               </p>
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200">
+        <div className="rounded-2xl border border-[rgba(148,163,184,0.11)] bg-[#10141d]/75 p-4 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
           <div className="flex items-center">
-            <div className="p-3 bg-purple-100 rounded-lg">
+            <div className="rounded-xl bg-[#9b8bd4]/15 p-2.5">
               <CpuChipIcon className="h-6 w-6 text-purple-600" />
             </div>
             <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">Trained Models</p>
-              <p className="text-2xl font-bold text-gray-900">
+              <p className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">Trained Models</p>
+              <p className="text-xl font-semibold text-[#e8edf4]">
                 {fabrics.filter(f => f.model_status === 'trained').length}
               </p>
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200">
+        <div className="rounded-2xl border border-[rgba(148,163,184,0.11)] bg-[#10141d]/75 p-4 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
           <div className="flex items-center">
-            <div className="p-3 bg-orange-100 rounded-lg">
+            <div className="rounded-xl bg-[#e8b84a]/15 p-2.5">
               <DocumentTextIcon className="h-6 w-6 text-orange-600" />
             </div>
             <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">Total Documents</p>
-              <p className="text-2xl font-bold text-gray-900">
+              <p className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">Total Documents</p>
+              <p className="text-xl font-semibold text-[#e8edf4]">
                 {fabrics.reduce((sum, f) => sum + f.document_count, 0)}
               </p>
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200">
+        <div className="rounded-2xl border border-[rgba(148,163,184,0.11)] bg-[#10141d]/75 p-4 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
           <div className="flex items-center">
-            <div className="p-3 bg-teal-100 rounded-lg">
+            <div className="rounded-xl bg-[#5ec8f2]/15 p-2.5">
               <CubeIcon className="h-6 w-6 text-teal-600" />
             </div>
             <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">Total Chunks</p>
-              <p className="text-2xl font-bold text-gray-900">
+              <p className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">Total Chunks</p>
+              <p className="text-xl font-semibold text-[#e8edf4]">
                 {fabrics.reduce((sum, f) => sum + (f.total_chunks || 0), 0)}
               </p>
             </div>
@@ -332,64 +398,36 @@ const Fabrics: React.FC = () => {
       </div>
 
       {/* Fabrics Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
         {fabrics.map((fabric) => (
           <div
             key={fabric.id}
-            className="bg-white rounded-xl shadow-lg border border-gray-200 hover:shadow-xl transition-shadow duration-300"
+            className="group rounded-2xl border border-[rgba(148,163,184,0.11)] bg-[#10141d]/75 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] transition-all duration-300 hover:border-[rgba(148,163,184,0.2)] hover:-translate-y-0.5"
           >
-            <div className="p-6">
+            <div className="p-5">
               {/* Header */}
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center space-x-3">
-                  <div className="p-2 bg-indigo-100 rounded-lg">
+                  <div className="rounded-lg bg-[#5ec8f2]/15 p-2">
                     {getSourceTypeIcon(fabric.source_type)}
                   </div>
                   <div>
-                    <h3 className="text-lg font-semibold text-gray-900">
+                    <h3 className="text-lg font-semibold text-[#e8edf4]">
                       {fabric.name}
                     </h3>
-                    <p className="text-sm text-gray-500">
+                    <p className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">
                       {fabric.source_type.toUpperCase()}
                     </p>
                   </div>
                 </div>
-                
-                <div className="flex space-x-2">
-                  <button
-                    onClick={() => handleViewFabric(fabric)}
-                    className="p-2 text-gray-400 hover:text-blue-600 transition-colors"
-                    title="View Details"
-                  >
-                    <EyeIcon className="h-5 w-5" />
-                  </button>
-                  <button
-                    onClick={() => handleExportFabric(fabric.id)}
-                    className="p-2 text-gray-400 hover:text-green-600 transition-colors"
-                    title="Export"
-                  >
-                    <ArrowDownTrayIcon className="h-5 w-5" />
-                  </button>
-                                     <button
-                     onClick={() => handleValidateFabric(fabric.id, fabric.name)}
-                     className="p-2 text-gray-400 hover:text-purple-600 transition-colors"
-                     title="Validate Knowledge"
-                   >
-                     <MagnifyingGlassIcon className="h-5 w-5" />
-                   </button>
-                  <button
-                    onClick={() => handleDeleteFabric(fabric.id)}
-                    className="p-2 text-gray-400 hover:text-red-600 transition-colors"
-                    title="Delete"
-                  >
-                    <TrashIcon className="h-5 w-5" />
-                  </button>
-                </div>
+                <span className={`px-3 py-1 text-xs font-medium rounded-full ${getStatusColor(fabric.status)}`}>
+                  {fabric.status}
+                </span>
               </div>
 
               {/* Description */}
               {fabric.description && (
-                <p className="text-gray-600 mb-4 line-clamp-2">
+                <p className="text-[#cbd5e1] mb-4 line-clamp-2">
                   {fabric.description}
                 </p>
               )}
@@ -400,63 +438,126 @@ const Fabrics: React.FC = () => {
                   {fabric.tags.slice(0, 3).map((tag, index) => (
                     <span
                       key={index}
-                      className="px-2 py-1 bg-gray-100 text-gray-700 text-xs rounded-full"
+                      className="px-2 py-1 border border-[rgba(148,163,184,0.11)] bg-white/[0.04] text-[#cbd5e1] text-xs rounded-full"
                     >
                       {tag}
                     </span>
                   ))}
                   {fabric.tags.length > 3 && (
-                    <span className="px-2 py-1 bg-gray-100 text-gray-700 text-xs rounded-full">
+                    <span className="px-2 py-1 border border-[rgba(148,163,184,0.11)] bg-white/[0.04] text-[#cbd5e1] text-xs rounded-full">
                       +{fabric.tags.length - 3} more
                     </span>
                   )}
                 </div>
               )}
 
+              {/* Platform status */}
+              <div className="mb-4 flex flex-wrap gap-2">
+                {fabric.ontology_project_id && (
+                  <span className="rounded-full border border-[rgba(94,200,242,0.3)] bg-[rgba(94,200,242,0.1)] px-2 py-0.5 text-[10px] text-[#5ec8f2]">
+                    Ontology linked
+                  </span>
+                )}
+                {fabric.approved_ontology_version_id && (
+                  <span className="rounded-full border border-[rgba(62,207,155,0.3)] bg-[rgba(62,207,155,0.1)] px-2 py-0.5 text-[10px] text-[#3ecf9b]">
+                    Graph approved
+                  </span>
+                )}
+                {(fabricJobs[fabric.id] || []).slice(0, 1).map((job) => (
+                  <span
+                    key={job.id}
+                    className={`rounded-full border px-2 py-0.5 text-[10px] ${jobStatusColor(job.status)}`}
+                  >
+                    {jobTypeLabel(job.job_type)}: {job.status}
+                  </span>
+                ))}
+              </div>
+
               {/* Stats */}
-              <div className="grid grid-cols-3 gap-4 mb-4">
+              <div className="grid grid-cols-3 gap-3 mb-4 rounded-xl border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-3">
                 <div>
-                  <p className="text-xs text-gray-500">Documents</p>
-                  <p className="text-lg font-semibold text-gray-900">
+                  <p className="text-xs uppercase tracking-[0.16em] text-[#8b9cb0]">Documents</p>
+                  <p className="text-lg font-semibold text-[#e8edf4]">
                     {fabric.document_count.toLocaleString()}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500">Chunks</p>
-                  <p className="text-lg font-semibold text-gray-900">
+                  <p className="text-xs uppercase tracking-[0.16em] text-[#8b9cb0]">Chunks</p>
+                  <p className="text-lg font-semibold text-[#e8edf4]">
                     {fabric.total_chunks?.toLocaleString() || '0'}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500">Created</p>
-                  <p className="text-sm font-medium text-gray-900">
+                  <p className="text-xs uppercase tracking-[0.16em] text-[#8b9cb0]">Created</p>
+                  <p className="text-sm font-medium text-[#e8edf4]">
                     {formatDate(fabric.created_at)}
                   </p>
                 </div>
               </div>
 
               {/* Status */}
-              <div className="flex items-center justify-between">
-                <span className={`px-3 py-1 text-xs font-medium rounded-full ${getStatusColor(fabric.status)}`}>
-                  {fabric.status}
-                </span>
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-xs uppercase tracking-[0.16em] text-[#8b9cb0]">Model Status</span>
                 {fabric.model_status && (
                   <span className={`px-3 py-1 text-xs font-medium rounded-full ${getModelStatusColor(fabric.model_status)}`}>
                     {fabric.model_status}
                   </span>
                 )}
               </div>
-            </div>
 
-            {/* Action Buttons */}
-            <div className="px-6 pb-6">
-              <button 
-                onClick={() => handleUseFabric(fabric)}
-                className="w-full bg-gradient-to-r from-indigo-500 to-purple-600 text-white py-2 px-4 rounded-lg font-medium hover:from-indigo-600 hover:to-purple-700 transition-all duration-200 flex items-center justify-center space-x-2"
-              >
-                <PlayIcon className="h-4 w-4" />
-                <span>Use Fabric</span>
-              </button>
+              {/* Action Buttons - all controls stay inside widget */}
+              <div className="space-y-2 rounded-xl border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-3">
+                <div className="grid grid-cols-5 gap-2">
+                  <button
+                    onClick={() => handleViewFabric(fabric)}
+                    className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(94,200,242,0.35)] hover:text-[#5ec8f2]"
+                    title="View Details"
+                  >
+                    <EyeIcon className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => handleExportFabric(fabric.id)}
+                    className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(62,207,155,0.35)] hover:text-[#3ecf9b]"
+                    title="Export"
+                  >
+                    <ArrowDownTrayIcon className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => handleValidateFabric(fabric.id, fabric.name)}
+                    className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(155,139,212,0.35)] hover:text-[#9b8bd4]"
+                    title="Validate Knowledge"
+                  >
+                    <MagnifyingGlassIcon className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => handleRenameFabric(fabric)}
+                    className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(94,200,242,0.35)] hover:text-[#5ec8f2]"
+                    title="Rename"
+                  >
+                    <PencilSquareIcon className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => handleDeleteFabric(fabric.id)}
+                    className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(240,137,132,0.35)] hover:text-[#f08984]"
+                    title="Delete"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => navigate(`/fabrics/${fabric.id}/knowledge-graph`)}
+                  className="w-full rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] py-2 px-4 text-sm font-medium text-[#cbd5e1] transition-colors hover:border-[rgba(148,163,184,0.2)] hover:bg-white/[0.05] hover:text-[#e8edf4]"
+                >
+                  View Knowledge Graph
+                </button>
+                <button
+                  onClick={() => handleUseFabric(fabric)}
+                  className="w-full rounded-lg border border-[rgba(94,200,242,0.35)] bg-gradient-to-r from-[#5ec8f2]/30 to-[#9b8bd4]/30 py-2 px-4 text-sm font-medium text-[#e8edf4] transition-all duration-200 hover:from-[#5ec8f2]/40 hover:to-[#9b8bd4]/40"
+                >
+                  Use Fabric
+                </button>
+              </div>
             </div>
           </div>
         ))}
@@ -465,14 +566,14 @@ const Fabrics: React.FC = () => {
       {/* Empty State */}
       {fabrics.length === 0 && (
         <div className="text-center py-12">
-          <div className="mx-auto w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mb-6">
-            <SparklesIcon className="h-12 w-12 text-gray-400" />
+          <div className="mx-auto w-24 h-24 rounded-full border border-[rgba(148,163,184,0.11)] bg-white/[0.03] flex items-center justify-center mb-6">
+            <SparklesIcon className="h-12 w-12 text-[#5ec8f2]" />
           </div>
-          <h3 className="text-lg font-medium text-gray-900 mb-2">No Knowledge Fabrics Yet</h3>
-          <p className="text-gray-600 mb-6">
+          <h3 className="text-lg font-medium text-[#e8edf4] mb-2">No Knowledge Fabrics Yet</h3>
+          <p className="text-[#cbd5e1] mb-6">
             Create your first knowledge fabric by uploading documents or connecting to databases.
           </p>
-          <button className="bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-indigo-700 transition-colors">
+          <button className="rounded-lg border border-[rgba(94,200,242,0.35)] bg-gradient-to-r from-[#5ec8f2]/30 to-[#9b8bd4]/30 px-6 py-3 font-medium text-[#e8edf4] hover:from-[#5ec8f2]/40 hover:to-[#9b8bd4]/40 transition-colors">
             Create Knowledge Fabric
           </button>
         </div>

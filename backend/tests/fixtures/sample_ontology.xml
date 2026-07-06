@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DomainModel>
+  <Claim>
+    <claim_id>string</claim_id>
+    <policy_number>string</policy_number>
+    <claimant_name>string</claimant_name>
+    <claim_date>date</claim_date>
+    <status>enum</status>
+    <amount>decimal</amount>
+  </Claim>
+  <Policy>
+    <policy_id>string</policy_id>
+    <policy_holder>string</policy_holder>
+    <effective_date>date</effective_date>
+    <expiration_date>date</expiration_date>
+  </Policy>
+  <Claim>
+    <claim_id>string</claim_id>
+    <policy_number>string</policy_number>
+  </Claim>
+</DomainModel>

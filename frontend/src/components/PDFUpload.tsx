@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
+import { apiRequest } from '../utils/api';
 import {
   DocumentTextIcon,
   CloudArrowUpIcon,
@@ -69,7 +70,7 @@ const PDFUpload: React.FC<PDFUploadProps> = ({ onUploadComplete, onCancel }) => 
 
       // Make API call to backend
       console.log('Uploading files:', uploadFiles.map(f => f.file.name));
-      const response = await fetch('http://localhost:8000/api/v1/upload/', {
+      const response = await apiRequest('api/v1/upload/', {
         method: 'POST',
         body: formData,
       });
@@ -151,7 +152,7 @@ const PDFUpload: React.FC<PDFUploadProps> = ({ onUploadComplete, onCancel }) => 
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 text-[#cbd5e1] [&_.bg-white]:bg-[#10141d]/75 [&_.bg-gray-50]:bg-white/[0.03] [&_.bg-gray-100]:bg-white/[0.05] [&_.text-gray-900]:text-[#e8edf4] [&_.text-gray-800]:text-[#cbd5e1] [&_.text-gray-700]:text-[#cbd5e1] [&_.text-gray-600]:text-[#8b9cb0] [&_.text-gray-500]:text-[#8b9cb0] [&_.text-gray-400]:text-[#8b9cb0] [&_.border-gray-200]:border-[rgba(148,163,184,0.11)] [&_.border-gray-300]:border-[rgba(148,163,184,0.2)] [&_input]:bg-[#10141d]/70 [&_input]:text-[#e8edf4] [&_input]:border-[rgba(148,163,184,0.2)] [&_input]:placeholder:text-[#8b9cb0]">
       {/* Header */}
       <div className="text-center">
         <h3 className="text-2xl font-bold text-gray-900 mb-2">Upload PDF Documents</h3>

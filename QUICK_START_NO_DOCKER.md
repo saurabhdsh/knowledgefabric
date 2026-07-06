@@ -6,7 +6,7 @@ This is a quick guide to get Knowledge-Fabric running without Docker on your VDI
 
 ### Step 1: Prerequisites
 Make sure you have installed:
-- **Python 3.8+** ([Download](https://www.python.org/downloads/))
+- **Python 3.10 or 3.11** ([Download](https://www.python.org/downloads/))
 - **Node.js 16+** ([Download](https://nodejs.org/))
 - **Git** ([Download](https://git-scm.com/))
 
@@ -14,8 +14,16 @@ Make sure you have installed:
 
 **Linux/macOS:**
 ```bash
+# If your machine default Python is 3.12+ (or 3.13), install 3.11 first:
+# brew install python@3.11
+
 chmod +x setup_without_docker.sh
 ./setup_without_docker.sh
+```
+
+Optional explicit Python override:
+```bash
+PYTHON_BIN=python3.11 ./setup_without_docker.sh
 ```
 
 **Windows:**

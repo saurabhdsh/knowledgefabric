@@ -27,13 +27,21 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
+.pytest_cache/
 
 # Virtual environments
 venv/
+.venv/
 env/
 ENV/
 env.bak/
 venv.bak/
+claims_env/
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/build/
 
 # IDE
 .vscode/
@@ -55,19 +63,39 @@ Thumbs.db
 *.log
 logs/
 
-# Database
+# Database & runtime state
 *.db
 *.sqlite
 *.sqlite3
+backend/data/*
+!backend/data/.gitkeep
+backend/ontology_data/
 
-# Uploads
+# Uploads & vector store
 uploads/
 backend/uploads/
-
-# Chroma DB
 chroma_db/
 backend/chroma_db/
 
-# Models
+# ML model artifacts
 models/
-backend/models/ 
+backend/models/
+
+# Large local seed / demo datasets
+*.csv
+
+# Local notes
+plan.md
+ui.md
+
+# Claims / demo datasets (not needed for deploy)
+create_claims_database.py
+duplicate_claims_4_agents.py
+requirements_claims.txt
+setup_claims_db.sh
+scripts/csnp_*
+scripts/*.zip
+
+# Debug pages
+frontend/public/debug*.html
+ 
