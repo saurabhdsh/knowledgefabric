@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ChatBubbleLeftRightIcon, SparklesIcon, DocumentTextIcon, CpuChipIcon } from '@heroicons/react/24/outline';
 import { apiRequest } from '../utils/api';
+import { renderLlmMarkdown } from '../utils/renderLlmGraphInsight';
 
 interface KnowledgeFabric {
   id: string;
@@ -290,12 +291,12 @@ const TestLLM: React.FC = () => {
                   </div>
                   
                   <div className="mb-3">
-                    <p className="text-sm text-gray-600 mb-1">
+                    <p className="text-sm text-gray-600 mb-2">
                       <strong>Query:</strong> {result.query}
                     </p>
-                    <p className="text-sm text-gray-800 whitespace-pre-line">
-                      {result.response}
-                    </p>
+                    <div className="rounded-lg border border-gray-200/80 bg-gray-50/50 px-3 py-3">
+                      {renderLlmMarkdown(String(result.response || ''), 'light')}
+                    </div>
                   </div>
                   
                   <div className="flex items-center justify-between text-xs text-gray-500">
