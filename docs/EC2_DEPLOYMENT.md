@@ -38,7 +38,7 @@ Deploy Weave on **one EC2 instance** and open it at `http://<public-ip>`.
       "Effect": "Allow",
       "Action": [
         "bedrock:InvokeModel",
-        "bedrock:Converse"
+        "bedrock:InvokeModelWithResponseStream"
       ],
       "Resource": "*"
     }
