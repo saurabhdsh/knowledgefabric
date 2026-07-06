@@ -41,6 +41,28 @@ class BedrockClient:
             # IAM / network may block list; still allow converse attempts at runtime.
             return True
 
+    def _resolve_model_id(self, model: Optional[str] = None) -> str:
+        """Map foundation model IDs to regional inference profiles when required."""
+        model_id = (model or settings.BEDROCK_MODEL_ID or "").strip()
+        if not model_id:
+            return model_id
+        if model_id.startswith(("us.", "eu.", "global.", "au.", "jp.")):
+            return model_id
+        if not model_id.startswith("anthropic."):
+            return model_id
+
+        region = (settings.AWS_REGION or "us-east-1").lower()
+        if region.startswith("us-"):
+            return f"us.{model_id}"
+        if region.startswith("eu-"):
+            return f"eu.{model_id}"
+        if region.startswith("ap-"):
+            if region.startswith("ap-southeast-2"):
+                return f"au.{model_id}"
+            if region.startswith("ap-northeast-1"):
+                return f"jp.{model_id}"
+        return f"global.{model_id}"
+
     def chat_completion(
         self,
         messages: List[Dict[str, str]],
@@ -52,7 +74,9 @@ class BedrockClient:
         if not self.is_configured():
             raise RuntimeError("Bedrock is not enabled or BEDROCK_MODEL_ID is missing.")
 
-        model_id = model or settings.BEDROCK_MODEL_ID
+        model_id = self._resolve_model_id(model)
+        if model_id != (model or settings.BEDROCK_MODEL_ID):
+            logger.debug("Bedrock model resolved to inference profile: %s", model_id)
         system_blocks: List[Dict[str, str]] = []
         converse_messages: List[Dict[str, Any]] = []
 

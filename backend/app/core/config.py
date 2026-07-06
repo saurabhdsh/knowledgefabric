@@ -118,7 +118,7 @@ class Settings(BaseSettings):
         "1", "true", "yes", "on",
     )
     BEDROCK_MODEL_ID: str = os.environ.get(
-        "BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-5-20250929-v1:0"
+        "BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     )
     BEDROCK_ONTOLOGY_MODEL_ID: Optional[str] = os.environ.get("BEDROCK_ONTOLOGY_MODEL_ID")
 
