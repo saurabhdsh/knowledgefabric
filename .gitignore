@@ -77,8 +77,7 @@ backend/uploads/
 chroma_db/
 backend/chroma_db/
 
-# ML model artifacts
-models/
+# ML model artifacts (trained weights — not backend/app/models Python package)
 backend/models/
 
 # Large local seed / demo datasets

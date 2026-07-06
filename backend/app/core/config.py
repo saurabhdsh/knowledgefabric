@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings
 from typing import Optional
 import os
@@ -74,7 +75,15 @@ class Settings(BaseSettings):
     # File Upload Configuration
     UPLOAD_DIR: str = _resolve_dir("KF_UPLOAD_DIR", "uploads")
     MAX_FILE_SIZE: int = 100 * 1024 * 1024  # 100MB
-    ALLOWED_EXTENSIONS: list = [".pdf", ".txt", ".docx", ".xml"]
+    # Comma-separated in .env (e.g. .pdf,.txt,.docx) — not a JSON list field.
+    ALLOWED_EXTENSIONS_RAW: str = Field(
+        default=".pdf,.txt,.docx,.xml",
+        validation_alias="ALLOWED_EXTENSIONS",
+    )
+
+    @property
+    def ALLOWED_EXTENSIONS(self) -> list[str]:
+        return [part.strip() for part in self.ALLOWED_EXTENSIONS_RAW.split(",") if part.strip()]
 
     # Ontology Discovery Configuration (own uploads, not shared with Knowledge Fabric)
     ONTOLOGY_DATA_DIR: str = _resolve_dir("KF_ONTOLOGY_DATA_DIR", "ontology_data")
@@ -117,15 +126,19 @@ class Settings(BaseSettings):
     DEFAULT_LLM_PROVIDER: str = os.environ.get("DEFAULT_LLM_PROVIDER", "openai")
     ONTOLOGY_LLM_PROVIDER: Optional[str] = os.environ.get("ONTOLOGY_LLM_PROVIDER")
     OPENAI_QUERY_MODEL: str = os.environ.get("OPENAI_QUERY_MODEL", "gpt-4")
-    ENABLED_LLM_PROVIDERS: list = [
-        p.strip()
-        for p in os.environ.get("ENABLED_LLM_PROVIDERS", "openai,bedrock").split(",")
-        if p.strip()
-    ]
-    
+    ENABLED_LLM_PROVIDERS_RAW: str = Field(
+        default="openai,bedrock",
+        validation_alias="ENABLED_LLM_PROVIDERS",
+    )
+
+    @property
+    def ENABLED_LLM_PROVIDERS(self) -> list[str]:
+        return [part.strip() for part in self.ENABLED_LLM_PROVIDERS_RAW.split(",") if part.strip()]
+
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 settings = Settings()
 
