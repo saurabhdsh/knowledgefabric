@@ -6,6 +6,65 @@ This is **project-agnostic**. Adapt file names and frameworks to your codebase.
 
 ---
 
+## Verified working values (tested on Mac, `us-east-1`)
+
+Copy this block into your backend `.env` — these are the **exact values that worked** on another Mac with Bedrock + OpenAI both enabled:
+
+```bash
+# --- LLM provider ---
+DEFAULT_LLM_PROVIDER=bedrock
+ENABLED_LLM_PROVIDERS=openai,bedrock
+
+# --- AWS Bedrock (Claude Sonnet 4.5) ---
+BEDROCK_ENABLED=true
+AWS_REGION=us-east-1
+BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0
+BEDROCK_ONTOLOGY_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0
+
+# --- OpenAI (optional — keep for fallback) ---
+OPENAI_API_KEY=sk-your-key-here
+OPENAI_QUERY_MODEL=gpt-4
+```
+
+| Setting | Working value | Notes |
+|---------|---------------|--------|
+| **Model (use this)** | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | US inference profile — **required** |
+| **Model (do not use)** | `anthropic.claude-sonnet-4-5-20250929-v1:0` | Causes `ValidationException` on Converse |
+| **Region** | `us-east-1` | Must match Bedrock console region |
+| **Default provider** | `bedrock` | Backend logs: `Default Provider: bedrock` |
+| **IAM user** | e.g. `SaurabhDubey` | Policy: `InvokeModel` + `InvokeModelWithResponseStream` |
+| **Python** | `3.11` | Use `PYTHON_BIN=python3.11` if system is 3.12+ |
+
+**CLI test that confirmed Bedrock (run before backend start):**
+
+```bash
+aws configure   # region: us-east-1
+
+aws bedrock-runtime converse \
+  --model-id "us.anthropic.claude-sonnet-4-5-20250929-v1:0" \
+  --messages '[{"role":"user","content":[{"text":"Hi"}]}]' \
+  --region us-east-1
+```
+
+**Optional inference profiles (same model, different routing):**
+
+```bash
+# US regional (recommended — what we used)
+BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0
+
+# Global (higher availability, AWS routes automatically)
+# BEDROCK_MODEL_ID=global.anthropic.claude-sonnet-4-5-20250929-v1:0
+```
+
+**Backend startup should show:**
+
+```text
+API Key Service Status: 2 providers with API keys
+Default Provider: bedrock
+```
+
+---
+
 ## Goal
 
 ```text

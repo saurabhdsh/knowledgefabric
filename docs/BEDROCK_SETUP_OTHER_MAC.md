@@ -17,6 +17,45 @@ Use this guide to run **Weave (Knowledge Fabric)** on a **new Mac** with **AWS B
 
 ---
 
+## Verified working `backend/.env` (copy-paste)
+
+These are the **exact Bedrock + LLM values tested and working** on another Mac:
+
+```bash
+# --- Security ---
+SECRET_KEY=<openssl rand -hex 32>
+ACCESS_TOKEN_EXPIRE_MINUTES=480
+
+# --- LLM provider ---
+DEFAULT_LLM_PROVIDER=bedrock
+ENABLED_LLM_PROVIDERS=openai,bedrock
+
+# --- AWS Bedrock — Claude Sonnet 4.5 ---
+BEDROCK_ENABLED=true
+AWS_REGION=us-east-1
+BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0
+BEDROCK_ONTOLOGY_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0
+
+# --- OpenAI (optional fallback) ---
+OPENAI_API_KEY=sk-your-key-here
+OPENAI_QUERY_MODEL=gpt-4
+
+# --- File uploads (comma-separated, not JSON) ---
+ALLOWED_EXTENSIONS=.pdf,.txt,.docx
+```
+
+| Key | Working value |
+|-----|----------------|
+| `BEDROCK_MODEL_ID` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
+| `AWS_REGION` | `us-east-1` |
+| `DEFAULT_LLM_PROVIDER` | `bedrock` |
+| IAM policy actions | `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` |
+| AWS CLI test model | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
+
+> Do **not** use `anthropic.claude-sonnet-4-5-20250929-v1:0` without the `us.` prefix — it fails with `ValidationException`.
+
+---
+
 ## Prerequisites
 
 | Tool | Version | Install |
