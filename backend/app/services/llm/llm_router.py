@@ -59,7 +59,12 @@ class LLMRouter:
         chosen = self.resolve_provider(provider)
 
         if chosen == "bedrock":
-            bedrock_model = model if model and model.startswith(("anthropic.", "amazon.", "meta.", "cohere.", "ai21.")) else None
+            bedrock_prefixes = (
+                "anthropic.", "amazon.", "meta.", "cohere.", "ai21.",
+                "us.anthropic.", "eu.anthropic.", "global.anthropic.",
+                "au.anthropic.", "jp.anthropic.",
+            )
+            bedrock_model = model if model and model.startswith(bedrock_prefixes) else None
             return bedrock_client.chat_completion(
                 messages,
                 model=bedrock_model,

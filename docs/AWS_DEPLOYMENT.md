@@ -110,7 +110,7 @@ KF_CORS_ORIGINS=https://weave.your-domain.com
 BEDROCK_ENABLED=true
 DEFAULT_LLM_PROVIDER=bedrock
 AWS_REGION=us-east-1
-BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20241022-v2:0
+BEDROCK_MODEL_ID=anthropic.claude-sonnet-4-5-20250929-v1:0
 ENABLED_LLM_PROVIDERS=openai,bedrock
 
 # Optional: keep OpenAI for local/dev fallback
@@ -194,7 +194,7 @@ POST /api/v1/knowledge/query/{fabric_id}
 
 ```bash
 ONTOLOGY_LLM_PROVIDER=bedrock
-BEDROCK_ONTOLOGY_MODEL_ID=anthropic.claude-3-5-sonnet-20241022-v2:0
+BEDROCK_ONTOLOGY_MODEL_ID=anthropic.claude-sonnet-4-5-20250929-v1:0
 ```
 
 ---
