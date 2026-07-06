@@ -294,8 +294,8 @@ const TestLLM: React.FC = () => {
                     <p className="text-sm text-gray-600 mb-2">
                       <strong>Query:</strong> {result.query}
                     </p>
-                    <div className="rounded-lg border border-gray-200/80 bg-gray-50/50 px-3 py-3">
-                      {renderLlmMarkdown(String(result.response || ''), 'light')}
+                    <div className="rounded-lg border border-[rgba(148,163,184,0.12)] px-1 py-2">
+                      {renderLlmMarkdown(String(result.response || ''), 'dark')}
                     </div>
                   </div>
                   
