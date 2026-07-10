@@ -2175,31 +2175,41 @@ async def get_fabric_knowledge_graph(fabric_id: str, include_llm: bool = True):
         canonical = graph_store.get_graph_payload(fabric_id, version_id) if version_id else {"node_count": 0}
         if fabric.get("source_type") == "codebase" and (fabric.get("code_graph") or {}).get("nodes"):
             cg = fabric.get("code_graph") or {}
+            nodes = [
+                {
+                    "id": n.get("id"),
+                    "label": n.get("label") or n.get("id"),
+                    "type": n.get("type") or "node",
+                    "group": n.get("type") or "code",
+                    "properties": n.get("properties") or {},
+                }
+                for n in (cg.get("nodes") or [])
+                if n.get("id")
+            ]
+            node_ids = {n["id"] for n in nodes}
+            edges = []
+            for e in (cg.get("edges") or []):
+                source = e.get("source")
+                target = e.get("target")
+                if source not in node_ids or target not in node_ids:
+                    continue
+                edges.append(
+                    {
+                        "source": source,
+                        "target": target,
+                        "label": e.get("type") or e.get("label") or "related",
+                        "type": e.get("type") or e.get("label") or "related",
+                        "relation": e.get("type") or e.get("label") or "related",
+                    }
+                )
             graph_data = {
                 "fabric_id": fabric_id,
                 "fabric_name": fabric.get("name", fabric_id),
                 "graph_type": "codebase",
-                "nodes": [
-                    {
-                        "id": n.get("id"),
-                        "label": n.get("label") or n.get("id"),
-                        "type": n.get("type") or "node",
-                        "group": n.get("type") or "code",
-                        "properties": n.get("properties") or {},
-                    }
-                    for n in (cg.get("nodes") or [])
-                ],
-                "edges": [
-                    {
-                        "source": e.get("source"),
-                        "target": e.get("target"),
-                        "label": e.get("type") or "related",
-                        "type": e.get("type"),
-                    }
-                    for e in (cg.get("edges") or [])
-                ],
-                "node_count": len(cg.get("nodes") or []),
-                "edge_count": len(cg.get("edges") or []),
+                "nodes": nodes,
+                "edges": edges,
+                "node_count": len(nodes),
+                "edge_count": len(edges),
                 "discovery_summary": fabric.get("discovery_summary"),
                 "migration_blueprint": fabric.get("migration_blueprint"),
                 "codebase": fabric.get("codebase"),

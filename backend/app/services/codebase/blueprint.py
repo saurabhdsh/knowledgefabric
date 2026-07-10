@@ -158,8 +158,14 @@ def build_blueprint(
             {"id": sid, "type": "migration_slice", "label": wave.get("name") or sid, "properties": wave}
         )
         for mod in wave.get("modules") or []:
+            # Prefer top-level module folder names; LLM may emit file paths.
+            mod_name = str(mod).strip()
+            if "/" in mod_name or mod_name.endswith((".py", ".ts", ".js", ".java")):
+                mod_name = mod_name.split("/", 1)[0].rsplit(".", 1)[0]
+            if not mod_name:
+                continue
             graph_additions["edges"].append(
-                {"source": sid, "target": f"module:{mod}", "type": "maps_to", "properties": {}}
+                {"source": sid, "target": f"module:{mod_name}", "type": "maps_to", "properties": {}}
             )
     for risk in risks[:20]:
         rid = risk.get("id") or f"risk:{len(graph_additions['nodes'])}"
@@ -233,14 +239,69 @@ Domain concepts: {json.dumps((enrichment.get('domain_concepts') or [])[:15])[:20
 
 
 def apply_graph_additions(graph: Dict[str, Any], additions: Dict[str, Any]) -> Dict[str, Any]:
-    nodes = {n["id"]: n for n in graph.get("nodes") or []}
+    """Merge blueprint nodes/edges, dropping edges whose endpoints are missing."""
+    nodes = {n["id"]: n for n in graph.get("nodes") or [] if n.get("id")}
     edges = list(graph.get("edges") or [])
-    keys = {f"{e['source']}|{e['type']}|{e['target']}" for e in edges}
+    keys = {f"{e.get('source')}|{e.get('type')}|{e.get('target')}" for e in edges}
+
     for n in additions.get("nodes") or []:
-        nodes[n["id"]] = n
+        nid = n.get("id")
+        if nid:
+            nodes[nid] = n
+
+    # Map loose module names / file paths onto existing module:* nodes when possible.
+    module_by_label = {
+        str(n.get("label") or "").lower(): nid
+        for nid, n in nodes.items()
+        if n.get("type") == "module"
+    }
+    module_ids = {nid for nid, n in nodes.items() if n.get("type") == "module"}
+
+    def _resolve_endpoint(raw: Any) -> Optional[str]:
+        if raw is None:
+            return None
+        text = str(raw).strip()
+        if not text:
+            return None
+        if text in nodes:
+            return text
+        # LLM sometimes emits file paths as modules: app/main.py → module:app
+        if text.startswith("module:"):
+            rest = text[len("module:") :]
+            if rest in nodes:
+                return rest
+            if text in module_ids:
+                return text
+            top = rest.split("/", 1)[0].split(".", 1)[0]
+            candidate = f"module:{top}"
+            if candidate in nodes:
+                return candidate
+            label_hit = module_by_label.get(top.lower()) or module_by_label.get(rest.lower())
+            if label_hit:
+                return label_hit
+            return None
+        # bare name
+        candidate = f"module:{text}"
+        if candidate in nodes:
+            return candidate
+        top = text.split("/", 1)[0].split(".", 1)[0]
+        candidate = f"module:{top}"
+        if candidate in nodes:
+            return candidate
+        return module_by_label.get(text.lower()) or module_by_label.get(top.lower())
+
     for e in additions.get("edges") or []:
-        key = f"{e['source']}|{e['type']}|{e['target']}"
-        if key not in keys:
-            keys.add(key)
-            edges.append(e)
+        source = _resolve_endpoint(e.get("source"))
+        target = _resolve_endpoint(e.get("target"))
+        if not source or not target:
+            continue
+        if source not in nodes or target not in nodes:
+            continue
+        etype = e.get("type") or "related"
+        key = f"{source}|{etype}|{target}"
+        if key in keys:
+            continue
+        keys.add(key)
+        edges.append({**e, "source": source, "target": target, "type": etype})
+
     return {**graph, "nodes": list(nodes.values()), "edges": edges}

@@ -206,7 +206,11 @@ const FabricKnowledgeGraph: React.FC = () => {
   );
 
   const relationFilteredGraph = useMemo(() => {
+    const knownIds = new Set(nodes.map((n) => n.id));
     let relationFiltered = edges.filter((e) => {
+      const src = typeof e.source === 'string' ? e.source : e.source?.id;
+      const dst = typeof e.target === 'string' ? e.target : e.target?.id;
+      if (!src || !dst || !knownIds.has(src) || !knownIds.has(dst)) return false;
       if (e.relation === 'mentions') return showMentions;
       if (e.relation === 'related_to') return showRelated;
       return showOtherRelations;
