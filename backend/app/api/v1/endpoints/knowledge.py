@@ -1018,26 +1018,73 @@ def _reconstruct_graph_documents(fabric: Dict[str, Any]) -> List[str]:
     return [doc for doc in documents if isinstance(doc, str) and doc.strip()]
 
 
+def _edge_relation(edge: Dict[str, Any]) -> str:
+    return str(edge.get("relation") or edge.get("label") or edge.get("type") or "related")
+
+
 def _build_graph_analytics(graph_data: Dict[str, Any]) -> Dict[str, Any]:
     nodes = graph_data.get("nodes", [])
     edges = graph_data.get("edges", [])
-    entity_nodes = [n for n in nodes if n.get("type") == "entity"]
-    entity_nodes.sort(key=lambda x: x.get("weight", 0), reverse=True)
+    graph_type = str(graph_data.get("graph_type") or "")
 
-    related_edges = [e for e in edges if e.get("relation") == "related_to"]
-    related_edges.sort(key=lambda x: x.get("weight", 0), reverse=True)
+    # Document/exploratory graphs use type=entity; codebase graphs use module/file/symbol/etc.
+    if graph_type == "codebase":
+        preferred_types = {"module", "package", "service", "class", "function", "file", "symbol"}
+        entity_nodes = [n for n in nodes if (n.get("type") or "") in preferred_types]
+        if not entity_nodes:
+            entity_nodes = [n for n in nodes if (n.get("type") or "") not in {"workspace", "fabric"}]
+    else:
+        entity_nodes = [n for n in nodes if n.get("type") == "entity"]
+        if not entity_nodes:
+            entity_nodes = [n for n in nodes if n.get("type") != "fabric"]
+
+    def _node_weight(n: Dict[str, Any]) -> int:
+        if n.get("weight") is not None:
+            return int(n.get("weight") or 0)
+        nid = str(n.get("id") or "")
+        return sum(1 for e in edges if e.get("source") == nid or e.get("target") == nid)
+
+    ranked_nodes = sorted(entity_nodes, key=_node_weight, reverse=True)
+    top_entities = [
+        {
+            "id": n.get("id"),
+            "label": n.get("label") or n.get("id"),
+            "type": n.get("type"),
+            "weight": _node_weight(n),
+        }
+        for n in ranked_nodes[:10]
+    ]
+
+    related_edges = [e for e in edges if _edge_relation(e) == "related_to"]
+    if not related_edges:
+        related_edges = list(edges)
+    related_edges.sort(key=lambda x: int(x.get("weight") or 1), reverse=True)
+
+    top_relationships = []
+    for edge in related_edges[:10]:
+        top_relationships.append(
+            {
+                "source": edge.get("source"),
+                "target": edge.get("target"),
+                "relation": _edge_relation(edge),
+                "weight": int(edge.get("weight") or 1),
+            }
+        )
 
     relation_counts: Dict[str, int] = {}
     for edge in edges:
-        relation = edge.get("relation", "unknown")
+        relation = _edge_relation(edge)
         relation_counts[relation] = relation_counts.get(relation, 0) + 1
 
     return {
-        "top_entities": entity_nodes[:10],
-        "top_relationships": related_edges[:10],
+        "top_entities": top_entities,
+        "top_relationships": top_relationships,
         "relationship_breakdown": relation_counts,
         "entity_count": len(entity_nodes),
         "graph_density": round((len(edges) / max(len(nodes), 1)), 2),
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "graph_type": graph_type or None,
     }
 
 
@@ -1110,30 +1157,98 @@ def _build_structured_servicenow_graph(fabric: Dict[str, Any]) -> Optional[Dict[
     }
 
 
-def _generate_graph_llm_insight(fabric_name: str, analytics: Dict[str, Any]) -> Dict[str, Any]:
+def _generate_graph_llm_insight(
+    fabric_name: str,
+    analytics: Dict[str, Any],
+    *,
+    fabric: Optional[Dict[str, Any]] = None,
+    graph_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    # Prefer DEFAULT_LLM_PROVIDER, but auto-fall back (e.g. Bedrock flags without AWS creds → OpenAI).
     provider = llm_router.resolve_provider(settings.DEFAULT_LLM_PROVIDER)
-    is_valid, _ = api_key_service.validate_provider(provider)
+    is_valid, message = llm_router.validate_provider(provider)
     if not is_valid:
         return {
             "generated": False,
-            "summary": f"{provider} is not configured, showing deterministic analytics only.",
+            "summary": f"{provider} is not configured ({message}), showing deterministic analytics only.",
         }
 
-    top_entities = ", ".join([e.get("label", "") for e in analytics.get("top_entities", [])[:8]])
+    fabric = fabric or {}
+    graph_data = graph_data or {}
+    graph_type = analytics.get("graph_type") or graph_data.get("graph_type") or fabric.get("source_type") or "exploratory"
+
+    top_entities = ", ".join(
+        [
+            f"{e.get('label') or e.get('id')} ({e.get('type') or 'node'}, w={e.get('weight', 0)})"
+            for e in analytics.get("top_entities", [])[:8]
+            if e.get("label") or e.get("id")
+        ]
+    ) or "(none ranked)"
     top_rel = ", ".join(
         [
-            f"{r.get('source', '').replace('entity:', '')} -> {r.get('target', '').replace('entity:', '')} ({r.get('weight', 0)})"
-            for r in analytics.get("top_relationships", [])[:6]
+            f"{str(r.get('source', '')).split(':')[-1]} -[{r.get('relation', 'related')}]-> "
+            f"{str(r.get('target', '')).split(':')[-1]} ({r.get('weight', 0)})"
+            for r in analytics.get("top_relationships", [])[:8]
         ]
-    )
+    ) or "(none ranked)"
+    relation_breakdown = ", ".join(
+        f"{k}={v}" for k, v in list((analytics.get("relationship_breakdown") or {}).items())[:10]
+    ) or "n/a"
+
+    context_lines = [
+        f"Fabric: {fabric_name}",
+        f"Graph type: {graph_type}",
+        f"Nodes: {analytics.get('node_count') or graph_data.get('node_count') or 0}",
+        f"Edges: {analytics.get('edge_count') or graph_data.get('edge_count') or 0}",
+        f"Top nodes: {top_entities}",
+        f"Top relations: {top_rel}",
+        f"Relation mix: {relation_breakdown}",
+    ]
+
+    if fabric.get("source_type") == "codebase" or graph_type == "codebase":
+        codebase = fabric.get("codebase") or graph_data.get("codebase") or {}
+        blueprint = fabric.get("migration_blueprint") or graph_data.get("migration_blueprint") or {}
+        discovery = (
+            fabric.get("discovery_summary")
+            or graph_data.get("discovery_summary")
+            or ""
+        ).strip()
+        languages = codebase.get("languages") or {}
+        frameworks = codebase.get("frameworks") or []
+        waves = blueprint.get("waves") or []
+        risks = blueprint.get("risks") or []
+        context_lines.extend(
+            [
+                f"Languages: {languages or 'unknown'}",
+                f"Frameworks: {', '.join(frameworks) if frameworks else 'none detected'}",
+                f"Discovery summary: {discovery[:1200] or 'n/a'}",
+                f"Blueprint narrative: {(blueprint.get('narrative') or 'n/a')[:600]}",
+                f"Migration waves: {len(waves)}; risks flagged: {len(risks)}",
+            ]
+        )
+        if waves:
+            wave_bits = []
+            for idx, wave in enumerate(waves[:4]):
+                if not isinstance(wave, dict):
+                    continue
+                mods = ", ".join((wave.get("modules") or [])[:6]) or "—"
+                wave_bits.append(f"{wave.get('name') or f'Wave {idx+1}'}: {wave.get('intent') or ''} [{mods}]")
+            context_lines.append("Waves: " + " | ".join(wave_bits))
+        if risks:
+            risk_bits = [
+                f"{(r.get('severity') or 'info')}: {(r.get('message') or r.get('type') or '')}"
+                for r in risks[:5]
+                if isinstance(r, dict)
+            ]
+            context_lines.append("Risks: " + " ; ".join(risk_bits))
 
     prompt = (
-        f"Fabric: {fabric_name}\n"
-        f"Top entities: {top_entities}\n"
-        f"Top relations: {top_rel}\n\n"
-        "Return a professional executive briefing in Markdown using EXACT sections:\n"
+        "\n".join(context_lines)
+        + "\n\n"
+        "Using ONLY the structural facts above, write a professional executive briefing in Markdown "
+        "with EXACT sections below. Do not say you lack data, do not ask for more details, and do not refuse.\n"
         "## Executive Summary\n"
-        "2-3 concise sentences.\n\n"
+        "2-3 concise sentences grounded in the graph/codebase facts.\n\n"
         "## Key Insights\n"
         "- exactly 3 bullets, each one sentence.\n\n"
         "## Strategic Recommendations\n"
@@ -1146,14 +1261,21 @@ def _generate_graph_llm_insight(fabric_name: str, analytics: Dict[str, Any]) -> 
         summary = llm_router.chat_completion(
             provider=provider,
             messages=[
-                {"role": "system", "content": "You are a knowledge graph analyst."},
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a knowledge graph and codebase migration analyst. "
+                        "Always produce the requested Markdown briefing from the provided facts."
+                    ),
+                },
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=420,
+            max_tokens=520,
             temperature=0.2,
         )
         return {
             "generated": True,
+            "provider": provider,
             "summary": summary,
         }
     except Exception as e:
@@ -1556,6 +1678,258 @@ async def create_pdf_knowledge_fabric(request: CreatePDFFabricRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to create knowledge fabric: {str(e)}")
 
+
+@router.post("/create-codebase-fabric", response_model=APIResponse)
+async def create_codebase_knowledge_fabric(
+    name: str = Form(...),
+    mode: str = Form("zip"),
+    git_url: Optional[str] = Form(None),
+    git_ref: Optional[str] = Form(None),
+    auth_mode: str = Form("none"),
+    pat: Optional[str] = Form(None),
+    ssh_private_key: Optional[str] = Form(None),
+    migration_goal: Optional[str] = Form(None),
+    exclude_globs: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    zip_file: Optional[UploadFile] = File(None),
+):
+    """Create a codebase/workspace fabric from zip upload or git clone (async analysis)."""
+    from app.core.user_context import get_current_user_id
+    from app.services.codebase.ingest import (
+        prepare_workspace_from_zip,
+        save_upload_bytes,
+        clone_git_repo,
+        workspace_dir,
+    )
+
+    mode_norm = (mode or "zip").strip().lower()
+    if mode_norm not in ("zip", "git"):
+        raise HTTPException(status_code=400, detail="mode must be 'zip' or 'git'")
+
+    fabric_id = f"fabric_codebase_{uuid.uuid4().hex[:12]}"
+    progress_id = f"progress_codebase_{uuid.uuid4().hex[:12]}"
+    now = datetime.now().isoformat()
+    excludes = [p.strip() for p in (exclude_globs or "").split(",") if p.strip()]
+
+    progress_store[progress_id] = {
+        "status": "processing",
+        "progress": 2,
+        "message": "Staging workspace",
+        "stage": "stage",
+        "fabric_id": fabric_id,
+    }
+
+    try:
+        if mode_norm == "zip":
+            if not zip_file:
+                raise HTTPException(status_code=400, detail="zip_file is required for mode=zip")
+            data = await zip_file.read()
+            if not data:
+                raise HTTPException(status_code=400, detail="Empty zip upload")
+            if len(data) > settings.MAX_FILE_SIZE * 4:
+                raise HTTPException(status_code=400, detail="Zip file too large")
+            saved = save_upload_bytes(fabric_id, zip_file.filename or "workspace.zip", data)
+            workspace = prepare_workspace_from_zip(fabric_id, saved)
+            input_mode = "zip"
+        else:
+            if not git_url:
+                raise HTTPException(status_code=400, detail="git_url is required for mode=git")
+            workspace = clone_git_repo(
+                fabric_id=fabric_id,
+                git_url=git_url,
+                git_ref=git_ref,
+                auth_mode=auth_mode or "none",
+                pat=pat,
+                ssh_private_key=ssh_private_key,
+            )
+            input_mode = "git"
+
+        fabric = {
+            "id": fabric_id,
+            "name": name.strip() or f"Codebase {fabric_id[-6:]}",
+            "source_type": "codebase",
+            "description": description or "Codebase / workspace knowledge fabric",
+            "status": "processing",
+            "model_status": "not_trained",
+            "document_count": 0,
+            "total_chunks": 0,
+            "tags": ["codebase", "workspace"],
+            "created_at": now,
+            "updated_at": now,
+            "owner_id": get_current_user_id(),
+            "codebase": {
+                "input_mode": input_mode,
+                "git_remote": git_url if mode_norm == "git" else None,
+                "git_ref": git_ref if mode_norm == "git" else None,
+                "workspace_path": str(workspace),
+            },
+            "progress_id": progress_id,
+        }
+        fabric_store.save(fabric)
+
+        job_config = {
+            "progress_id": progress_id,
+            "workspace_path": str(workspace_dir(fabric_id)),
+            "input_mode": input_mode,
+            "git_url": git_url if mode_norm == "git" else None,
+            "git_ref": git_ref if mode_norm == "git" else None,
+            "migration_goal": migration_goal,
+            "exclude_globs": excludes,
+            # Ephemeral secrets for re-clone on reanalyze (scrubbed when job ends)
+            "auth_mode": auth_mode if mode_norm == "git" else "none",
+            "pat": pat if mode_norm == "git" and (auth_mode or "").lower() == "pat" else None,
+            "ssh_private_key": ssh_private_key
+            if mode_norm == "git" and (auth_mode or "").lower() == "ssh"
+            else None,
+        }
+        job_id = job_service.enqueue("codebase_analysis", fabric_id=fabric_id, config=job_config)
+        fabric["analysis_job_id"] = job_id
+        fabric_store.save(fabric)
+        progress_store[progress_id]["job_id"] = job_id
+        progress_store[progress_id]["message"] = "Queued codebase analysis"
+        progress_store[progress_id]["progress"] = 5
+
+        return APIResponse(
+            success=True,
+            message="Codebase fabric creation started",
+            data={
+                "fabric_id": fabric_id,
+                "progress_id": progress_id,
+                "job_id": job_id,
+                "status": "processing",
+            },
+        )
+    except HTTPException:
+        progress_store[progress_id] = {
+            "status": "error",
+            "progress": 0,
+            "message": "Failed to stage workspace",
+            "stage": "error",
+            "fabric_id": fabric_id,
+        }
+        raise
+    except Exception as exc:
+        progress_store[progress_id] = {
+            "status": "error",
+            "progress": 0,
+            "message": str(exc),
+            "stage": "error",
+            "fabric_id": fabric_id,
+        }
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/{fabric_id}/codebase/reanalyze", response_model=APIResponse)
+async def reanalyze_codebase_fabric(
+    fabric_id: str,
+    migration_goal: Optional[str] = Form(None),
+    reclone: bool = Form(False),
+    pat: Optional[str] = Form(None),
+    ssh_private_key: Optional[str] = Form(None),
+):
+    """Re-run analysis on an existing codebase fabric workspace (optionally re-clone git)."""
+    from app.services.codebase.ingest import clone_git_repo, workspace_dir
+
+    fabric = user_fabric(fabric_id)
+    if not fabric or fabric.get("source_type") != "codebase":
+        raise HTTPException(status_code=404, detail="Codebase fabric not found")
+
+    progress_id = f"progress_codebase_{uuid.uuid4().hex[:12]}"
+    codebase = fabric.get("codebase") or {}
+    workspace = workspace_dir(fabric_id)
+
+    if reclone and codebase.get("git_remote"):
+        auth_mode = "pat" if pat else ("ssh" if ssh_private_key else "none")
+        workspace = clone_git_repo(
+            fabric_id=fabric_id,
+            git_url=codebase["git_remote"],
+            git_ref=codebase.get("git_ref"),
+            auth_mode=auth_mode,
+            pat=pat,
+            ssh_private_key=ssh_private_key,
+        )
+    elif not workspace.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail="Workspace missing on disk. Re-upload zip or reclone with credentials.",
+        )
+
+    fabric["status"] = "processing"
+    fabric["progress_id"] = progress_id
+    fabric_store.save(fabric)
+    progress_store[progress_id] = {
+        "status": "processing",
+        "progress": 5,
+        "message": "Re-analysis queued",
+        "stage": "start",
+        "fabric_id": fabric_id,
+    }
+    job_id = job_service.enqueue(
+        "codebase_analysis",
+        fabric_id=fabric_id,
+        config={
+            "progress_id": progress_id,
+            "workspace_path": str(workspace),
+            "input_mode": codebase.get("input_mode") or "zip",
+            "git_url": codebase.get("git_remote"),
+            "git_ref": codebase.get("git_ref"),
+            "migration_goal": migration_goal or (fabric.get("migration_blueprint") or {}).get("migration_goal"),
+            "pat": pat,
+            "ssh_private_key": ssh_private_key,
+            "auth_mode": "pat" if pat else ("ssh" if ssh_private_key else "none"),
+        },
+    )
+    fabric["analysis_job_id"] = job_id
+    fabric_store.save(fabric)
+    return APIResponse(
+        success=True,
+        message="Re-analysis started",
+        data={"fabric_id": fabric_id, "progress_id": progress_id, "job_id": job_id},
+    )
+
+
+@router.get("/{fabric_id}/migration-export")
+async def export_codebase_migration_json(fabric_id: str):
+    """Download complete migration JSON for a codebase fabric."""
+    from fastapi.responses import JSONResponse
+    from app.services.codebase.migration_export import build_migration_package
+
+    fabric = user_fabric(fabric_id)
+    if not fabric or fabric.get("source_type") != "codebase":
+        raise HTTPException(status_code=404, detail="Codebase fabric not found")
+
+    package = build_migration_package(fabric=fabric)
+    filename = f"{(fabric.get('name') or fabric_id).replace(' ', '_')}_migration.json"
+    return JSONResponse(
+        content=package,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/import-codebase-migration", response_model=APIResponse)
+async def import_codebase_migration_json(
+    file: UploadFile = File(...),
+    name: Optional[str] = Form(None),
+):
+    """Import a Weave codebase migration JSON into a new fabric."""
+    from app.services.codebase.migration_import import import_migration_package
+
+    raw = await file.read()
+    try:
+        package = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
+    try:
+        fabric = import_migration_package(package, name=name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return APIResponse(
+        success=True,
+        message="Migration package imported",
+        data=fabric,
+    )
+
+
 @router.post("/create-composite-fabric", response_model=APIResponse)
 async def create_composite_knowledge_fabric(request: CreateCompositeFabricRequest):
     """Create a composite fabric by combining existing fabric sources."""
@@ -1754,7 +2128,38 @@ async def get_fabric_knowledge_graph(fabric_id: str, include_llm: bool = True):
 
         version_id = fabric.get("approved_ontology_version_id")
         canonical = graph_store.get_graph_payload(fabric_id, version_id) if version_id else {"node_count": 0}
-        if canonical.get("node_count", 0) > 0:
+        if fabric.get("source_type") == "codebase" and (fabric.get("code_graph") or {}).get("nodes"):
+            cg = fabric.get("code_graph") or {}
+            graph_data = {
+                "fabric_id": fabric_id,
+                "fabric_name": fabric.get("name", fabric_id),
+                "graph_type": "codebase",
+                "nodes": [
+                    {
+                        "id": n.get("id"),
+                        "label": n.get("label") or n.get("id"),
+                        "type": n.get("type") or "node",
+                        "group": n.get("type") or "code",
+                        "properties": n.get("properties") or {},
+                    }
+                    for n in (cg.get("nodes") or [])
+                ],
+                "edges": [
+                    {
+                        "source": e.get("source"),
+                        "target": e.get("target"),
+                        "label": e.get("type") or "related",
+                        "type": e.get("type"),
+                    }
+                    for e in (cg.get("edges") or [])
+                ],
+                "node_count": len(cg.get("nodes") or []),
+                "edge_count": len(cg.get("edges") or []),
+                "discovery_summary": fabric.get("discovery_summary"),
+                "migration_blueprint": fabric.get("migration_blueprint"),
+                "codebase": fabric.get("codebase"),
+            }
+        elif canonical.get("node_count", 0) > 0:
             graph_data = {
                 "fabric_id": fabric_id,
                 "fabric_name": fabric.get("name", fabric_id),
@@ -1788,11 +2193,25 @@ async def get_fabric_knowledge_graph(fabric_id: str, include_llm: bool = True):
             structured_graph = _build_structured_servicenow_graph(fabric)
             if structured_graph:
                 graph_data = structured_graph
+        # Normalize edge relation field so analytics/UI work for codebase + exploratory graphs.
+        for edge in graph_data.get("edges") or []:
+            if isinstance(edge, dict) and not edge.get("relation"):
+                edge["relation"] = edge.get("label") or edge.get("type") or "related"
+
         analytics = _build_graph_analytics(graph_data)
-        llm_insight = _generate_graph_llm_insight(fabric.get("name", fabric_id), analytics) if include_llm else {
-            "generated": False,
-            "summary": "LLM insight generation disabled for this request.",
-        }
+        llm_insight = (
+            _generate_graph_llm_insight(
+                fabric.get("name", fabric_id),
+                analytics,
+                fabric=fabric,
+                graph_data=graph_data,
+            )
+            if include_llm
+            else {
+                "generated": False,
+                "summary": "LLM insight generation disabled for this request.",
+            }
+        )
 
         graph_data["analytics"] = analytics
         graph_data["llm_insight"] = llm_insight
@@ -1813,6 +2232,9 @@ async def get_fabric_knowledge_graph(fabric_id: str, include_llm: bool = True):
             "ontology_project_id": fabric.get("ontology_project_id"),
             "approved_ontology_version_id": fabric.get("approved_ontology_version_id"),
             "guardrails": fabric.get("guardrails"),
+            "discovery_summary": fabric.get("discovery_summary"),
+            "migration_blueprint": fabric.get("migration_blueprint"),
+            "codebase": fabric.get("codebase"),
         }
 
         return APIResponse(

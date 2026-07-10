@@ -438,8 +438,9 @@ The backend auto-maps it to `us.anthropic.claude-sonnet-4-5-20250929-v1:0` for `
 
 | Goal | Setting |
 |------|---------|
-| Default Bedrock | `DEFAULT_LLM_PROVIDER=bedrock` |
+| Default Bedrock | `DEFAULT_LLM_PROVIDER=bedrock` + AWS credentials (`aws configure` or IAM) |
 | Default OpenAI | `DEFAULT_LLM_PROVIDER=openai` + `OPENAI_API_KEY` |
+| OpenAI Mac with Bedrock flags left on | Router detects missing AWS creds and falls back to OpenAI automatically |
 | Per query in UI | Test LLM → dropdown OpenAI / AWS Bedrock |
 | Ontology jobs on Bedrock | `ONTOLOGY_LLM_PROVIDER=bedrock` |
 
@@ -455,6 +456,7 @@ ENABLED_LLM_PROVIDERS=openai,bedrock
 
 - [EC2_DEPLOYMENT.md](./EC2_DEPLOYMENT.md) — public URL on one EC2 instance
 - [AWS_DEPLOYMENT.md](./AWS_DEPLOYMENT.md) — full AWS architecture (ECS, RDS, etc.)
+- [CODEBASE_FABRIC.md](./CODEBASE_FABRIC.md) — zip/folder/git codebase fabrics + migration JSON
 - [env.example](../env.example) — all environment variables
 
 ---

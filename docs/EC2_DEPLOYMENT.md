@@ -96,6 +96,8 @@ The script will:
 
 First build takes **10–15 minutes** (downloads models/deps).
 
+> **Codebase fabrics:** the backend image needs `git` + OpenSSH (included in `backend/Dockerfile`). Leave enough disk for clones under `uploads/codebase/`. See [CODEBASE_FABRIC.md](./CODEBASE_FABRIC.md).
+
 ---
 
 ## Step 4 — Open Weave

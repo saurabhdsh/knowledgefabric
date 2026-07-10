@@ -11,6 +11,7 @@ import {
   CloudIcon,
   Squares2X2Icon,
   BeakerIcon,
+  CodeBracketSquareIcon,
 } from '@heroicons/react/24/outline';
 import { apiRequest } from '../utils/api';
 import { getWeaveDomain, setWeaveDomain, type WeaveDomain } from '../utils/weaveDomain';
@@ -18,6 +19,7 @@ import PDFUpload from '../components/PDFUpload';
 import KnowledgeFabricProgress from '../components/KnowledgeFabricProgress';
 import DatabaseKnowledgeFabric from '../components/DatabaseKnowledgeFabric';
 import ServiceNowKnowledgeFabric from '../components/ServiceNowKnowledgeFabric';
+import CodebaseKnowledgeFabric from '../components/CodebaseKnowledgeFabric';
 
 interface KnowledgeOption {
   id: string;
@@ -48,6 +50,7 @@ const Knowledge: React.FC = () => {
   const [showPDFUpload, setShowPDFUpload] = useState(false);
   const [showDatabaseFabric, setShowDatabaseFabric] = useState(false);
   const [showServiceNowFabric, setShowServiceNowFabric] = useState(false);
+  const [showCodebaseFabric, setShowCodebaseFabric] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [showProgress, setShowProgress] = useState(false);
   const [availableFabrics, setAvailableFabrics] = useState<any[]>([]);
@@ -131,7 +134,7 @@ const Knowledge: React.FC = () => {
 
   useEffect(() => {
     loadAvailableFabrics();
-  }, [showProgress, showDatabaseFabric, showServiceNowFabric, showPDFUpload]);
+  }, [showProgress, showDatabaseFabric, showServiceNowFabric, showPDFUpload, showCodebaseFabric]);
 
   const knowledgeOptions: KnowledgeOption[] = useMemo(() => {
     const pharmaPdfFeatures = [
@@ -219,6 +222,22 @@ const Knowledge: React.FC = () => {
         gradient: 'from-orange-500 to-orange-600',
       },
       {
+        id: 'codebase',
+        title: 'Codebase / Workspace',
+        description:
+          'Upload a zip/folder or clone a git repo to build a code knowledge graph and migration JSON',
+        icon: CodeBracketSquareIcon,
+        features: [
+          'Zip, folder, or git clone (public / PAT / SSH)',
+          'Multi-language structural analysis',
+          'LLM enrichment via Bedrock or OpenAI',
+          'Typed knowledge graph + migration waves',
+          'Download complete migration JSON',
+        ],
+        color: 'cyan',
+        gradient: 'from-cyan-500 to-blue-600',
+      },
+      {
         id: 'composite',
         title: 'Composite Multi-Source Fabric',
         description:
@@ -244,6 +263,11 @@ const Knowledge: React.FC = () => {
     
     if (selectedOption === 'pdf') {
       setShowPDFUpload(true);
+      return;
+    }
+
+    if (selectedOption === 'codebase') {
+      setShowCodebaseFabric(true);
       return;
     }
     
@@ -535,6 +559,18 @@ You can now view your fabric in the "Available Fabrics" tab with real statistics
           weaveDomain={weaveDomain}
           connectorProfile={connectorProfile}
           guardrails={guardrails}
+        />
+      )}
+
+      {showCodebaseFabric && (
+        <CodebaseKnowledgeFabric
+          onClose={() => setShowCodebaseFabric(false)}
+          onCreated={(fabricId) => {
+            setShowCodebaseFabric(false);
+            setSelectedOption(null);
+            loadAvailableFabrics();
+            navigate(`/fabrics/${fabricId}/knowledge-graph`);
+          }}
         />
       )}
 

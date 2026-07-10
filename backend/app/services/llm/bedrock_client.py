@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
@@ -12,6 +13,7 @@ logger = logging.getLogger(__name__)
 class BedrockClient:
     def __init__(self) -> None:
         self._client = None
+        self._creds_checked: Optional[bool] = None
 
     def _runtime(self):
         if self._client is None:
@@ -23,8 +25,40 @@ class BedrockClient:
             )
         return self._client
 
+    def has_aws_credentials(self) -> bool:
+        """True when boto3 can resolve credentials (env, ~/.aws, or IAM role)."""
+        if self._creds_checked is not None:
+            return self._creds_checked
+
+        if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
+            self._creds_checked = True
+            return True
+        if os.environ.get("AWS_PROFILE") or os.environ.get("AWS_WEB_IDENTITY_TOKEN_FILE"):
+            # Likely configured; verify via session below.
+            pass
+
+        try:
+            import boto3
+
+            session = boto3.Session(region_name=settings.AWS_REGION or None)
+            creds = session.get_credentials()
+            if creds is None:
+                self._creds_checked = False
+                return False
+            frozen = creds.get_frozen_credentials()
+            ready = bool(frozen.access_key and frozen.secret_key)
+            self._creds_checked = ready
+            return ready
+        except Exception as exc:
+            logger.debug("AWS credential probe failed: %s", exc)
+            self._creds_checked = False
+            return False
+
     def is_configured(self) -> bool:
-        return bool(settings.BEDROCK_ENABLED and settings.BEDROCK_MODEL_ID and settings.AWS_REGION)
+        """Env flags set AND AWS credentials are resolvable on this machine."""
+        if not (settings.BEDROCK_ENABLED and settings.BEDROCK_MODEL_ID and settings.AWS_REGION):
+            return False
+        return self.has_aws_credentials()
 
     def is_available(self) -> bool:
         if not self.is_configured():
@@ -71,8 +105,13 @@ class BedrockClient:
         max_tokens: int = 500,
         temperature: float = 0.3,
     ) -> str:
-        if not self.is_configured():
+        if not settings.BEDROCK_ENABLED or not settings.BEDROCK_MODEL_ID:
             raise RuntimeError("Bedrock is not enabled or BEDROCK_MODEL_ID is missing.")
+        if not self.has_aws_credentials():
+            raise RuntimeError(
+                "Bedrock AWS credentials not found. "
+                "Configure AWS credentials, or set DEFAULT_LLM_PROVIDER=openai with OPENAI_API_KEY."
+            )
 
         model_id = self._resolve_model_id(model)
         if model_id != (model or settings.BEDROCK_MODEL_ID):

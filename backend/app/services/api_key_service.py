@@ -68,7 +68,10 @@ class APIKeyService:
             if bedrock_client.is_configured():
                 logger.info("AWS Bedrock configured (model=%s, region=%s)", settings.BEDROCK_MODEL_ID, settings.AWS_REGION)
             else:
-                logger.warning("Bedrock enabled in config but missing model/region")
+                logger.warning(
+                    "Bedrock enabled in config but not ready (missing model/region or AWS credentials); "
+                    "OpenAI will be used when available"
+                )
                 self._providers["bedrock"]["enabled"] = False
     
     def get_available_providers(self) -> List[Dict]:
@@ -123,8 +126,13 @@ class APIKeyService:
             return False, f"Provider {provider_id} is not enabled"
 
         if provider_id == "bedrock":
-            if not bedrock_client.is_configured():
+            if not settings.BEDROCK_ENABLED or not settings.BEDROCK_MODEL_ID:
                 return False, "Bedrock is not configured (BEDROCK_ENABLED, BEDROCK_MODEL_ID, AWS_REGION)"
+            if not bedrock_client.has_aws_credentials():
+                return (
+                    False,
+                    "Bedrock enabled but AWS credentials are missing; OpenAI will be used if configured",
+                )
             return True, "Bedrock is configured via IAM"
 
         return self.validate_api_key(provider_id)

@@ -12,7 +12,13 @@ from app.db.session import db_session, get_session_factory
 logger = logging.getLogger(__name__)
 
 JOB_STATUSES = ("queued", "running", "indexing", "training", "ready", "failed")
-JOB_TYPES = ("fabric_ingest", "ontology_discovery", "graph_build", "graph_export")
+JOB_TYPES = (
+    "fabric_ingest",
+    "ontology_discovery",
+    "graph_build",
+    "graph_export",
+    "codebase_analysis",
+)
 
 
 class JobService:

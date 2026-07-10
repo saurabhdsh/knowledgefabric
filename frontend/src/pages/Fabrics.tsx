@@ -15,9 +15,11 @@ import {
   MagnifyingGlassIcon,
   CubeIcon,
   PencilSquareIcon,
+  CodeBracketSquareIcon,
 } from '@heroicons/react/24/outline';
 import FabricEndpointsDialog from '../components/FabricEndpointsDialog';
 import { apiRequest, authenticatedFetch, getApiUrl } from '../utils/api';
+import { getAuthHeaders } from '../utils/authStorage';
 import { jobStatusColor, jobTypeLabel, platformApi, PlatformJob } from '../utils/platformApi';
 
 interface KnowledgeFabric {
@@ -144,7 +146,10 @@ const Fabrics: React.FC = () => {
         return <DocumentTextIcon className="h-5 w-5" />;
       case 'database':
         return <ServerIcon className="h-5 w-5" />;
+      case 'codebase':
+        return <CodeBracketSquareIcon className="h-5 w-5" />;
       case 'mixed':
+      case 'composite':
         return <BeakerIcon className="h-5 w-5" />;
       default:
         return <GlobeAltIcon className="h-5 w-5" />;
@@ -175,8 +180,7 @@ const Fabrics: React.FC = () => {
   };
 
   const handleViewFabric = (fabric: KnowledgeFabric) => {
-    // View fabric details - can be implemented later
-    console.log('View fabric:', fabric);
+    navigate(`/fabrics/${fabric.id}/knowledge-graph`);
   };
 
   const handleDeleteFabric = async (fabricId: string) => {
@@ -196,24 +200,55 @@ const Fabrics: React.FC = () => {
     }
   };
 
-  const handleExportFabric = async (fabricId: string) => {
+  const handleExportFabric = async (fabricId: string, sourceType?: string) => {
     try {
-      // API call to export fabric
-      const response = await authenticatedFetch(getApiUrl(`api/v1/knowledge/${fabricId}/export`));
-      
-      if (response.ok) {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `fabric_${fabricId}.json`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
+      const endpoint =
+        sourceType === 'codebase'
+          ? `api/v1/knowledge/${fabricId}/migration-export`
+          : `api/v1/knowledge/${fabricId}/export`;
+      const response = await authenticatedFetch(getApiUrl(endpoint));
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        throw new Error(errText || `Export failed (${response.status})`);
       }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download =
+        sourceType === 'codebase'
+          ? `fabric_${fabricId}_migration.json`
+          : `fabric_${fabricId}.json`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
     } catch (error) {
       console.error('Error exporting fabric:', error);
+      alert(error instanceof Error ? error.message : 'Export failed');
+    }
+  };
+
+  const handleReanalyzeCodebase = async (fabricId: string) => {
+    if (!window.confirm('Re-analyze this codebase fabric?')) return;
+    try {
+      const form = new FormData();
+      const response = await fetch(getApiUrl(`api/v1/knowledge/${fabricId}/codebase/reanalyze`), {
+        method: 'POST',
+        headers: { ...getAuthHeaders() },
+        body: form,
+      });
+      const payload = await response.json();
+      if (!response.ok || payload?.success === false) {
+        throw new Error(payload?.detail || payload?.message || 'Re-analyze failed');
+      }
+      alert('Re-analysis started. Refresh this page in a minute.');
+      handleRefresh();
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : 'Re-analyze failed');
     }
   };
 
@@ -515,13 +550,24 @@ const Fabrics: React.FC = () => {
                   >
                     <EyeIcon className="h-4 w-4" />
                   </button>
-                  <button
-                    onClick={() => handleExportFabric(fabric.id)}
-                    className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(62,207,155,0.35)] hover:text-[#3ecf9b]"
-                    title="Export"
-                  >
-                    <ArrowDownTrayIcon className="h-4 w-4" />
-                  </button>
+                  {fabric.source_type !== 'codebase' && (
+                    <button
+                      onClick={() => handleExportFabric(fabric.id, fabric.source_type)}
+                      className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(62,207,155,0.35)] hover:text-[#3ecf9b]"
+                      title="Export"
+                    >
+                      <ArrowDownTrayIcon className="h-4 w-4" />
+                    </button>
+                  )}
+                  {fabric.source_type === 'codebase' && (
+                    <button
+                      onClick={() => handleReanalyzeCodebase(fabric.id)}
+                      className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(94,200,242,0.35)] hover:text-[#5ec8f2]"
+                      title="Re-analyze codebase"
+                    >
+                      <ArrowPathIcon className="h-4 w-4" />
+                    </button>
+                  )}
                   <button
                     onClick={() => handleValidateFabric(fabric.id, fabric.name)}
                     className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(155,139,212,0.35)] hover:text-[#9b8bd4]"
@@ -544,6 +590,16 @@ const Fabrics: React.FC = () => {
                     <TrashIcon className="h-4 w-4" />
                   </button>
                 </div>
+
+                {fabric.source_type === 'codebase' && (
+                  <button
+                    onClick={() => handleExportFabric(fabric.id, fabric.source_type)}
+                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-[rgba(62,207,155,0.4)] bg-[rgba(62,207,155,0.12)] py-2 px-4 text-sm font-medium text-[#9af0ca] transition-colors hover:bg-[rgba(62,207,155,0.2)]"
+                  >
+                    <ArrowDownTrayIcon className="h-4 w-4" />
+                    Download migration JSON
+                  </button>
+                )}
 
                 <button
                   onClick={() => navigate(`/fabrics/${fabric.id}/knowledge-graph`)}

@@ -22,6 +22,7 @@ _PATH_FEATURE_RULES: List[Tuple[str, str]] = [
     ("/api/v1/training", "train_ml"),
     ("/api/v1/knowledge/query", "test_llm"),
     ("/api/v1/knowledge/retrieve", "test_llm"),
+    ("/api/v1/knowledge/import-codebase-migration", "create_knowledge"),
     ("/api/v1/knowledge/create-", "create_knowledge"),
     ("/api/v1/knowledge/preview-", "create_knowledge"),
     ("/api/v1/knowledge/test-database", "create_knowledge"),
@@ -45,6 +46,10 @@ def resolve_required_feature(path: str) -> Optional[str]:
         return None
     if path.rstrip("/") == "/api/v1/knowledge":
         return None
+    if "/codebase/reanalyze" in path:
+        return "create_knowledge"
+    if path.endswith("/migration-export") or "/migration-export" in path:
+        return "fabrics"
 
     for prefix, feature in _PATH_FEATURE_RULES:
         if path.startswith(prefix):

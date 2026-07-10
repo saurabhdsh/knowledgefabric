@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import * as d3 from 'd3';
-import { apiRequest } from '../utils/api';
+import { apiRequest, authenticatedFetch, getApiUrl } from '../utils/api';
 import { renderLlmGraphInsight } from '../utils/renderLlmGraphInsight';
 import FabricPlatformPanel from '../components/FabricPlatformPanel';
 import { getWeaveDomain } from '../utils/weaveDomain';
@@ -51,6 +51,14 @@ interface FabricDetails {
   connector_profile?: string | null;
   ontology_project_id?: string | null;
   approved_ontology_version_id?: string | null;
+  discovery_summary?: string;
+  migration_blueprint?: {
+    narrative?: string;
+    waves?: Array<{ name?: string; modules?: string[]; intent?: string }>;
+    risks?: Array<{ severity?: string; message?: string; type?: string }>;
+    bounded_contexts?: Array<{ name?: string; description?: string }>;
+  };
+  codebase?: Record<string, unknown>;
   guardrails?: {
     data_classification?: string;
     compliance_tags?: string[];
@@ -79,7 +87,7 @@ interface LLMInsight {
   summary: string;
 }
 
-type GraphViewType = 'canonical' | 'exploratory';
+type GraphViewType = 'canonical' | 'exploratory' | 'codebase';
 
 function normalizeGraphPayload(data: Record<string, unknown>): {
   nodes: GraphNode[];
@@ -94,14 +102,14 @@ function normalizeGraphPayload(data: Record<string, unknown>): {
   const nodes: GraphNode[] = rawNodes.map((n) => ({
     id: String(n.id),
     label: String(n.label || n.normalized_name || n.id),
-    type: (n.type === 'fabric' ? 'fabric' : 'entity') as GraphNodeType,
+    type: (n.type === 'fabric' || n.type === 'workspace' ? 'fabric' : 'entity') as GraphNodeType,
     weight: Number(n.weight ?? 1),
   }));
 
   const edges: GraphEdge[] = rawEdges.map((e) => ({
     source: String(e.source),
     target: String(e.target),
-    relation: String(e.relation || e.label || e.relationship_type || 'relates_to'),
+    relation: String(e.relation || e.label || e.type || e.relationship_type || 'relates_to'),
     weight: Number(e.weight ?? 1),
   }));
 
@@ -692,6 +700,84 @@ const FabricKnowledgeGraph: React.FC = () => {
               <p className="text-2xl font-semibold text-gray-900">{fabricDetails?.source_type || '-'}</p>
             </div>
           </div>
+
+          {fabricDetails?.source_type === 'codebase' && fabricId && (
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.1)] px-4 py-3">
+              <div>
+                <p className="text-sm font-semibold text-[#e8edf4]">Migration package</p>
+                <p className="text-xs text-[#8b9cb0]">
+                  Download the full migration JSON (inventory, graph, blueprint, risks).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const response = await authenticatedFetch(
+                      getApiUrl(`api/v1/knowledge/${fabricId}/migration-export`)
+                    );
+                    if (!response.ok) {
+                      throw new Error(`Download failed (${response.status})`);
+                    }
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `fabric_${fabricId}_migration.json`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                  } catch (err) {
+                    alert(err instanceof Error ? err.message : 'Download failed');
+                  }
+                }}
+                className="rounded-lg border border-[rgba(62,207,155,0.45)] bg-[rgba(62,207,155,0.2)] px-4 py-2 text-sm font-medium text-[#9af0ca] hover:bg-[rgba(62,207,155,0.3)]"
+              >
+                Download migration JSON
+              </button>
+            </div>
+          )}
+
+          {fabricDetails?.source_type === 'codebase' && (
+            <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <div className="rounded-xl border border-[rgba(94,200,242,0.3)] bg-[rgba(94,200,242,0.08)] p-4">
+                <p className="text-sm font-semibold text-[#e8edf4] mb-2">Discovery summary</p>
+                <p className="text-sm text-[#cbd5e1] whitespace-pre-wrap">
+                  {fabricDetails.discovery_summary || 'No discovery summary yet.'}
+                </p>
+              </div>
+              <div className="rounded-xl border border-[rgba(62,207,155,0.3)] bg-[rgba(62,207,155,0.08)] p-4">
+                <p className="text-sm font-semibold text-[#e8edf4] mb-2">Migration blueprint</p>
+                <p className="text-sm text-[#cbd5e1] mb-3">
+                  {fabricDetails.migration_blueprint?.narrative || 'No blueprint narrative yet.'}
+                </p>
+                <div className="space-y-2">
+                  {(fabricDetails.migration_blueprint?.waves || []).slice(0, 4).map((wave, idx) => (
+                    <div key={idx} className="rounded-lg border border-[rgba(148,163,184,0.15)] bg-white/[0.03] px-3 py-2">
+                      <p className="text-xs font-semibold text-[#d9f4ff]">{wave.name || `Wave ${idx + 1}`}</p>
+                      <p className="text-[11px] text-[#8b9cb0]">{wave.intent}</p>
+                      <p className="text-[11px] text-[#cbd5e1] mt-1">
+                        {(wave.modules || []).slice(0, 8).join(', ') || '—'}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                {(fabricDetails.migration_blueprint?.risks || []).length > 0 && (
+                  <div className="mt-3">
+                    <p className="text-xs uppercase tracking-[0.14em] text-[#8b9cb0] mb-1">Top risks</p>
+                    <ul className="space-y-1">
+                      {(fabricDetails.migration_blueprint?.risks || []).slice(0, 5).map((risk, idx) => (
+                        <li key={idx} className="text-xs text-[#f08984]">
+                          [{risk.severity || 'risk'}] {risk.message || risk.type}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {fabricDetails?.guardrails && (
             <div className="mb-4 rounded-xl border border-[rgba(94,200,242,0.3)] bg-[rgba(94,200,242,0.08)] p-4">

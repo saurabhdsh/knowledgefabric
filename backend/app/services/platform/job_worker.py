@@ -52,6 +52,7 @@ class JobWorker:
             "ontology_discovery": self._handle_ontology_discovery,
             "graph_build": self._handle_graph_build,
             "graph_export": self._handle_graph_export,
+            "codebase_analysis": self._handle_codebase_analysis,
         }
         handler = handlers.get(job["job_type"])
         if not handler:
@@ -162,6 +163,93 @@ class JobWorker:
             if "stardog" in targets:
                 exports["stardog"] = rdf_adapter.push_to_stardog(fabric_id, version_id)
         job_service.update(job["id"], status="ready", progress_percent=100.0, result=exports)
+
+    def _handle_codebase_analysis(self, job: Dict[str, Any]) -> None:
+        from app.api.v1.endpoints import knowledge as knowledge_endpoints
+        from app.services.codebase.pipeline import run_codebase_pipeline
+
+        fabric_id = job.get("fabric_id")
+        config = dict(job.get("config") or {})
+        progress_id = config.get("progress_id")
+        config["job_id"] = job["id"]
+
+        def _scrub_secrets() -> None:
+            try:
+                with __import__("app.db.session", fromlist=["db_session"]).db_session() as session:
+                    from app.db.models import FabricJobRecord
+
+                    row = session.get(FabricJobRecord, job["id"])
+                    if not row:
+                        return
+                    cfg = dict(row.config or {})
+                    for key in ("pat", "ssh_private_key", "password", "token"):
+                        cfg.pop(key, None)
+                    row.config = cfg
+            except Exception:
+                logger.debug("Failed scrubbing codebase job secrets", exc_info=True)
+
+        def on_progress(pct: float, message: str, extra: Optional[Dict[str, Any]] = None) -> None:
+            job_service.update(job["id"], progress_percent=pct)
+            if not progress_id:
+                return
+            stage = (extra or {}).get("stage") or "running"
+            knowledge_endpoints.progress_store[progress_id] = {
+                "status": "completed" if pct >= 100 else "processing",
+                "progress": pct,
+                "message": message,
+                "stage": stage,
+                "fabric_id": fabric_id,
+                "job_id": job["id"],
+                **(extra or {}),
+            }
+
+        if not fabric_id:
+            job_service.update(job["id"], status="failed", error_payload={"message": "Missing fabric_id"})
+            _scrub_secrets()
+            return
+
+        try:
+            on_progress(5.0, "Starting codebase analysis", {"stage": "start"})
+            result = run_codebase_pipeline(fabric_id, config, progress=on_progress)
+            job_service.update(
+                job["id"],
+                status="ready",
+                progress_percent=100.0,
+                result=result,
+            )
+            if progress_id:
+                knowledge_endpoints.progress_store[progress_id] = {
+                    "status": "completed",
+                    "progress": 100,
+                    "message": "Codebase fabric ready",
+                    "stage": "done",
+                    "fabric_id": fabric_id,
+                    "job_id": job["id"],
+                    "result": result,
+                }
+        except Exception as exc:
+            logger.exception("Codebase analysis failed for %s", fabric_id)
+            fabric = fabric_store.get(fabric_id)
+            if fabric:
+                fabric["status"] = "failed"
+                fabric["error"] = str(exc)
+                fabric_store.save(fabric)
+            job_service.update(
+                job["id"],
+                status="failed",
+                error_payload={"message": str(exc)},
+            )
+            if progress_id:
+                knowledge_endpoints.progress_store[progress_id] = {
+                    "status": "error",
+                    "progress": 0,
+                    "message": str(exc),
+                    "stage": "error",
+                    "fabric_id": fabric_id,
+                    "job_id": job["id"],
+                }
+        finally:
+            _scrub_secrets()
 
 
 job_worker = JobWorker()

@@ -1,0 +1,4 @@
+# Tiny sample app for Weave Codebase Fabric testing.
+# Zip this folder (or upload the folder) via Create Knowledge → Codebase / Workspace.
+
+flask>=2.0
