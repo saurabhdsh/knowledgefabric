@@ -37,15 +37,23 @@ const CodebaseFabricProgress: React.FC<CodebaseFabricProgressProps> = ({
 
   useEffect(() => {
     let cancelled = false;
+    let consecutiveErrors = 0;
     const tick = async () => {
       try {
         const res = await apiRequest(`api/v1/knowledge/progress/${progressId}`);
-        const payload = await res.json();
+        const payload = await res.json().catch(() => ({}));
         if (!res.ok || payload?.success === false) {
-          throw new Error(payload?.detail || payload?.message || 'Progress unavailable');
+          consecutiveErrors += 1;
+          // Tolerate brief reload gaps (uvicorn --reload) before surfacing an error.
+          if (consecutiveErrors >= 8) {
+            throw new Error(payload?.detail || payload?.message || 'Progress unavailable');
+          }
+          return;
         }
+        consecutiveErrors = 0;
         const data = payload.data || payload;
         if (cancelled) return;
+        setError(null);
         setProgress(Number(data.progress || 0));
         setMessage(data.message || 'Processing…');
         setStage(data.stage || 'stage');

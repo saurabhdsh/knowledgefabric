@@ -31,4 +31,12 @@ if ! command -v uvicorn >/dev/null 2>&1; then
   exit 1
 fi
 
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload \
+  --reload-exclude 'uploads/*' \
+  --reload-exclude 'uploads/**' \
+  --reload-exclude 'data/*' \
+  --reload-exclude 'data/**' \
+  --reload-exclude 'chroma_db/*' \
+  --reload-exclude 'chroma_db/**' \
+  --reload-exclude '*.pyc' \
+  --reload-exclude '__pycache__/*'

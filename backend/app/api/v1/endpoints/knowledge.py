@@ -150,7 +150,7 @@ def _enqueue_post_fabric_jobs(fabric_id: str, fabric_data: Dict[str, Any]) -> No
 # Legacy module-level cache (unused — prefer user_fabrics() per request).
 
 # Store progress for real-time tracking
-progress_store: Dict[str, Dict[str, Any]] = {}
+from app.services.platform.progress_store import progress_store
 
 class RenameFabricRequest(BaseModel):
     name: str
@@ -2067,16 +2067,61 @@ async def create_composite_knowledge_fabric(request: CreateCompositeFabricReques
 async def get_progress(progress_id: str):
     """Get real-time progress of knowledge fabric creation"""
     try:
-        if progress_id not in progress_store:
-            raise HTTPException(status_code=404, detail="Progress not found")
-        
-        progress_data = progress_store[progress_id]
-        
+        progress_data = progress_store.get(progress_id)
+        if not progress_data:
+            # Recover from uvicorn --reload: job may still be running in DB.
+            fabric_id = None
+            if progress_id.startswith("progress_codebase_"):
+                # Best-effort: find fabric that references this progress_id
+                for fabric in fabric_store.list_all_dicts() or []:
+                    if fabric.get("progress_id") == progress_id:
+                        fabric_id = fabric.get("id")
+                        break
+            if fabric_id:
+                jobs = job_service.list_for_fabric(fabric_id, limit=5)
+                job = next((j for j in jobs if j.get("job_type") == "codebase_analysis"), None)
+                if job:
+                    status = job.get("status")
+                    pct = float(job.get("progress_percent") or 0)
+                    if status == "ready":
+                        progress_data = {
+                            "status": "completed",
+                            "progress": 100,
+                            "message": "Codebase fabric ready",
+                            "stage": "done",
+                            "fabric_id": fabric_id,
+                            "job_id": job.get("id"),
+                        }
+                    elif status == "failed":
+                        err = (job.get("error_payload") or {}).get("message") or "Analysis failed"
+                        progress_data = {
+                            "status": "error",
+                            "progress": pct,
+                            "message": err,
+                            "stage": "error",
+                            "fabric_id": fabric_id,
+                            "job_id": job.get("id"),
+                        }
+                    else:
+                        progress_data = {
+                            "status": "processing",
+                            "progress": max(pct, 5),
+                            "message": f"Analysis {status}",
+                            "stage": "stage",
+                            "fabric_id": fabric_id,
+                            "job_id": job.get("id"),
+                        }
+                    progress_store[progress_id] = progress_data
+            if not progress_data:
+                raise HTTPException(status_code=404, detail="Progress not found")
+
         return APIResponse(
             success=True,
             message="Progress retrieved successfully",
-            data=progress_data
+            data=progress_data,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

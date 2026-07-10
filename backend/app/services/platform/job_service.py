@@ -46,6 +46,26 @@ class JobService:
     def claim_next(self) -> Optional[Dict[str, Any]]:
         session = get_session_factory()()
         try:
+            # Reclaim jobs stuck in "running" after uvicorn --reload killed the worker mid-job.
+            stale = (
+                session.query(FabricJobRecord)
+                .filter(
+                    FabricJobRecord.status == "running",
+                    FabricJobRecord.job_type == "codebase_analysis",
+                )
+                .order_by(FabricJobRecord.created_at.asc())
+                .all()
+            )
+            now = datetime.utcnow()
+            for job in stale:
+                started = job.started_at or job.created_at
+                if started and (now - started).total_seconds() > 45:
+                    logger.warning("Re-queueing stale running job %s", job.id)
+                    job.status = "queued"
+                    job.started_at = None
+            if stale:
+                session.commit()
+
             job = (
                 session.query(FabricJobRecord)
                 .filter(FabricJobRecord.status == "queued")
