@@ -82,6 +82,10 @@ def _ensure_schema_columns(engine) -> None:
     additions = {
         "fabrics": [("owner_id", "VARCHAR(64)")],
         "ontology_projects": [("owner_id", "VARCHAR(64)")],
+        "users": [
+            ("role", "VARCHAR(32) DEFAULT 'user'"),
+            ("allowed_features", "TEXT"),
+        ],
     }
     with engine.connect() as conn:
         for table, columns in additions.items():

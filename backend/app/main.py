@@ -9,6 +9,7 @@ from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.security import InboundAPIKeyMiddleware
 from app.core.jwt_auth import JWTAuthMiddleware
+from app.core.feature_gate import FeatureGateMiddleware
 from app.db.session import init_db
 from app.services.auth_service import auth_service
 from app.services.legacy_data_migration import migrate_legacy_data_to_primary_admin
@@ -51,6 +52,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Innermost → outermost: FeatureGate sees JWT-populated request.state
+app.add_middleware(FeatureGateMiddleware)
 app.add_middleware(InboundAPIKeyMiddleware)
 app.add_middleware(JWTAuthMiddleware)
 app.include_router(api_router, prefix=settings.API_V1_STR)

@@ -43,7 +43,9 @@ const UserAccountBadge: React.FC<UserAccountBadgeProps> = ({ compact = false }) 
       </div>
       <div className="leading-tight min-w-0 hidden sm:block">
         <div className="text-xs text-[#e8edf4] font-medium truncate max-w-[140px]">{displayName}</div>
-        <div className="text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">Signed in</div>
+        <div className="text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">
+          {user?.role === 'admin' ? 'Admin' : 'User'}
+        </div>
       </div>
       <button
         type="button"

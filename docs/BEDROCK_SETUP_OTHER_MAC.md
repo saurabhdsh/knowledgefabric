@@ -9,9 +9,11 @@ Use this guide to run **Weave (Knowledge Fabric)** on a **new Mac** with **AWS B
 | Feature | Works? |
 |---------|--------|
 | Login (JWT) | Yes |
-| Create fabrics / upload PDFs | Yes |
-| Test LLM with **Bedrock** | Yes |
-| Test LLM with **OpenAI** | Yes (if API key set) |
+| Admin / normal users + feature checkboxes | Yes |
+| User Management (admin creates/deletes users) | Yes |
+| Create fabrics / upload PDFs | Yes (if feature allowed) |
+| Test LLM with **Bedrock** | Yes (if `test_llm` allowed) |
+| Test LLM with **OpenAI** | Yes (if API key set + feature allowed) |
 | LLM Insight / graph insights | Yes |
 | EC2 deploy | Optional (see `docs/EC2_DEPLOYMENT.md`) |
 
@@ -241,7 +243,38 @@ cd ~/Knowledge-Fabric
 ```
 
 **Browser:** http://localhost:3000  
-**Login:** `Saurabh` / `admin123`
+**Login:** `Saurabh` / `admin123` (seeded **admin** — full access, including Bedrock Test LLM)
+
+> After `git pull` of the roles/features update, restart backend once so DB columns `role` / `allowed_features` are added and Saurabh is ensured as admin. Existing Bedrock `.env` values do **not** need to change.
+
+---
+
+## Part 4b — Users & features (works with Bedrock)
+
+Roles are independent of the LLM provider. Bedrock stays the default LLM; access is controlled per user.
+
+| Role | Access |
+|------|--------|
+| **Admin** (Saurabh) | All nav + **User Management** + Bedrock/OpenAI |
+| **Normal user** | Only features the admin checks when creating/editing the user |
+
+### Create a normal user (admin UI)
+
+1. Sign in as **Saurabh**
+2. Open **User Management**
+3. Create user → role **Normal user**
+4. Check features they can use (e.g. `Available Fabrics`, `Test with LLM` for Bedrock queries)
+5. Save — that user logs in with the password you set
+
+### Delete a user
+
+In **User Management** → **Delete** (confirm). Uses `POST /api/v1/users/{id}/delete`. You cannot delete yourself or the last admin.
+
+### Feature needed for Bedrock Test LLM
+
+Grant **`test_llm`** (nav: Test with LLM). Without it, the user will not see Test LLM and Bedrock query APIs return 403.
+
+Default new normal users get **`dashboard`** + **`fabrics`** only — add **`test_llm`** (and others) via checkboxes as needed.
 
 ---
 
@@ -255,14 +288,21 @@ curl http://localhost:8000/api/v1/knowledge/api-keys/providers
 
 Expect **openai** and **bedrock** in `providers`, default `bedrock`.
 
-### 5.2 Test LLM in UI
+### 5.2 Test LLM in UI (as admin)
 
-1. Open **Test LLM**
+1. Open **Test LLM** (Saurabh always has this)
 2. Select a fabric
 3. Provider: **AWS Bedrock**
 4. Run a query — response should be **formatted** (headings, bullets, bold), not raw `##` or `**`
 
-### 5.3 Sample claims fabric PDF
+### 5.3 Test as a normal user (optional)
+
+1. Create a user with **Test with LLM** checked
+2. Log out → log in as that user
+3. Confirm only allowed nav items appear
+4. Run Test LLM with **AWS Bedrock** — same model as admin (credentials are server-side)
+
+### 5.4 Sample claims fabric PDF
 
 A sample document for your first fabric:
 
@@ -370,6 +410,10 @@ The backend auto-maps it to `us.anthropic.claude-sonnet-4-5-20250929-v1:0` for `
 | Raw `##` / `**` in Test LLM | `git pull` for markdown renderer |
 | Grey background on responses | `git pull` — dark theme fix in Test LLM |
 | Docker Bedrock fails | Pass `AWS_ACCESS_KEY_ID`/`SECRET` or mount `~/.aws` |
+| No User Management nav | Sign in as **Saurabh** (admin); normal users never get this feature |
+| Normal user cannot open Test LLM | Edit user → check **Test with LLM** (`test_llm`) |
+| Delete user still listed | `git pull` + restart backend; UI uses `POST .../users/{id}/delete` |
+| After pull, login works but old session odd | Log out and sign in again (JWT now includes `role` / features) |
 
 ---
 
@@ -378,13 +422,15 @@ The backend auto-maps it to `us.anthropic.claude-sonnet-4-5-20250929-v1:0` for `
 - [ ] IAM policy `WeaveBedrockAccess` attached to user
 - [ ] `aws configure` done on Mac
 - [ ] Bedrock CLI test works with `us.anthropic...` model ID
-- [ ] Repo cloned, `git pull` latest
-- [ ] `PYTHON_BIN=python3.11 ./setup_without_docker.sh` completed
-- [ ] `backend/.env` created with Bedrock settings
+- [ ] Repo cloned, `git pull` latest (includes admin/roles + Bedrock)
+- [ ] `PYTHON_BIN=python3.11 ./setup_without_docker.sh` completed (first time)
+- [ ] `backend/.env` created with Bedrock settings (unchanged for roles)
+- [ ] Backend + frontend restarted after pull
 - [ ] `./start_backend.sh` shows **2 providers**, default **bedrock**
-- [ ] `./start_frontend.sh` running
-- [ ] Login works at http://localhost:3000
-- [ ] Test LLM query succeeds with Bedrock
+- [ ] Login as **Saurabh** / `admin123` — badge shows **Admin**
+- [ ] **User Management** visible; can create/delete users with feature checkboxes
+- [ ] Test LLM query succeeds with Bedrock (admin)
+- [ ] Optional: normal user with `test_llm` can also use Bedrock
 
 ---
 

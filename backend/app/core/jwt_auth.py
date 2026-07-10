@@ -77,6 +77,8 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         request.state.user_id = user.id
         request.state.username = user.username
         request.state.display_name = user.display_name
+        request.state.role = user.role or "user"
+        request.state.allowed_features = auth_service.effective_features(user)
 
         user_token = current_user_id.set(user.id)
         username_token = current_username.set(user.username)

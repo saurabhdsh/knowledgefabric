@@ -1,11 +1,14 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../utils/api';
 import {
+  WeaveFeatureKey,
   WeaveUser,
   clearAuthSession,
   getStoredToken,
   getStoredUser,
+  isAdminUser,
   storeAuthSession,
+  userCanAccess,
 } from '../utils/authStorage';
 
 interface AuthContextValue {
@@ -13,6 +16,8 @@ interface AuthContextValue {
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  isAdmin: boolean;
+  can: (feature: WeaveFeatureKey) => boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
 }
@@ -64,6 +69,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           logout();
         } else {
           const profile = (payload.data ?? payload) as WeaveUser;
+          storeAuthSession(storedToken, profile);
           setUser(profile);
           setToken(storedToken);
         }
@@ -76,16 +82,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     bootstrap();
   }, [logout]);
 
+  const can = useCallback(
+    (feature: WeaveFeatureKey) => userCanAccess(user, feature),
+    [user],
+  );
+
   const value = useMemo(
     () => ({
       user,
       token,
       isAuthenticated: Boolean(token && user),
       isLoading,
+      isAdmin: isAdminUser(user),
+      can,
       login,
       logout,
     }),
-    [user, token, isLoading, login, logout],
+    [user, token, isLoading, can, login, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

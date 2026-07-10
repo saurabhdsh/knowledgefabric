@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   HomeIcon,
@@ -12,21 +12,35 @@ import {
   CircleStackIcon,
   BoltIcon,
   CommandLineIcon,
+  UsersIcon,
 } from '@heroicons/react/24/outline';
 import { useState } from 'react';
 import WeaveLogo from './WeaveLogo';
 import UserAccountBadge from './UserAccountBadge';
+import { useAuth } from '../contexts/AuthContext';
+import { WeaveFeatureKey } from '../utils/authStorage';
 
 interface LayoutProps {
   children: React.ReactNode;
 }
 
-const navigation = [
+const navigation: Array<{
+  name: string;
+  href: string;
+  icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
+  sublabel: string;
+  feature: WeaveFeatureKey;
+  color: string;
+  bgColor: string;
+  textColor: string;
+  iconColor: string;
+}> = [
   { 
     name: 'Dashboard', 
     href: '/', 
     icon: HomeIcon,
     sublabel: 'Overview',
+    feature: 'dashboard',
     color: 'from-blue-500 to-blue-600',
     bgColor: 'bg-blue-50',
     textColor: 'text-blue-700',
@@ -37,6 +51,7 @@ const navigation = [
     href: '/knowledge', 
     icon: BookOpenIcon,
     sublabel: 'Fabric Builder',
+    feature: 'create_knowledge',
     color: 'from-purple-500 to-purple-600',
     bgColor: 'bg-purple-50',
     textColor: 'text-purple-700',
@@ -47,6 +62,7 @@ const navigation = [
     href: '/train-ml', 
     icon: CpuChipIcon,
     sublabel: 'Model Training',
+    feature: 'train_ml',
     color: 'from-red-500 to-red-600',
     bgColor: 'bg-red-50',
     textColor: 'text-red-700',
@@ -57,6 +73,7 @@ const navigation = [
     href: '/fabrics', 
     icon: SparklesIcon,
     sublabel: 'Fabric Catalog',
+    feature: 'fabrics',
     color: 'from-indigo-500 to-indigo-600',
     bgColor: 'bg-indigo-50',
     textColor: 'text-indigo-700',
@@ -67,6 +84,7 @@ const navigation = [
     href: '/test-llm', 
     icon: ChatBubbleLeftRightIcon,
     sublabel: 'Agent Testing',
+    feature: 'test_llm',
     color: 'from-emerald-500 to-emerald-600',
     bgColor: 'bg-emerald-50',
     textColor: 'text-emerald-700',
@@ -77,6 +95,7 @@ const navigation = [
     href: '/context', 
     icon: MagnifyingGlassIcon,
     sublabel: 'Semantic Insights',
+    feature: 'context',
     color: 'from-orange-500 to-orange-600',
     bgColor: 'bg-orange-50',
     textColor: 'text-orange-700',
@@ -87,6 +106,7 @@ const navigation = [
     href: '/ontology', 
     icon: CircleStackIcon,
     sublabel: 'Schema Explorer',
+    feature: 'ontology',
     color: 'from-teal-500 to-teal-600',
     bgColor: 'bg-teal-50',
     textColor: 'text-teal-700',
@@ -97,6 +117,7 @@ const navigation = [
     href: '/ontology/enrichment',
     icon: BoltIcon,
     sublabel: 'AI Governance Queue',
+    feature: 'ontology_enrichment',
     color: 'from-cyan-500 to-cyan-600',
     bgColor: 'bg-cyan-50',
     textColor: 'text-cyan-700',
@@ -107,10 +128,22 @@ const navigation = [
     href: '/ontology/agent-utilities',
     icon: CommandLineIcon,
     sublabel: 'Agent ToolKit',
+    feature: 'agent_utilities',
     color: 'from-violet-500 to-violet-600',
     bgColor: 'bg-violet-50',
     textColor: 'text-violet-700',
     iconColor: 'text-violet-500'
+  },
+  {
+    name: 'User Management',
+    href: '/users',
+    icon: UsersIcon,
+    sublabel: 'Platform Users',
+    feature: 'user_management',
+    color: 'from-slate-500 to-slate-600',
+    bgColor: 'bg-slate-50',
+    textColor: 'text-slate-700',
+    iconColor: 'text-slate-500'
   },
 ];
 
@@ -122,11 +155,17 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const [pinnedMenuHref, setPinnedMenuHref] = useState<string>('/');
   const location = useLocation();
   const navigate = useNavigate();
+  const { can } = useAuth();
+
+  const visibleNavigation = useMemo(
+    () => navigation.filter((item) => can(item.feature)),
+    [can],
+  );
 
   const isActive = (href: string) =>
     location.pathname === href || (href !== '/' && location.pathname.startsWith(href));
 
-  const searchItems = navigation.map((item) => ({
+  const searchItems = visibleNavigation.map((item) => ({
     label: item.name,
     description: item.sublabel,
     href: item.href,
@@ -146,13 +185,13 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   };
 
   useEffect(() => {
-    const matched = navigation.find((item) => isActive(item.href));
+    const matched = visibleNavigation.find((item) => isActive(item.href));
     if (matched) {
       setPinnedMenuHref(matched.href);
     }
     // Keep pinned menu aligned with current route after page refresh/direct route entry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [visibleNavigation]);
 
   return (
     <div className="min-h-screen bg-[#040508] text-[#e8edf4]">
@@ -180,7 +219,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             </button>
           </div>
           <nav className="flex-1 overflow-y-auto px-3 py-5 space-y-1">
-            {navigation.map((item) => {
+            {visibleNavigation.map((item) => {
               const active = isActive(item.href);
               return (
                 <Link
@@ -243,28 +282,32 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               </div>
             </div>
             <div className="hidden xl:flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => navigate('/knowledge')}
-                className="inline-flex items-center gap-1 rounded-full border border-[rgba(94,200,242,0.32)] bg-[rgba(94,200,242,0.12)] px-2.5 py-1 text-[11px] font-medium text-[#d9f4ff] hover:bg-[rgba(94,200,242,0.2)]"
-              >
-                <BookOpenIcon className="h-3.5 w-3.5" />
-                New Fabric
-              </button>
-              <button
-                type="button"
-                onClick={() => navigate('/fabrics')}
-                className="inline-flex items-center gap-1 rounded-full border border-[rgba(148,163,184,0.2)] bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-[#b7c7da] hover:bg-white/[0.08]"
-              >
-                <SparklesIcon className="h-3.5 w-3.5" />
-                Catalog
-              </button>
+              {can('create_knowledge') && (
+                <button
+                  type="button"
+                  onClick={() => navigate('/knowledge')}
+                  className="inline-flex items-center gap-1 rounded-full border border-[rgba(94,200,242,0.32)] bg-[rgba(94,200,242,0.12)] px-2.5 py-1 text-[11px] font-medium text-[#d9f4ff] hover:bg-[rgba(94,200,242,0.2)]"
+                >
+                  <BookOpenIcon className="h-3.5 w-3.5" />
+                  New Fabric
+                </button>
+              )}
+              {can('fabrics') && (
+                <button
+                  type="button"
+                  onClick={() => navigate('/fabrics')}
+                  className="inline-flex items-center gap-1 rounded-full border border-[rgba(148,163,184,0.2)] bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-[#b7c7da] hover:bg-white/[0.08]"
+                >
+                  <SparklesIcon className="h-3.5 w-3.5" />
+                  Catalog
+                </button>
+              )}
             </div>
           </div>
 
           <nav className="overflow-hidden justify-self-center">
             <div className="flex items-center justify-center gap-1">
-              {navigation.map((item) => {
+              {visibleNavigation.map((item) => {
                 const active = isActive(item.href);
                 const showLabel = hoveredMenuHref === item.href || pinnedMenuHref === item.href;
                 return (
@@ -297,22 +340,26 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           <div className="w-full justify-self-end">
             <div className="flex items-center justify-end gap-2">
               <div className="hidden xl:flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => navigate('/test-llm')}
-                  className="inline-flex items-center gap-1 rounded-full border border-[rgba(62,207,155,0.28)] bg-[rgba(62,207,155,0.1)] px-2.5 py-1 text-[11px] font-medium text-[#c9f9e6] hover:bg-[rgba(62,207,155,0.16)]"
-                >
-                  <ChatBubbleLeftRightIcon className="h-3.5 w-3.5" />
-                  Test LLM
-                </button>
-                <button
-                  type="button"
-                  onClick={() => navigate('/context')}
-                  className="inline-flex items-center gap-1 rounded-full border border-[rgba(251,146,60,0.28)] bg-[rgba(251,146,60,0.1)] px-2.5 py-1 text-[11px] font-medium text-[#ffe2c2] hover:bg-[rgba(251,146,60,0.16)]"
-                >
-                  <MagnifyingGlassIcon className="h-3.5 w-3.5" />
-                  Context
-                </button>
+                {can('test_llm') && (
+                  <button
+                    type="button"
+                    onClick={() => navigate('/test-llm')}
+                    className="inline-flex items-center gap-1 rounded-full border border-[rgba(62,207,155,0.28)] bg-[rgba(62,207,155,0.1)] px-2.5 py-1 text-[11px] font-medium text-[#c9f9e6] hover:bg-[rgba(62,207,155,0.16)]"
+                  >
+                    <ChatBubbleLeftRightIcon className="h-3.5 w-3.5" />
+                    Test LLM
+                  </button>
+                )}
+                {can('context') && (
+                  <button
+                    type="button"
+                    onClick={() => navigate('/context')}
+                    className="inline-flex items-center gap-1 rounded-full border border-[rgba(251,146,60,0.28)] bg-[rgba(251,146,60,0.1)] px-2.5 py-1 text-[11px] font-medium text-[#ffe2c2] hover:bg-[rgba(251,146,60,0.16)]"
+                  >
+                    <MagnifyingGlassIcon className="h-3.5 w-3.5" />
+                    Context
+                  </button>
+                )}
               </div>
               <div className="w-full max-w-xs relative hidden 2xl:block">
                 <div className="flex items-center rounded-lg border border-[rgba(148,163,184,0.16)] bg-[#0d1422]/70 px-3 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] hover:border-[rgba(94,200,242,0.32)] focus-within:border-[rgba(94,200,242,0.4)]">
