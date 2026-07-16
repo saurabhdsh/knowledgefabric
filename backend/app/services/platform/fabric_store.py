@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.user_context import get_current_user_id
 from app.db.models import FabricRecord
 from app.db.session import db_session, get_session_factory, init_db
+from app.utils.json_sanitize import sanitize_for_json
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ class FabricStore:
             "approved_ontology_version_id": rec.approved_ontology_version_id,
             "ontology_waiver": rec.ontology_waiver,
         })
-        return data
+        return sanitize_for_json(data)
 
     def _upsert_record(self, session, fabric: Dict[str, Any]) -> FabricRecord:
         fid = fabric["id"]
@@ -119,7 +120,7 @@ class FabricStore:
         if os.path.exists(FABRICS_JSON):
             try:
                 with open(FABRICS_JSON, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    return sanitize_for_json(json.load(f))
             except Exception:
                 pass
         return []
@@ -143,6 +144,7 @@ class FabricStore:
         return cached
 
     def save(self, fabric: Dict[str, Any]) -> Dict[str, Any]:
+        fabric = sanitize_for_json(fabric)
         with db_session() as session:
             self._upsert_record(session, fabric)
         self._write_json_backup()

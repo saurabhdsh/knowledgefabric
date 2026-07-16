@@ -24,6 +24,7 @@ from app.services.retrieval.retrieval_orchestrator import retrieval_orchestrator
 from app.services.graph.graph_store import graph_store
 from app.core.config import settings
 from app.services.llm.llm_router import llm_router
+from app.utils.json_sanitize import sanitize_for_json
 import time
 import json
 import pandas as pd
@@ -820,13 +821,7 @@ def _parse_csv_files_to_rows(file_tuples: List[Tuple[str, bytes]]) -> Tuple[List
         for r in records:
             row: Dict[str, Any] = {}
             for k, v in r.items():
-                key = str(k)
-                if hasattr(v, "item") and callable(getattr(v, "item", None)):
-                    try:
-                        v = v.item()
-                    except Exception:
-                        pass
-                row[key] = v
+                row[str(k)] = sanitize_for_json(v)
             row["__source_csv"] = name
             all_rows.append(row)
         filenames.append(name)
@@ -912,12 +907,14 @@ def _finalize_database_fabric_from_fetch(
         fabric_data["guardrails"] = guardrails
 
     if rows:
-        sample = rows[:10]
+        sample = sanitize_for_json(rows[:10])
         columns = list(rows[0].keys()) if rows else []
         fabric_data.setdefault("connection_info", {}).update({
             "columns": columns,
             "sample_rows": sample,
         })
+
+    fabric_data = sanitize_for_json(fabric_data)
 
     if train_model and documents:
         try:
@@ -1081,7 +1078,7 @@ def _build_graph_analytics(graph_data: Dict[str, Any]) -> Dict[str, Any]:
         "top_relationships": top_relationships,
         "relationship_breakdown": relation_counts,
         "entity_count": len(entity_nodes),
-        "graph_density": round((len(edges) / max(len(nodes), 1)), 2),
+        "graph_density": round((len(edges) / max(len(nodes), 1)), 2) if nodes else 0.0,
         "node_count": len(nodes),
         "edge_count": len(edges),
         "graph_type": graph_type or None,
