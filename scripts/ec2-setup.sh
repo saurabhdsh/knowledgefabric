@@ -74,6 +74,33 @@ if ! docker compose version >/dev/null 2>&1; then
   fi
 fi
 
+install_buildx() {
+  local minimum="0.17.0"
+  local current=""
+  current="$(docker buildx version 2>/dev/null | awk '{print $2}' | sed 's/^v//' || true)"
+  if [[ -n "${current}" ]] && [[ "$(printf '%s\n%s\n' "${minimum}" "${current}" | sort -V | head -n1)" == "${minimum}" ]]; then
+    log "Docker Buildx ${current} is compatible"
+    return
+  fi
+
+  local version="v0.19.3"
+  local arch=""
+  case "$(uname -m)" in
+    x86_64) arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) log "Unsupported architecture for Buildx: $(uname -m)"; exit 1 ;;
+  esac
+  log "Installing Docker Buildx ${version}..."
+  mkdir -p /usr/local/lib/docker/cli-plugins
+  curl -fsSL \
+    "https://github.com/docker/buildx/releases/download/${version}/buildx-${version}.linux-${arch}" \
+    -o /usr/local/lib/docker/cli-plugins/docker-buildx
+  chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
+  docker buildx version
+}
+
+install_buildx
+
 PUBLIC_URL="${PUBLIC_URL:-$(resolve_public_url)}"
 log "Public URL: ${PUBLIC_URL}"
 
