@@ -3,6 +3,8 @@ Inbound API-key middleware.
 
 Behavior:
 - All ``/api/v1/*`` routes require an ``X-API-Key`` header from EXTERNAL callers.
+- Browser/UI requests with a JWT already validated by ``JWTAuthMiddleware`` are
+  exempt; users must not need both a JWT and an integration API key.
 - Local traffic (the React dev server on ``localhost:3000`` calling the backend
   on ``localhost:8000``) is automatically exempt, so the existing dev workflow
   keeps working unchanged.
@@ -143,6 +145,12 @@ class InboundAPIKeyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         if _is_local_origin(request):
+            return await call_next(request)
+
+        # JWTAuthMiddleware runs before this middleware and places the validated
+        # UI user on request.state. A browser session uses JWT authentication;
+        # X-API-Key is reserved for external/partner integrations.
+        if getattr(request.state, "user_id", None):
             return await call_next(request)
 
         key = request.headers.get(API_KEY_HEADER) or request.headers.get(
