@@ -1,0 +1,27 @@
+# HTTPS/domain extension for docker-compose.ec2.yml.
+# Usage:
+#   docker compose -f docker-compose.ec2.yml -f docker-compose.domain.yml up -d --build
+
+services:
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      - WEAVE_DOMAIN=${WEAVE_DOMAIN}
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      - weave
+
+volumes:
+  caddy_data:
+  caddy_config:
