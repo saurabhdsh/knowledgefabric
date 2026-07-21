@@ -11,7 +11,7 @@ import {
   Squares2X2Icon,
   LinkIcon,
 } from '@heroicons/react/24/outline';
-import type { WeaveDomain } from '../utils/weaveDomain';
+import { isPharmaManufacturing, type WeaveDomain } from '../utils/weaveDomain';
 import FabricCreationProgressModal from './FabricCreationProgressModal';
 
 interface ProgressStep {
@@ -167,7 +167,7 @@ const KnowledgeFabricProgress: React.FC<KnowledgeFabricProgressProps> = ({
   onComplete,
   onError,
   uploadedFiles,
-  weaveDomain = 'generic',
+  weaveDomain = 'general',
   connectorProfile,
   guardrails,
 }) => {
@@ -176,7 +176,7 @@ const KnowledgeFabricProgress: React.FC<KnowledgeFabricProgressProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
 
   const definition = useMemo(() => {
-    const pharma = weaveDomain === 'pharma';
+    const pharma = isPharmaManufacturing(weaveDomain);
     const steps = pharma ? buildPharmaSteps() : buildGenericSteps();
     const durations = pharma ? STEP_DURATIONS_PHARMA_MS : STEP_DURATIONS_GENERIC_MS;
     return { steps, durations };
@@ -189,7 +189,7 @@ const KnowledgeFabricProgress: React.FC<KnowledgeFabricProgressProps> = ({
     setFabricId('');
     setIsProcessing(false);
     setOverallProgress(0);
-    const fresh = weaveDomain === 'pharma' ? buildPharmaSteps() : buildGenericSteps();
+    const fresh = isPharmaManufacturing(weaveDomain) ? buildPharmaSteps() : buildGenericSteps();
     setProgressSteps(fresh.map((s) => ({ ...s, status: 'pending' as const, progress: 0 })));
   }, [isVisible, weaveDomain]);
 
@@ -289,7 +289,7 @@ const KnowledgeFabricProgress: React.FC<KnowledgeFabricProgressProps> = ({
   if (!isVisible) return null;
 
   const pharmaOutputs =
-    weaveDomain === 'pharma' && fabricId
+    isPharmaManufacturing(weaveDomain) && fabricId
       ? [
           'Indexed scientific artifacts with provenance',
           'Extracted entities & preliminary relationships',
@@ -301,9 +301,9 @@ const KnowledgeFabricProgress: React.FC<KnowledgeFabricProgressProps> = ({
   return (
     <FabricCreationProgressModal
       isVisible={isVisible}
-      title={weaveDomain === 'pharma' ? 'Creating Pharma Knowledge Fabric' : 'Creating Knowledge Fabric'}
+      title={isPharmaManufacturing(weaveDomain) ? 'Creating Pharma Knowledge Fabric' : 'Creating Knowledge Fabric'}
       subtitle={`Processing ${uploadedFiles.length} file(s)${
-        weaveDomain === 'pharma' ? ' with scientific extraction and graph staging' : ' with a fluid semantic pipeline'
+        isPharmaManufacturing(weaveDomain) ? ' with scientific extraction and graph staging' : ' with a fluid semantic pipeline'
       }`}
       overallProgress={overallProgress}
       steps={progressSteps.map((step) => ({ ...step, icon: step.icon }))}

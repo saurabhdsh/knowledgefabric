@@ -1,0 +1,15 @@
+<svg viewBox="2 2 44 44" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Weave logo">
+  <title>Weave</title>
+  <defs>
+    <linearGradient id="weave-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="50%" stop-color="#d946ef"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(0,48) scale(1,-1)">
+    <path d="M8 36 L14 12 L20 28 L26 12 L32 36" stroke="url(#weave-grad)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <path d="M11 36 L17 16 L23 32 L29 16 L37 36" stroke="url(#weave-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.8"/>
+    <path d="M14 36 L20 20 L26 36" stroke="url(#weave-grad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.6"/>
+  </g>
+</svg>

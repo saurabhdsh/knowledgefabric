@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ChatBubbleLeftRightIcon, SparklesIcon, DocumentTextIcon, CpuChipIcon } from '@heroicons/react/24/outline';
 import { apiRequest } from '../utils/api';
 import { renderLlmMarkdown } from '../utils/renderLlmGraphInsight';
+import { fabricKindLabel } from '../utils/weaveDomain';
 
 interface KnowledgeFabric {
   id: string;
@@ -11,6 +12,8 @@ interface KnowledgeFabric {
   total_chunks?: number;
   created_at: string;
   model_status: string;
+  weave_domain?: string;
+  fabric_kind_label?: string;
 }
 
 const TestLLM: React.FC = () => {
@@ -191,14 +194,19 @@ const TestLLM: React.FC = () => {
                   </option>
                   {fabrics.map((fabric) => (
                     <option key={fabric.id} value={fabric.id}>
-                      {fabric.name} ({fabric.document_count} docs, {fabric.total_chunks || 0} chunks) - {fabric.model_status}
+                      {fabric.name} · {fabricKindLabel(fabric.weave_domain)} ({fabric.document_count} docs)
                     </option>
                   ))}
                 </select>
                 {selectedFabric && (
-                  <div className="mt-2 p-2 bg-emerald-50 border border-emerald-200 rounded-lg">
+                  <div className="mt-2 p-2 bg-emerald-50 border border-emerald-200 rounded-lg space-y-1">
                     <p className="text-xs text-emerald-700">
                       <strong>Selected:</strong> {fabrics.find(f => f.id === selectedFabric)?.name}
+                    </p>
+                    <p className="text-xs text-emerald-700">
+                      <strong>Intelligence:</strong>{' '}
+                      {fabricKindLabel(fabrics.find(f => f.id === selectedFabric)?.weave_domain)}
+                      {' — '}domain-aware reasoning is applied automatically for complex questions.
                     </p>
                   </div>
                 )}

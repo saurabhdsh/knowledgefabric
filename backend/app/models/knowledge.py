@@ -93,7 +93,7 @@ class CreatePDFFabricRequest(BaseModel):
     files: List[str]
     source_type: str = "pdf"
     train_model: bool = True
-    """weave_domain: generic (default) or pharma — tags fabric for Weave journey (graph, ontology)."""
+    """Fabric intelligence kind: general, research, healthcare, life_sciences, pharma_manufacturing, etc."""
     weave_domain: Optional[str] = None
     """Optional profile e.g. scientific_documents, lims_table — stored for UI provenance."""
     connector_profile: Optional[str] = None
@@ -104,6 +104,7 @@ class CreateCompositeFabricRequest(BaseModel):
     source_ids: List[str]
     description: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
+    weave_domain: Optional[str] = None
     guardrails: Optional[FabricGuardrails] = None
 
 class KnowledgeStats(BaseModel):

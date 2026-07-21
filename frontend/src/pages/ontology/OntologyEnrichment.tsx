@@ -14,7 +14,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { ComponentType } from 'react';
 import { ontologyApi, EnrichmentCandidate, OntologyVersionRecord, OntologyProject } from '../../utils/ontologyApi';
-import { getWeaveDomain } from '../../utils/weaveDomain';
+import { getWeaveDomain, isPharmaManufacturing } from '../../utils/weaveDomain';
 
 const modeHelp: Record<string, string> = {
   manual: 'Manual: detect only; every change requires steward action.',
@@ -417,7 +417,7 @@ const OntologyEnrichment: React.FC = () => {
         </div>
       </div>
 
-      {weaveDomain === 'pharma' && (
+      {isPharmaManufacturing(weaveDomain) && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="rounded-xl border border-[rgba(155,139,212,0.32)] bg-[rgba(155,139,212,0.08)] p-4">
             <h2 className="text-sm font-semibold text-[#e8edf4] mb-2">Pharma enrichment capabilities</h2>

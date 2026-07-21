@@ -1,4 +1,4 @@
-import type { WeaveDomain } from './weaveDomain';
+import { isPharmaManufacturing, normalizeFabricKind, type WeaveDomain } from './weaveDomain';
 
 export type PharmaGraphLens =
   | 'full'
@@ -39,11 +39,11 @@ export function labelMatchesPharmaLens(label: string, lens: PharmaGraphLens): bo
 
 export function isPharmaFabricFromDetails(details: { weave_domain?: string; tags?: string[] } | null): boolean {
   if (!details) return false;
-  if (details.weave_domain === 'pharma') return true;
+  if (isPharmaManufacturing(details.weave_domain)) return true;
   const tags = details.tags || [];
   return tags.some((t) => /pharma|weave:pharma/i.test(String(t)));
 }
 
 export function shouldShowPharmaGraphUi(domain: WeaveDomain, details: { weave_domain?: string; tags?: string[] } | null): boolean {
-  return domain === 'pharma' || isPharmaFabricFromDetails(details);
+  return isPharmaManufacturing(domain) || isPharmaFabricFromDetails(details);
 }

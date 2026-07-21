@@ -24,6 +24,13 @@ from app.services.retrieval.retrieval_orchestrator import retrieval_orchestrator
 from app.services.graph.graph_store import graph_store
 from app.core.config import settings
 from app.services.llm.llm_router import llm_router
+from app.services.llm.fabric_intelligence import (
+    build_domain_system_prompt,
+    catalog_for_api,
+    domain_tags_for_kind,
+    fabric_kind_label,
+    normalize_fabric_kind,
+)
 from app.utils.json_sanitize import sanitize_for_json
 import time
 import json
@@ -881,8 +888,8 @@ def _finalize_database_fabric_from_fetch(
     vector_service.add_documents(documents, fabric_id)
 
     merged_tags = list(fetched["tags"])
-    if weave_domain == "pharma":
-        merged_tags.extend(["weave:pharma", "pharma-drug-manufacturing"])
+    weave_domain = normalize_fabric_kind(weave_domain)
+    merged_tags.extend(domain_tags_for_kind(weave_domain))
 
     fabric_data: Dict[str, Any] = {
         "id": fabric_id,
@@ -1331,6 +1338,21 @@ async def get_knowledge_stats():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.get("/fabric-kinds", response_model=APIResponse)
+async def get_fabric_kinds():
+    """Catalog of fabric intelligence kinds used at create-time and in /query.
+
+    Must be declared before ``/{source_id}`` so FastAPI does not treat
+    ``fabric-kinds`` as a fabric id.
+    """
+    return APIResponse(
+        success=True,
+        message="Fabric kinds retrieved",
+        data={"kinds": catalog_for_api()},
+    )
+
+
 @router.get("/{source_id}", response_model=APIResponse)
 async def get_knowledge_source(source_id: str):
     """Get details of a specific knowledge source"""
@@ -1568,15 +1590,12 @@ async def create_pdf_knowledge_fabric(request: CreatePDFFabricRequest):
         
         fabric_id = processed_docs[0]["doc_id"] if processed_docs else None
 
-        weave_domain = (request.weave_domain or "generic").strip().lower()
-        if weave_domain not in ("generic", "pharma"):
-            weave_domain = "generic"
+        weave_domain = normalize_fabric_kind(request.weave_domain)
         normalized_guardrails = _normalize_guardrails(
             request.guardrails.model_dump() if request.guardrails else None
         )
         base_tags = ["pdf", "knowledge-fabric"]
-        if weave_domain == "pharma":
-            base_tags.extend(["weave:pharma", "pharma-drug-manufacturing"])
+        base_tags.extend(domain_tags_for_kind(weave_domain))
         
         # Store the created fabric
         if fabric_id:
@@ -1688,6 +1707,7 @@ async def create_codebase_knowledge_fabric(
     migration_goal: Optional[str] = Form(None),
     exclude_globs: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
+    weave_domain: Optional[str] = Form(None),
     zip_file: Optional[UploadFile] = File(None),
 ):
     """Create a codebase/workspace fabric from zip upload or git clone (async analysis)."""
@@ -1707,6 +1727,7 @@ async def create_codebase_knowledge_fabric(
     progress_id = f"progress_codebase_{uuid.uuid4().hex[:12]}"
     now = datetime.now().isoformat()
     excludes = [p.strip() for p in (exclude_globs or "").split(",") if p.strip()]
+    resolved_kind = normalize_fabric_kind(weave_domain)
 
     progress_store[progress_id] = {
         "status": "processing",
@@ -1750,7 +1771,8 @@ async def create_codebase_knowledge_fabric(
             "model_status": "not_trained",
             "document_count": 0,
             "total_chunks": 0,
-            "tags": ["codebase", "workspace"],
+            "tags": ["codebase", "workspace", *domain_tags_for_kind(resolved_kind)],
+            "weave_domain": resolved_kind,
             "created_at": now,
             "updated_at": now,
             "owner_id": get_current_user_id(),
@@ -1954,6 +1976,7 @@ async def create_composite_knowledge_fabric(request: CreateCompositeFabricReques
 
         composite_id = f"fabric_composite_{int(time.time())}_{uuid.uuid4().hex[:8]}"
         composite_name = request.name.strip() or f"Composite_Fabric_{len(user_fabrics()) + 1}"
+        resolved_kind = normalize_fabric_kind(request.weave_domain)
 
         total_documents = int(sum(int(s.get("document_count", 0) or 0) for s in selected_sources))
         total_chunks = int(sum(int(s.get("total_chunks", 0) or 0) for s in selected_sources))
@@ -2009,7 +2032,17 @@ async def create_composite_knowledge_fabric(request: CreateCompositeFabricReques
             "name": composite_name,
             "source_type": "composite",
             "description": request.description or f"Composite fabric combining {len(selected_sources)} sources",
-            "tags": sorted(list(set((request.tags or []) + ["composite", "multi-source"] + source_types))),
+            "tags": sorted(
+                list(
+                    set(
+                        (request.tags or [])
+                        + ["composite", "multi-source"]
+                        + source_types
+                        + domain_tags_for_kind(resolved_kind)
+                    )
+                )
+            ),
+            "weave_domain": resolved_kind,
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "document_count": total_documents,
@@ -2279,7 +2312,8 @@ async def get_fabric_knowledge_graph(fabric_id: str, include_llm: bool = True):
             "updated_at": fabric.get("updated_at"),
             "description": fabric.get("description", ""),
             "tags": fabric.get("tags", []),
-            "weave_domain": fabric.get("weave_domain") or "generic",
+            "weave_domain": normalize_fabric_kind(fabric.get("weave_domain")),
+            "fabric_kind_label": fabric_kind_label(fabric.get("weave_domain")),
             "connector_profile": fabric.get("connector_profile"),
             "ontology_project_id": fabric.get("ontology_project_id"),
             "approved_ontology_version_id": fabric.get("approved_ontology_version_id"),
@@ -2352,6 +2386,7 @@ async def get_available_providers():
             data=None,
             error=str(e)
         )
+
 
 @router.post("/api-keys/validate/{provider_id}", response_model=APIResponse)
 async def validate_api_key(provider_id: str):
@@ -2500,9 +2535,9 @@ async def create_database_knowledge_fabric(request: dict):
         connection_type = request.get("connection_type", "mongodb")
         connection_data = request.get("connection_data", {})
         train_model = request.get("train_model", True)
-        weave_domain = str(request.get("weave_domain") or request.get("domain") or "generic").strip().lower()
-        if weave_domain not in ("generic", "pharma"):
-            weave_domain = "generic"
+        weave_domain = normalize_fabric_kind(
+            request.get("weave_domain") or request.get("domain")
+        )
         connector_profile = request.get("connector_profile")
         guardrails = _normalize_guardrails(request.get("guardrails"))
 
@@ -2575,9 +2610,7 @@ async def create_database_fabric_csv(
         # Multipart form sends booleans as strings ("true"/"false"); parse explicitly to avoid 422 validation errors.
         train_model_flag = str(train_model).strip().lower() in ("1", "true", "yes", "on")
 
-        weave_domain_n = str(weave_domain or "generic").strip().lower()
-        if weave_domain_n not in ("generic", "pharma"):
-            weave_domain_n = "generic"
+        weave_domain_n = normalize_fabric_kind(weave_domain)
 
         cp = (connector_profile or "").strip() or None
         parsed_guardrails = None
@@ -3311,17 +3344,11 @@ async def query_knowledge_base(
             confidence = 0.7
         elif llm_provider in ("openai", "bedrock"):
             try:
-                system_prompt = f"""You are an AI assistant specialized in analyzing knowledge fabric content.
-                    You have access to a knowledge fabric named '{fabric['name']}' which contains processed document content.
-
-                    Your task is to:
-                    1. Analyze the provided content from the knowledge fabric
-                    2. Answer the user's question based on the actual content
-                    3. Provide specific, detailed answers with references to the content
-                    4. If the content doesn't directly answer the question, acknowledge this clearly
-                    5. Always cite the knowledge fabric as your source
-
-                    Be thorough and provide comprehensive answers based on the actual document content."""
+                system_prompt = build_domain_system_prompt(
+                    fabric_name=fabric.get("name") or fabric_id,
+                    weave_domain=fabric.get("weave_domain"),
+                    source_type=fabric.get("source_type"),
+                )
 
                 context_text = '\n\n'.join(context_chunks) if context_chunks else 'No specific content found for this query.'
                 user_prompt = f"""Question: {query}
@@ -3331,7 +3358,8 @@ async def query_knowledge_base(
 
                     Please analyze the above content from the knowledge fabric and provide a detailed, comprehensive answer to the question.
                     If the content contains specific information relevant to the question, include it in your response.
-                    If the content doesn't directly address the question, please state this clearly."""
+                    If the content doesn't directly address the question, please state this clearly.
+                    For complex multi-hop questions, reason step-by-step using only the fabric evidence."""
 
                 llm_key_for_call = _resolve_llm_key(fastapi_request) if llm_provider == "openai" else None
                 answer = llm_router.chat_completion(
@@ -3340,8 +3368,8 @@ async def query_knowledge_base(
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    max_tokens=500,
-                    temperature=0.3,
+                    max_tokens=1200,
+                    temperature=0.25,
                     api_key=llm_key_for_call,
                 )
                 confidence = 0.85 if context_chunks else 0.5
@@ -3398,7 +3426,9 @@ async def query_knowledge_base(
                 # Backward-compatible field expected by some frontend views.
                 "relevant_chunks": len(context_chunks),
                 "llm_provider": llm_provider,
-                "processing_time": processing_time
+                "processing_time": processing_time,
+                "weave_domain": normalize_fabric_kind(fabric.get("weave_domain")),
+                "fabric_kind_label": fabric_kind_label(fabric.get("weave_domain")),
             },
             error=None
         )
@@ -3435,12 +3465,6 @@ async def create_servicenow_knowledge_fabric(
     try:
         print("=== Starting ServiceNow Knowledge Fabric Creation ===")
 
-        def _normalize_weave_domain(raw: Optional[str]) -> str:
-            wd = str(raw or "generic").strip().lower()
-            if wd not in ("generic", "pharma"):
-                return "generic"
-            return wd
-
         payload_weave = None
         payload_profile = None
         payload_guardrails = None
@@ -3448,7 +3472,7 @@ async def create_servicenow_knowledge_fabric(
             payload_weave = request_payload.get("weave_domain") or request_payload.get("domain")
             payload_profile = request_payload.get("connector_profile")
             payload_guardrails = request_payload.get("guardrails")
-        resolved_weave = _normalize_weave_domain(weave_domain or payload_weave)
+        resolved_weave = normalize_fabric_kind(weave_domain or payload_weave)
         resolved_profile = (connector_profile or payload_profile or "").strip() or None
         parsed_guardrails = payload_guardrails
         if guardrails:
@@ -3597,8 +3621,7 @@ async def create_servicenow_knowledge_fabric(
                 sum(len(item.get("data", [])) for item in processed_data),
             )
             tags_sn = ["servicenow", "incident", "itsm", "files"]
-            if resolved_weave == "pharma":
-                tags_sn.extend(["weave:pharma", "pharma-drug-manufacturing"])
+            tags_sn.extend(domain_tags_for_kind(resolved_weave))
             fabric_data = {
                 "id": fabric_id,
                 "name": f"ServiceNow Incident Data - Files ({len(files)} files)",
@@ -3679,8 +3702,7 @@ async def create_servicenow_knowledge_fabric(
             # Simulate ServiceNow API connection and data retrieval
             # In a real implementation, you would connect to ServiceNow API here
             tags_conn = ["servicenow", "incident", "itsm", "connection", table_name]
-            if resolved_weave == "pharma":
-                tags_conn.extend(["weave:pharma", "pharma-drug-manufacturing"])
+            tags_conn.extend(domain_tags_for_kind(resolved_weave))
             fabric_data = {
                 "id": fabric_id,
                 "name": f"ServiceNow Incident Data - {table_name}",

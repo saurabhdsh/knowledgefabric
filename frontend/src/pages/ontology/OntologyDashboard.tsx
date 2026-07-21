@@ -11,12 +11,12 @@ import {
   SparklesIcon,
 } from '@heroicons/react/24/outline';
 import { ontologyApi, OntologyProject, KnowledgeFabricLite } from '../../utils/ontologyApi';
-import { getWeaveDomain, setWeaveDomain, type WeaveDomain } from '../../utils/weaveDomain';
+import { getWeaveDomain, setWeaveDomain, isPharmaManufacturing, type FabricKind } from '../../utils/weaveDomain';
 import PharmaOntologyDiscovery from './PharmaOntologyDiscovery';
 
 const OntologyDashboard: React.FC = () => {
   const navigate = useNavigate();
-  const [weaveDomain, setWeaveDomainState] = useState<WeaveDomain>(() => getWeaveDomain());
+  const [weaveDomain, setWeaveDomainState] = useState<FabricKind>(() => getWeaveDomain());
   const [projects, setProjects] = useState<OntologyProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [createName, setCreateName] = useState('');
@@ -110,9 +110,9 @@ const OntologyDashboard: React.FC = () => {
           <div className="inline-flex rounded-lg border border-[rgba(148,163,184,0.2)] bg-white/[0.03] p-1">
             <button
               type="button"
-              onClick={() => setWeaveDomainState('generic')}
+              onClick={() => setWeaveDomainState('general')}
               className={`rounded-md px-3 py-1.5 text-xs font-medium ${
-                weaveDomain === 'generic'
+                !isPharmaManufacturing(weaveDomain)
                   ? 'bg-[rgba(94,200,242,0.18)] text-[#e8edf4]'
                   : 'text-[#8b9cb0]'
               }`}
@@ -121,9 +121,9 @@ const OntologyDashboard: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => setWeaveDomainState('pharma')}
+              onClick={() => setWeaveDomainState('pharma_manufacturing')}
               className={`rounded-md px-3 py-1.5 text-xs font-medium ${
-                weaveDomain === 'pharma'
+                isPharmaManufacturing(weaveDomain)
                   ? 'bg-[rgba(167,139,250,0.22)] text-[#e8edf4]'
                   : 'text-[#8b9cb0]'
               }`}
@@ -156,7 +156,7 @@ const OntologyDashboard: React.FC = () => {
         </div>
       </div>
 
-      {weaveDomain === 'pharma' && <PharmaOntologyDiscovery />}
+      {isPharmaManufacturing(weaveDomain) && <PharmaOntologyDiscovery />}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">

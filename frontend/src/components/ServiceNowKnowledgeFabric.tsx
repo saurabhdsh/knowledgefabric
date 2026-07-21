@@ -21,7 +21,7 @@ interface ServiceNowKnowledgeFabricProps {
   isVisible: boolean;
   onCancel: () => void;
   onComplete: (fabricId: string) => void;
-  weaveDomain?: 'generic' | 'pharma';
+  weaveDomain?: string;
   connectorProfile?: string | null;
   guardrails?: FabricGuardrails;
 }
@@ -30,7 +30,7 @@ const ServiceNowKnowledgeFabric: React.FC<ServiceNowKnowledgeFabricProps> = ({
   isVisible,
   onCancel,
   onComplete,
-  weaveDomain = 'generic',
+  weaveDomain = 'general',
   connectorProfile,
   guardrails,
 }) => {

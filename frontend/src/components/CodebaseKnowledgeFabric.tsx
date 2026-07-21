@@ -12,6 +12,7 @@ import CodebaseFabricProgress from './CodebaseFabricProgress';
 interface CodebaseKnowledgeFabricProps {
   onClose: () => void;
   onCreated?: (fabricId: string) => void;
+  weaveDomain?: string;
 }
 
 type InputTab = 'zip' | 'folder' | 'git';
@@ -20,6 +21,7 @@ type AuthMode = 'none' | 'pat' | 'ssh';
 const CodebaseKnowledgeFabric: React.FC<CodebaseKnowledgeFabricProps> = ({
   onClose,
   onCreated,
+  weaveDomain = 'general',
 }) => {
   const [tab, setTab] = useState<InputTab>('zip');
   const [name, setName] = useState('');
@@ -96,6 +98,7 @@ const CodebaseKnowledgeFabric: React.FC<CodebaseKnowledgeFabricProps> = ({
     try {
       const form = new FormData();
       form.append('name', name.trim());
+      form.append('weave_domain', weaveDomain);
       if (description.trim()) form.append('description', description.trim());
       if (migrationGoal.trim()) form.append('migration_goal', migrationGoal.trim());
       if (excludeGlobs.trim()) form.append('exclude_globs', excludeGlobs.trim());

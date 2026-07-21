@@ -1,0 +1,24 @@
+<svg viewBox="0 0 320 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Weave">
+  <title>Weave  Hybrid Retrieval Intelligence Platform</title>
+  <defs>
+    <linearGradient id="weave-grad-wordmark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="50%" stop-color="#d946ef"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="weave-text-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#e8edf4"/>
+      <stop offset="100%" stop-color="#cbd5e1"/>
+    </linearGradient>
+  </defs>
+  <!-- Icon (scaled from 48x48 mark) -->
+  <g transform="translate(8,8) scale(1)">
+    <g transform="translate(0,48) scale(1,-1)">
+      <path d="M8 36 L14 12 L20 28 L26 12 L32 36" stroke="url(#weave-grad-wordmark)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <path d="M11 36 L17 16 L23 32 L29 16 L37 36" stroke="url(#weave-grad-wordmark)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.8"/>
+      <path d="M14 36 L20 20 L26 36" stroke="url(#weave-grad-wordmark)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.6"/>
+    </g>
+  </g>
+  <!-- Wordmark -->
+  <text x="72" y="42" font-family="system-ui, -apple-system, 'Segoe UI', Inter, sans-serif" font-size="32" font-weight="600" letter-spacing="-0.02em" fill="url(#weave-text-grad)">Weave</text>
+</svg>

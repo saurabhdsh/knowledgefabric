@@ -14,7 +14,13 @@ import {
   CodeBracketSquareIcon,
 } from '@heroicons/react/24/outline';
 import { apiRequest } from '../utils/api';
-import { getWeaveDomain, setWeaveDomain, type WeaveDomain } from '../utils/weaveDomain';
+import {
+  getWeaveDomain,
+  setWeaveDomain,
+  isPharmaManufacturing,
+  FABRIC_KIND_OPTIONS,
+  type FabricKind,
+} from '../utils/weaveDomain';
 import PDFUpload from '../components/PDFUpload';
 import KnowledgeFabricProgress from '../components/KnowledgeFabricProgress';
 import DatabaseKnowledgeFabric from '../components/DatabaseKnowledgeFabric';
@@ -59,7 +65,7 @@ const Knowledge: React.FC = () => {
   const [compositeSourceIds, setCompositeSourceIds] = useState<string[]>([]);
   const [isCreatingComposite, setIsCreatingComposite] = useState(false);
   const [compositePendingSourceType, setCompositePendingSourceType] = useState<'pdf' | 'database' | 'servicenow' | null>(null);
-  const [weaveDomain, setWeaveDomainState] = useState<WeaveDomain>(() => getWeaveDomain());
+  const [weaveDomain, setWeaveDomainState] = useState<FabricKind>(() => getWeaveDomain());
   const [pharmaConnector, setPharmaConnector] = useState<'pdf' | 'database' | 'servicenow' | 'composite'>('pdf');
   const [pharmaArtifacts, setPharmaArtifacts] = useState<Record<string, boolean>>({
     experiment_reports: true,
@@ -92,7 +98,7 @@ const Knowledge: React.FC = () => {
   }, [weaveDomain]);
 
   const connectorProfile = useMemo(() => {
-    if (weaveDomain !== 'pharma') return undefined;
+    if (!isPharmaManufacturing(weaveDomain)) return undefined;
     const map: Record<typeof pharmaConnector, string> = {
       pdf: 'scientific_documents',
       database: 'lims_mes_eln_exports',
@@ -104,13 +110,19 @@ const Knowledge: React.FC = () => {
 
   const fabricReadinessScore = useMemo(() => {
     let score = 28;
-    if (weaveDomain === 'pharma') score += 12;
+    if (isPharmaManufacturing(weaveDomain)) score += 12;
+    else if (weaveDomain !== 'general') score += 10;
     if (selectedOption) score += 18;
     const toggles = Object.values(pharmaArtifacts).filter(Boolean).length;
-    if (weaveDomain === 'pharma') score += Math.round((toggles / 10) * 38);
+    if (isPharmaManufacturing(weaveDomain)) score += Math.round((toggles / 10) * 38);
     else score += 15;
     return Math.min(100, score);
   }, [weaveDomain, selectedOption, pharmaArtifacts]);
+
+  const selectedKindMeta = useMemo(
+    () => FABRIC_KIND_OPTIONS.find((k) => k.id === weaveDomain) || FABRIC_KIND_OPTIONS[0],
+    [weaveDomain],
+  );
 
   const eligibleCompositeSources = useMemo(
     () => availableFabrics.filter((f) => f.source_type !== 'composite'),
@@ -169,13 +181,13 @@ const Knowledge: React.FC = () => {
     return [
       {
         id: 'pdf',
-        title: weaveDomain === 'pharma' ? 'Scientific documents & reports' : 'Upload PDF Documents',
+        title: isPharmaManufacturing(weaveDomain) ? 'Scientific documents & reports' : 'Upload PDF Documents',
         description:
-          weaveDomain === 'pharma'
+          isPharmaManufacturing(weaveDomain)
             ? 'PDF/TXT across experimental, manufacturing, and quality documentation'
             : 'Upload and process PDF files to extract knowledge and create embeddings',
         icon: DocumentTextIcon,
-        features: weaveDomain === 'pharma' ? pharmaPdfFeatures : [
+        features: isPharmaManufacturing(weaveDomain) ? pharmaPdfFeatures : [
           'Extract text from PDF documents',
           'Automatic chunking and processing',
           'Generate embeddings for semantic search',
@@ -187,13 +199,13 @@ const Knowledge: React.FC = () => {
       },
       {
         id: 'database',
-        title: weaveDomain === 'pharma' ? 'Databases & structured exports' : 'Connect to Database',
+        title: isPharmaManufacturing(weaveDomain) ? 'Databases & structured exports' : 'Connect to Database',
         description:
-          weaveDomain === 'pharma'
+          isPharmaManufacturing(weaveDomain)
             ? 'LIMS, MES, ELN extracts, and relational tables'
             : 'Connect to various databases to extract structured knowledge',
         icon: ServerIcon,
-        features: weaveDomain === 'pharma' ? pharmaDbFeatures : [
+        features: isPharmaManufacturing(weaveDomain) ? pharmaDbFeatures : [
           'Support for MongoDB, PostgreSQL, MySQL',
           'Automatic schema detection',
           'Query optimization and indexing',
@@ -205,13 +217,13 @@ const Knowledge: React.FC = () => {
       },
       {
         id: 'servicenow',
-        title: weaveDomain === 'pharma' ? 'Quality ITSM & exports' : 'ServiceNow Data',
+        title: isPharmaManufacturing(weaveDomain) ? 'Quality ITSM & exports' : 'ServiceNow Data',
         description:
-          weaveDomain === 'pharma'
+          isPharmaManufacturing(weaveDomain)
             ? 'ServiceNow or spreadsheet exports for deviations, CAPA, and tasks'
             : 'Import data from ServiceNow to create knowledge fabric from tickets, incidents, and knowledge articles',
         icon: CloudIcon,
-        features: weaveDomain === 'pharma' ? pharmaSnFeatures : [
+        features: isPharmaManufacturing(weaveDomain) ? pharmaSnFeatures : [
           'Import from CSV/Excel files',
           'Direct ServiceNow API connection',
           'Process tickets and incidents',
@@ -241,11 +253,11 @@ const Knowledge: React.FC = () => {
         id: 'composite',
         title: 'Composite Multi-Source Fabric',
         description:
-          weaveDomain === 'pharma'
+          isPharmaManufacturing(weaveDomain)
             ? 'Merge pharma document, database, and ITSM fabrics into one governed fabric'
             : 'Combine existing PDF, database, and ServiceNow fabrics into one unified fabric',
         icon: Squares2X2Icon,
-        features: weaveDomain === 'pharma' ? pharmaCompFeatures : [
+        features: isPharmaManufacturing(weaveDomain) ? pharmaCompFeatures : [
           'Merge multiple source fabrics',
           'Unified querying across sources',
           'Cross-source lineage in one fabric',
@@ -461,6 +473,7 @@ You can now view your fabric in the "Available Fabrics" tab with real statistics
           source_ids: compositeSourceIds,
           description: `Composite fabric built from ${compositeSourceIds.length} sources`,
           tags: ['composite', 'multi-source'],
+          weave_domain: weaveDomain,
           guardrails,
         })
       });
@@ -565,6 +578,7 @@ You can now view your fabric in the "Available Fabrics" tab with real statistics
       {showCodebaseFabric && (
         <CodebaseKnowledgeFabric
           onClose={() => setShowCodebaseFabric(false)}
+          weaveDomain={weaveDomain}
           onCreated={(fabricId) => {
             setShowCodebaseFabric(false);
             setSelectedOption(null);
@@ -605,7 +619,7 @@ You can now view your fabric in the "Available Fabrics" tab with real statistics
       <div className="text-center mb-12">
         <div className="flex items-center justify-center mb-4">
           <div className="p-3 rounded-full bg-[#10141d]/80 backdrop-blur-xl border border-[rgba(148,163,184,0.2)] shadow-lg shadow-black/30">
-            {weaveDomain === 'pharma' ? (
+            {isPharmaManufacturing(weaveDomain) ? (
               <BeakerIcon className="h-8 w-8 text-[#a78bfa]" />
             ) : (
               <SparklesIcon className="h-8 w-8 text-[#5ec8f2]" />
@@ -616,47 +630,55 @@ You can now view your fabric in the "Available Fabrics" tab with real statistics
           Create Knowledge Fabric
         </h1>
         <p className="text-xl text-gray-600 max-w-3xl mx-auto">
-          {weaveDomain === 'pharma'
+          {isPharmaManufacturing(weaveDomain)
             ? 'Ingest scientific manufacturing artifacts, classify sources, and stage a governed fabric for the same Weave journey.'
-            : 'Choose your preferred method to build a comprehensive knowledge base that powers your AI agents'}
+            : `Build a ${selectedKindMeta.label.toLowerCase()} — Weave will apply domain intelligence so agents and Test with LLM can answer complex questions.`}
         </p>
 
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-          <span className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">Domain</span>
-          <div className="inline-flex rounded-xl border border-[rgba(148,163,184,0.2)] bg-white/[0.03] p-1">
-            <button
-              type="button"
-              onClick={() => {
-                setWeaveDomainState('generic');
-                setSelectedOption(null);
-              }}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                weaveDomain === 'generic'
-                  ? 'bg-[rgba(94,200,242,0.2)] text-[#e8edf4]'
-                  : 'text-[#8b9cb0] hover:text-[#cbd5e1]'
-              }`}
-            >
-              Generic
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setWeaveDomainState('pharma');
-                setSelectedOption('pdf');
-                setPharmaConnector('pdf');
-              }}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                weaveDomain === 'pharma'
-                  ? 'bg-[rgba(167,139,250,0.25)] text-[#e8edf4]'
-                  : 'text-[#8b9cb0] hover:text-[#cbd5e1]'
-              }`}
-            >
-              Pharma Drug Manufacturing
-            </button>
+        <div className="mt-8 max-w-5xl mx-auto text-left">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <span className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">
+              What kind of fabric are you creating?
+            </span>
+            <span className="text-xs text-[#64748b]">
+              Weave adds domain intelligence for agents &amp; Test with LLM
+            </span>
           </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+            {FABRIC_KIND_OPTIONS.map((kind) => {
+              const selected = weaveDomain === kind.id;
+              return (
+                <button
+                  key={kind.id}
+                  type="button"
+                  onClick={() => {
+                    setWeaveDomainState(kind.id);
+                    setSelectedOption(null);
+                    if (kind.showsPharmaWorkspace) {
+                      setSelectedOption('pdf');
+                      setPharmaConnector('pdf');
+                    }
+                  }}
+                  className={`rounded-xl border px-3 py-3 text-left transition-colors ${
+                    selected
+                      ? 'border-[rgba(94,200,242,0.45)] bg-[rgba(94,200,242,0.14)] text-[#e8edf4]'
+                      : 'border-[rgba(148,163,184,0.2)] bg-white/[0.02] text-[#cbd5e1] hover:bg-white/[0.05]'
+                  }`}
+                >
+                  <span className="block text-sm font-semibold">{kind.label}</span>
+                  <span className="block text-[11px] text-[#8b9cb0] mt-1 leading-snug">{kind.description}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-3 text-xs text-[#8b9cb0] text-center sm:text-left">
+            Selected: <span className="text-[#5ec8f2] font-medium">{selectedKindMeta.label}</span>
+            {' — '}
+            agents and Test with LLM will reason with this domain lens.
+          </p>
         </div>
 
-        {weaveDomain === 'pharma' && (
+        {isPharmaManufacturing(weaveDomain) && (
           <div className="mt-8 max-w-4xl mx-auto text-left rounded-2xl border border-[rgba(155,139,212,0.25)] bg-[rgba(155,139,212,0.06)] p-5">
             <p className="text-sm font-semibold text-[#e8edf4] mb-3">Source connector</p>
             <p className="text-xs text-[#8b9cb0] mb-4">
@@ -757,7 +779,7 @@ You can now view your fabric in the "Available Fabrics" tab with real statistics
             onClick={() => {
               setSelectedOption(option.id);
               if (
-                weaveDomain === 'pharma' &&
+                isPharmaManufacturing(weaveDomain) &&
                 (option.id === 'pdf' || option.id === 'database' || option.id === 'servicenow' || option.id === 'composite')
               ) {
                 setPharmaConnector(option.id);

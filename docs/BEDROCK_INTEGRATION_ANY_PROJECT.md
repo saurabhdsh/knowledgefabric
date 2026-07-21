@@ -4,6 +4,8 @@ Use this guide when you have an **existing project** (any stack) with a backend 
 
 This is **project-agnostic**. Adapt file names and frameworks to your codebase.
 
+> **Mac first:** To turn a laptop into a reusable **Mac Bedrock** machine (AWS CLI, IAM, smoke test), start with [MAC_BEDROCK_SETUP.md](./MAC_BEDROCK_SETUP.md), then return here for app code.
+
 ---
 
 ## Verified working values (tested on Mac, `us-east-1`)

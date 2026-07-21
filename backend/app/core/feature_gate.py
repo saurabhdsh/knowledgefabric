@@ -42,6 +42,8 @@ def resolve_required_feature(path: str) -> Optional[str]:
     # Shared authenticated endpoints — no feature gate
     if path.startswith("/api/v1/knowledge/api-keys"):
         return None
+    if path.startswith("/api/v1/knowledge/fabric-kinds"):
+        return None
     if path in ("/api/v1/knowledge/test", "/api/v1/knowledge/stats", "/api/v1/knowledge/"):
         return None
     if path.rstrip("/") == "/api/v1/knowledge":

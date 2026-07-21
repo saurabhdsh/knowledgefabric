@@ -56,7 +56,7 @@ interface FabricGuardrails {
 interface DatabaseKnowledgeFabricProps {
   onComplete: (fabricId: string) => void;
   onCancel: () => void;
-  weaveDomain?: 'generic' | 'pharma';
+  weaveDomain?: string;
   connectorProfile?: string | null;
   guardrails?: FabricGuardrails;
 }
@@ -111,7 +111,7 @@ const DB_PROGRESS_STEP_DURATIONS_MS = [1300, 1200, 1700, 1400];
 const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
   onComplete,
   onCancel,
-  weaveDomain = 'generic',
+  weaveDomain = 'general',
   connectorProfile,
   guardrails,
 }) => {

@@ -21,6 +21,7 @@ import FabricEndpointsDialog from '../components/FabricEndpointsDialog';
 import { apiRequest, authenticatedFetch, getApiUrl } from '../utils/api';
 import { getAuthHeaders } from '../utils/authStorage';
 import { jobStatusColor, jobTypeLabel, platformApi, PlatformJob } from '../utils/platformApi';
+import { fabricKindLabel } from '../utils/weaveDomain';
 
 interface KnowledgeFabric {
   id: string;
@@ -35,6 +36,7 @@ interface KnowledgeFabric {
   status: string;
   model_status?: string;
   last_training?: string;
+  weave_domain?: string;
   ontology_project_id?: string | null;
   approved_ontology_version_id?: string | null;
 }
@@ -452,6 +454,9 @@ const Fabrics: React.FC = () => {
                     </h3>
                     <p className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">
                       {fabric.source_type.toUpperCase()}
+                    </p>
+                    <p className="text-[11px] text-[#5ec8f2] mt-0.5">
+                      {fabricKindLabel(fabric.weave_domain)}
                     </p>
                   </div>
                 </div>

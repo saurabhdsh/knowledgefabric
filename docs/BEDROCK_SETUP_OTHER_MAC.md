@@ -454,6 +454,8 @@ ENABLED_LLM_PROVIDERS=openai,bedrock
 
 ## Related docs
 
+- [MAC_BEDROCK_SETUP.md](./MAC_BEDROCK_SETUP.md) — reusable **Mac Bedrock** machine setup for any agentic project
+- [BEDROCK_INTEGRATION_ANY_PROJECT.md](./BEDROCK_INTEGRATION_ANY_PROJECT.md) — add Bedrock + LLM router to a new app
 - [EC2_DEPLOYMENT.md](./EC2_DEPLOYMENT.md) — public URL on one EC2 instance
 - [AWS_DEPLOYMENT.md](./AWS_DEPLOYMENT.md) — full AWS architecture (ECS, RDS, etc.)
 - [CODEBASE_FABRIC.md](./CODEBASE_FABRIC.md) — zip/folder/git codebase fabrics + migration JSON
