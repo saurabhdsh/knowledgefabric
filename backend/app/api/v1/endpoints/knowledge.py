@@ -33,8 +33,10 @@ from app.services.llm.fabric_intelligence import (
 )
 from app.services.analytics.tabular_analytics import (
     analyze_source_documents,
+    build_fabric_analytics_snapshot,
     is_analytical_query,
     format_value_counts_answer,
+    load_rows_from_source_documents,
     markdown_table,
 )
 from app.utils.json_sanitize import sanitize_for_json
@@ -331,23 +333,36 @@ def _is_duplicate_count_query(query: str) -> bool:
     return any(token in q for token in duplicate_tokens)
 
 
+def _load_fabric_row_documents(source_id: str) -> Tuple[List[Any], List[Any], List[Dict[str, str]]]:
+    """Load indexed row chunks + parsed row dicts for a fabric."""
+    try:
+        source_docs = vector_service.get_source_documents(source_id)
+    except Exception as exc:
+        print(f"Fabric row document fetch failed for {source_id}: {exc}")
+        return [], [], []
+    documents = source_docs.get("documents") or []
+    metadatas = source_docs.get("metadatas") or []
+    rows = load_rows_from_source_documents(documents, metadatas)
+    return documents, metadatas, rows
+
+
 def _deterministic_analytical_answer_for_source(
     source_id: str,
     query: str,
     *,
     fabric_name: str,
 ) -> Optional[Dict[str, Any]]:
-    """Run full-fabric tabular analytics (counts, distributions, numeric aggs)."""
-    if not is_analytical_query(query):
+    """Run full-fabric tabular analytics (counts, group-by, filters, numeric aggs)."""
+    documents, metadatas, rows = _load_fabric_row_documents(source_id)
+    if not rows:
         return None
-    try:
-        source_docs = vector_service.get_source_documents(source_id)
-    except Exception as exc:
-        print(f"Deterministic analytical fetch failed for {source_id}: {exc}")
-        return None
-    documents = source_docs.get("documents") or []
-    metadatas = source_docs.get("metadatas") or []
-    if not documents:
+    columns = []
+    for row in rows[:50]:
+        for key in row.keys():
+            if key not in columns:
+                columns.append(key)
+    # Schema-aware intent: detect analytics even when wording is informal.
+    if not is_analytical_query(query, columns=columns):
         return None
     return analyze_source_documents(
         documents,
@@ -3202,9 +3217,9 @@ async def query_knowledge_base(
                 error="Query is required"
             )
         
-        # True analytical queries (counts, distributions, numeric aggregates, unique)
+        # True analytical queries (counts, group-by, filters, aggregates, unique)
         # scan ALL indexed row chunks — never sample_rows / tiny top-k windows.
-        if fabric.get("source_type") == "database" and is_analytical_query(query):
+        if fabric.get("source_type") == "database":
             # Duplicate-specific counts keep their dedicated formatter below.
             if not _is_duplicate_count_query(query):
                 analytical = _deterministic_analytical_answer_for_source(
@@ -3415,6 +3430,21 @@ async def query_knowledge_base(
                         content = str(result)
                         score = 0.8
                         context_chunks.append(f"Content Chunk {i+1}: {content}\nRelevance Score: {score:.3f}")
+
+                # Inject full-fabric analytics snapshot so LLM cannot treat sample chunks as population.
+                try:
+                    _, _, fabric_rows = _load_fabric_row_documents(fabric_id)
+                    snapshot = build_fabric_analytics_snapshot(
+                        fabric_rows,
+                        fabric_name=str(fabric.get("name") or fabric_id),
+                    )
+                    if snapshot:
+                        context_chunks.insert(
+                            0,
+                            f"Content Chunk 0 (FULL FABRIC — authoritative):\n{snapshot}\nRelevance Score: 1.000",
+                        )
+                except Exception as snap_exc:
+                    print(f"Analytics snapshot inject failed for {fabric_id}: {snap_exc}")
                 
                 # If orchestrator returned nothing, load every indexed chunk directly.
                 if not context_chunks:
@@ -3543,6 +3573,8 @@ async def query_knowledge_base(
 
                     Please analyze the above content from the knowledge fabric and provide a detailed, comprehensive answer to the question.
                     Use as much of the provided fabric evidence as needed. Do not invent rows or facts that are not present.
+                    If a section titled "FULL-FABRIC ANALYTICS SNAPSHOT" is present, treat those figures as authoritative population totals — never replace them with counts from a few sample chunks.
+                    Format analytical answers with Markdown headings and pipe tables when reporting counts, group-by results, or numeric summaries.
                     If the content doesn't directly address the question, please state this clearly.
                     For complex multi-hop questions, reason step-by-step using only the fabric evidence."""
 

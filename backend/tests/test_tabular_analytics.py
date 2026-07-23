@@ -171,3 +171,81 @@ def test_sample_preview_must_not_equal_full_counts():
     assert full_result["row_total"] == 5247
     assert sample_result["row_total"] == 5
     assert full_result["metrics"]["counts"] != sample_result["metrics"]["counts"]
+
+
+def test_group_by_outcome_counts():
+    rows = _cyp_like_rows(90)
+    result = analyze_tabular_query(
+        rows,
+        "Count compounds group by PUBCHEM_ACTIVITY_OUTCOME",
+        fabric_name="CYP",
+    )
+    assert result is not None
+    assert result["intent"] == "group_by_counts"
+    assert result["group_by"] == "PUBCHEM_ACTIVITY_OUTCOME"
+    assert result["metrics"]["counts"]["Active"] == 30
+    assert "| PUBCHEM_ACTIVITY_OUTCOME |" in result["answer"]
+
+
+def test_group_by_average_score():
+    rows = _cyp_like_rows(90)
+    result = analyze_tabular_query(
+        rows,
+        "What is the average PUBCHEM_ACTIVITY_SCORE by PUBCHEM_ACTIVITY_OUTCOME?",
+        fabric_name="CYP",
+    )
+    assert result is not None
+    assert result["intent"] == "group_average"
+    assert result["group_by"] == "PUBCHEM_ACTIVITY_OUTCOME"
+    assert "| PUBCHEM_ACTIVITY_OUTCOME | Count | Average | Min | Max |" in result["answer"]
+
+
+def test_filter_active_with_score_gt():
+    rows = _cyp_like_rows(150)
+    result = analyze_tabular_query(
+        rows,
+        "How many Active compounds with PUBCHEM_ACTIVITY_SCORE > 40?",
+        fabric_name="CYP",
+    )
+    assert result is not None
+    assert result["intent"] in {"filtered_count", "filtered_value_counts", "filtered_empty"}
+    expected = sum(
+        1
+        for r in rows
+        if r["PUBCHEM_ACTIVITY_OUTCOME"] == "Active" and float(r["PUBCHEM_ACTIVITY_SCORE"]) > 40
+    )
+    assert result["row_total"] == expected
+    assert "Filter:" in result["answer"] or "| Filter |" in result["answer"]
+
+
+def test_filter_where_outcome_equals():
+    rows = _cyp_like_rows(60)
+    result = analyze_tabular_query(
+        rows,
+        "How many rows where PUBCHEM_ACTIVITY_OUTCOME = Inactive?",
+        fabric_name="CYP",
+    )
+    assert result is not None
+    assert result["row_total"] == 20
+    assert result["intent"] in {"filtered_count", "filtered_value_counts"}
+
+
+def test_intent_detects_group_by_and_filters():
+    cols = ["status", "score", "PUBCHEM_ACTIVITY_OUTCOME"]
+    assert is_analytical_query("group by status", columns=cols)
+    assert is_analytical_query("count by status", columns=cols)
+    assert is_analytical_query("average score by status", columns=cols)
+    assert is_analytical_query("rows where status = OK", columns=cols)
+    assert is_analytical_query("score > 40", columns=cols)
+    assert is_analytical_query("Show me PUBCHEM_ACTIVITY_OUTCOME breakdown", columns=cols)
+
+
+def test_analytics_snapshot_blocks_sample_reasoning():
+    from app.services.analytics.tabular_analytics import build_fabric_analytics_snapshot
+
+    rows = _cyp_like_rows(100)
+    snap = build_fabric_analytics_snapshot(rows, fabric_name="CYP")
+    assert snap is not None
+    assert "FULL-FABRIC ANALYTICS SNAPSHOT" in snap
+    assert "Indexed row chunks: 100" in snap
+    assert "sample chunks" in snap.lower() or "Do NOT compute" in snap
