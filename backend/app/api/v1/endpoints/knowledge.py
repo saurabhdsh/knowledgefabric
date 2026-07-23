@@ -52,6 +52,80 @@ FABRICS_STORAGE_FILE = os.path.join(settings.DATA_DIR, "fabrics.json")
 os.makedirs(settings.DATA_DIR, exist_ok=True)
 
 
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _resolve_query_retrieval(request: dict, fabric: Dict[str, Any]) -> Dict[str, Any]:
+    """Decide how many chunks to retrieve for /query (Test LLM).
+
+    Default: retrieve the **entire** fabric (ranked by similarity). Callers may
+    still pass an explicit positive ``top_k`` to limit, or ``retrieve_all=false``.
+    """
+    retrieve_all = request.get("retrieve_all")
+    if retrieve_all is None:
+        retrieve_all = settings.QUERY_RETRIEVE_ALL
+    else:
+        retrieve_all = _truthy(retrieve_all)
+
+    raw_top_k = request.get("top_k", request.get("limit"))
+    top_k: Optional[int] = None
+    if raw_top_k is not None and str(raw_top_k).strip() != "":
+        try:
+            top_k = int(raw_top_k)
+        except (TypeError, ValueError):
+            top_k = None
+
+    # Explicit top_k <= 0 means "all"
+    if top_k is not None and top_k <= 0:
+        retrieve_all = True
+        top_k = 0
+
+    if retrieve_all:
+        return {"retrieve_all": True, "top_k": 0}
+
+    if top_k is None:
+        # No explicit limit and retrieve_all disabled → still use a large window
+        # based on fabric size rather than the old hard-coded 5.
+        meta = int(fabric.get("total_chunks") or fabric.get("document_count") or 0)
+        return {"retrieve_all": False, "top_k": max(meta, 50)}
+
+    return {"retrieve_all": False, "top_k": max(1, top_k)}
+
+
+def _pack_context_chunks(chunks: List[str], max_chars: Optional[int] = None) -> tuple[str, Dict[str, Any]]:
+    """Join retrieved chunks; if over budget, keep highest-ranked prefix and note truncation."""
+    budget = int(max_chars if max_chars is not None else settings.QUERY_MAX_CONTEXT_CHARS)
+    if budget <= 0:
+        budget = 350_000
+    used: List[str] = []
+    size = 0
+    truncated = False
+    for chunk in chunks:
+        piece = str(chunk or "")
+        extra = len(piece) + (2 if used else 0)
+        if size + extra > budget:
+            truncated = True
+            break
+        used.append(piece)
+        size += extra
+    text = "\n\n".join(used) if used else "No specific content found for this query."
+    if truncated:
+        text += (
+            f"\n\n[Note: Retrieved {len(chunks)} fabric chunks; packed {len(used)} into the "
+            f"model context budget of {budget} characters. Remaining lower-ranked chunks were omitted.]"
+        )
+    return text, {
+        "retrieved_chunks": len(chunks),
+        "packed_chunks": len(used),
+        "context_truncated": truncated,
+        "context_chars": len(text),
+        "context_budget_chars": budget,
+    }
+
+
 # ---------------------------------------------------------------------------
 # BYOK (Bring-Your-Own-Key) helper
 # ---------------------------------------------------------------------------
@@ -2984,10 +3058,12 @@ async def retrieve_knowledge_chunks(fabric_id: str, request: dict):
     if not query:
         raise HTTPException(status_code=400, detail="`query` is required")
     try:
-        top_k = int(request.get("top_k") or 5)
+        top_k = int(request.get("top_k") or 0)
     except (TypeError, ValueError):
-        top_k = 5
-    top_k = max(1, min(top_k, 25))  # clamp
+        top_k = 0
+    retrieve_all = _truthy(request.get("retrieve_all")) or top_k <= 0
+    if not retrieve_all:
+        top_k = max(1, top_k)
 
     fabric = user_fabric(fabric_id)
     if not fabric:
@@ -3000,6 +3076,7 @@ async def retrieve_knowledge_chunks(fabric_id: str, request: dict):
             query,
             top_k=top_k,
             use_graph=use_graph,
+            retrieve_all=retrieve_all,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Retrieval failed: {exc}")
@@ -3022,6 +3099,7 @@ async def retrieve_knowledge_chunks(fabric_id: str, request: dict):
             "fabric_name": fabric.get("name"),
             "query": query,
             "top_k": top_k,
+            "retrieve_all": retrieve_all,
             "chunks": chunks,
             "graph_context": retrieval.get("graph_context"),
             "entities": retrieval.get("entities"),
@@ -3171,13 +3249,23 @@ async def query_knowledge_base(
         # Get real knowledge fabric content
         context_chunks = []
         search_results = []
+        retrieval_meta: Dict[str, Any] = {}
+        retrieval_opts = _resolve_query_retrieval(request, fabric)
+        query_top_k = retrieval_opts["top_k"]
+        query_retrieve_all = retrieval_opts["retrieve_all"]
+        print(
+            f"Query retrieval plan for {fabric_id}: retrieve_all={query_retrieve_all}, "
+            f"top_k={query_top_k}, fabric_chunks={fabric.get('total_chunks')}"
+        )
         
         # Check if this is a composite, database-based, or PDF-based fabric
         if fabric.get("source_type") == "composite":
             print(f"Processing composite fabric: {fabric_id}")
             # Prefer unified composite index first (materialized at create time).
             try:
-                merged_results = vector_service.search_similar_chunks(query, fabric_id, top_k=6)
+                merged_results = vector_service.search_similar_chunks(
+                    query, fabric_id, top_k=query_top_k
+                )
                 for result in merged_results:
                     if isinstance(result, dict):
                         content = result.get('content', '')
@@ -3195,7 +3283,9 @@ async def query_knowledge_base(
             if not context_chunks:
                 for source_id in source_ids:
                     try:
-                        source_results = vector_service.search_similar_chunks(query, source_id, top_k=3)
+                        source_results = vector_service.search_similar_chunks(
+                            query, source_id, top_k=query_top_k
+                        )
                         for result in source_results:
                             if isinstance(result, dict):
                                 content = result.get('content', '')
@@ -3215,7 +3305,12 @@ async def query_knowledge_base(
         elif fabric.get("source_type") == "database":
             print(f"Processing database-based fabric: {fabric_id}")
             try:
-                retrieval = retrieval_orchestrator.retrieve(fabric_id, query, top_k=5)
+                retrieval = retrieval_orchestrator.retrieve(
+                    fabric_id,
+                    query,
+                    top_k=query_top_k,
+                    retrieve_all=query_retrieve_all,
+                )
                 ontology_ctx = retrieval_orchestrator.build_query_context(fabric_id, retrieval)
                 if ontology_ctx:
                     context_chunks.append(f"Ontology & graph context:\n{ontology_ctx}")
@@ -3227,13 +3322,10 @@ async def query_knowledge_base(
                         content = result.get('content', '')
                         score = result.get('similarity_score', 0.8)
                         context_chunks.append(f"Content Chunk {i+1}: {content}\nRelevance Score: {score:.3f}")
-                        print(f"Added database chunk {i+1} with score {score:.3f}")
                     else:
-                        # Fallback for unexpected result format
                         content = str(result)
                         score = 0.8
                         context_chunks.append(f"Content Chunk {i+1}: {content}\nRelevance Score: {score:.3f}")
-                        print(f"Added database chunk {i+1} with fallback score {score:.3f}")
                 
                 # If no results from vector database, use fabric metadata
                 if not context_chunks:
@@ -3247,95 +3339,75 @@ async def query_knowledge_base(
                 fabric_info = f"Knowledge Fabric: {fabric['name']}\nDocument Count: {fabric.get('document_count', 0)}\nTotal Chunks: {fabric.get('total_chunks', 0)}\nModel Status: {fabric.get('model_status', 'unknown')}\nConnection Info: {fabric.get('connection_info', {})}"
                 context_chunks.append(f"Content: {fabric_info}\nRelevance Score: 0.80")
         else:
-            # Handle PDF-based fabrics (existing logic)
+            # PDF / document fabrics: prefer full vector index for the fabric, then PDF text.
             try:
-                # Get the actual document content from the uploaded file
-                upload_dir = settings.UPLOAD_DIR
-                fabric_files = []
-                
-                # Look for files related to this fabric
-                if os.path.exists(upload_dir):
-                    print(f"Looking for files in upload directory: {upload_dir}")
-                    print(f"Fabric ID: {fabric_id}")
-                    # Extract the UUID part from fabric_id (the part after 'fabric_' and before '_pdf_')
-                    if fabric_id.startswith('fabric_'):
-                        fabric_uuid = fabric_id.split('_')[1] if len(fabric_id.split('_')) > 1 else fabric_id
-                    else:
-                        fabric_uuid = fabric_id
-                    print(f"Looking for UUID: {fabric_uuid}")
-                    
-                    for filename in os.listdir(upload_dir):
-                        if filename.endswith('.pdf'):
-                            print(f"Checking PDF file: {filename}")
-                            # Check if the filename contains the UUID
-                            if fabric_uuid in filename:
-                                print(f"Found matching file: {filename}")
-                                fabric_files.append(filename)
-                    
-                    print(f"Found {len(fabric_files)} matching files: {fabric_files}")
-                
-                # If we have the actual PDF, extract content
-                if fabric_files:
-                    print(f"Processing {len(fabric_files)} PDF files")
-                    import PyPDF2
-                    pdf_content = ""
-                    
-                    for pdf_file in fabric_files:
-                        pdf_path = os.path.join(upload_dir, pdf_file)
-                        print(f"Reading PDF: {pdf_path}")
-                        try:
-                            with open(pdf_path, 'rb') as file:
-                                pdf_reader = PyPDF2.PdfReader(file)
-                                print(f"PDF has {len(pdf_reader.pages)} pages")
-                                for page_num, page in enumerate(pdf_reader.pages):
-                                    page_text = page.extract_text()
-                                    pdf_content += page_text + "\n"
-                                    print(f"Page {page_num + 1} extracted {len(page_text)} characters")
-                        except Exception as e:
-                            print(f"Error reading PDF {pdf_file}: {e}")
-                    
-                    print(f"Total extracted content length: {len(pdf_content)} characters")
-                    if pdf_content.strip():
-                        print("Content extracted successfully, creating chunks...")
-                        # Split content into chunks for better LLM processing
-                        content_chunks = pdf_content.split('\n\n')
-                        print(f"Created {len(content_chunks)} content chunks")
-                        for i, chunk in enumerate(content_chunks[:3]):  # Use first 3 chunks
-                            if chunk.strip():
-                                context_chunks.append(f"Content Chunk {i+1}: {chunk.strip()}\nRelevance Score: {0.9 - i*0.1}")
-                                print(f"Added chunk {i+1} with {len(chunk.strip())} characters")
-                    else:
-                        print("No content extracted, using fallback")
-                        # Fallback to document-based content
-                        context_chunks.append("Content: The document contains comprehensive information about claims processing, including detailed workflows, procedures, and stakeholder information. It serves as a reference guide for claims management with various types of claims and their processing requirements.\nRelevance Score: 0.85")
+                vector_hits = vector_service.search_similar_chunks(
+                    query, fabric_id, top_k=query_top_k
+                )
+                for i, result in enumerate(vector_hits):
+                    if isinstance(result, dict):
+                        content = result.get("content", "")
+                        score = result.get("similarity_score", 0.8)
+                        if content and str(content).strip():
+                            context_chunks.append(
+                                f"Content Chunk {i+1}: {content}\nRelevance Score: {score:.3f}"
+                            )
+
+                if context_chunks:
+                    print(f"Using {len(context_chunks)} vector chunks for document fabric {fabric_id}")
                 else:
-                    print("No PDF files found for this fabric")
-                    # Use fabric metadata to create context
-                    fabric_info = f"Knowledge Fabric: {fabric['name']}\nDocument Count: {fabric.get('document_count', 0)}\nTotal Chunks: {fabric.get('total_chunks', 0)}\nModel Status: {fabric.get('model_status', 'unknown')}"
-                    context_chunks.append(f"Content: {fabric_info}\nRelevance Score: 0.80")
-                    
+                    # Fall back to reading uploaded PDF text in full (no 3-chunk cap).
+                    upload_dir = settings.UPLOAD_DIR
+                    fabric_files = []
+                    if os.path.exists(upload_dir):
+                        if fabric_id.startswith('fabric_'):
+                            fabric_uuid = fabric_id.split('_')[1] if len(fabric_id.split('_')) > 1 else fabric_id
+                        else:
+                            fabric_uuid = fabric_id
+                        for filename in os.listdir(upload_dir):
+                            if filename.endswith('.pdf') and fabric_uuid in filename:
+                                fabric_files.append(filename)
+
+                    if fabric_files:
+                        import PyPDF2
+                        pdf_content = ""
+                        for pdf_file in fabric_files:
+                            pdf_path = os.path.join(upload_dir, pdf_file)
+                            try:
+                                with open(pdf_path, 'rb') as file:
+                                    pdf_reader = PyPDF2.PdfReader(file)
+                                    for page in pdf_reader.pages:
+                                        pdf_content += (page.extract_text() or "") + "\n"
+                            except Exception as e:
+                                print(f"Error reading PDF {pdf_file}: {e}")
+
+                        if pdf_content.strip():
+                            content_chunks = [c.strip() for c in pdf_content.split('\n\n') if c.strip()]
+                            if not content_chunks:
+                                content_chunks = [pdf_content.strip()]
+                            for i, chunk in enumerate(content_chunks):
+                                context_chunks.append(
+                                    f"Content Chunk {i+1}: {chunk}\nRelevance Score: {max(0.5, 0.95 - i * 0.001):.3f}"
+                                )
+                        else:
+                            fabric_info = f"Knowledge Fabric: {fabric['name']}\nDocument Count: {fabric.get('document_count', 0)}\nTotal Chunks: {fabric.get('total_chunks', 0)}"
+                            context_chunks.append(f"Content: {fabric_info}\nRelevance Score: 0.80")
+                    else:
+                        fabric_info = f"Knowledge Fabric: {fabric['name']}\nDocument Count: {fabric.get('document_count', 0)}\nTotal Chunks: {fabric.get('total_chunks', 0)}\nModel Status: {fabric.get('model_status', 'unknown')}"
+                        context_chunks.append(f"Content: {fabric_info}\nRelevance Score: 0.80")
             except Exception as e:
                 print(f"Error retrieving knowledge fabric content: {e}")
-                # Fallback content based on query
-                if "stakeholders" in query.lower():
-                    context_chunks.append("Content: The document discusses various stakeholders involved in claims processing including claims processors, medical reviewers, and administrative staff.\nRelevance Score: 0.95")
-                elif "claims" in query.lower():
-                    context_chunks.append("Content: The document contains detailed information about claims processing procedures, validation workflows, and approval processes.\nRelevance Score: 0.90")
-                elif "purpose" in query.lower():
-                    context_chunks.append("Content: The document serves as a comprehensive guide for claims processing, providing detailed procedures and workflows for claims management.\nRelevance Score: 0.85")
-                else:
-                    context_chunks.append("Content: The document contains comprehensive information about claims processing, including workflows, procedures, and stakeholder information.\nRelevance Score: 0.80")
+                fabric_info = f"Knowledge Fabric: {fabric['name']}\nDocument Count: {fabric.get('document_count', 0)}\nTotal Chunks: {fabric.get('total_chunks', 0)}"
+                context_chunks.append(f"Content: {fabric_info}\nRelevance Score: 0.80")
         
         # Use configured LLM provider (OpenAI direct or AWS Bedrock)
         is_valid, message = api_key_service.validate_provider(llm_provider)
         fallback_answer = (
             f"Based on the document content in '{fabric['name']}':\n\n"
             "Here's what I found:\n\n"
-            "• The document contains comprehensive information about claims processing\n"
-            "• It includes detailed workflows, procedures, and stakeholder information\n"
-            "• Various types of claims and their processing requirements are discussed\n"
-            "• The document serves as a reference guide for claims management\n\n"
-            "This information is based on the most relevant sections of your document."
+            "• The knowledge fabric was queried but the LLM provider was unavailable\n"
+            "• Retry after confirming Bedrock/OpenAI configuration\n"
+            f"• Retrieved context chunks available: {len(context_chunks)}\n"
         )
 
         if not is_valid:
@@ -3350,14 +3422,14 @@ async def query_knowledge_base(
                     source_type=fabric.get("source_type"),
                 )
 
-                context_text = '\n\n'.join(context_chunks) if context_chunks else 'No specific content found for this query.'
+                context_text, retrieval_meta = _pack_context_chunks(context_chunks)
                 user_prompt = f"""Question: {query}
 
-                    Knowledge Fabric Content:
+                    Knowledge Fabric Content ({retrieval_meta.get('packed_chunks', 0)} of {retrieval_meta.get('retrieved_chunks', 0)} retrieved chunks included):
                     {context_text}
 
                     Please analyze the above content from the knowledge fabric and provide a detailed, comprehensive answer to the question.
-                    If the content contains specific information relevant to the question, include it in your response.
+                    Use as much of the provided fabric evidence as needed. Do not invent rows or facts that are not present.
                     If the content doesn't directly address the question, please state this clearly.
                     For complex multi-hop questions, reason step-by-step using only the fabric evidence."""
 
@@ -3368,7 +3440,7 @@ async def query_knowledge_base(
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    max_tokens=1200,
+                    max_tokens=settings.QUERY_MAX_COMPLETION_TOKENS,
                     temperature=0.25,
                     api_key=llm_key_for_call,
                 )
@@ -3380,12 +3452,7 @@ async def query_knowledge_base(
         elif llm_provider == "gemini":
             answer = (
                 f"Based on the document content in '{fabric['name']}':\n\n"
-                "Gemini integration is coming soon. For now, here's what I found:\n\n"
-                "• The document contains comprehensive information about claims processing\n"
-                "• It includes detailed workflows, procedures, and stakeholder information\n"
-                "• Various types of claims and their processing requirements are discussed\n"
-                "• The document serves as a reference guide for claims management\n\n"
-                "This information is based on the most relevant sections of your document."
+                "Gemini integration is coming soon. For now, retry with OpenAI or Bedrock."
             )
             confidence = 0.6
         else:
@@ -3429,6 +3496,12 @@ async def query_knowledge_base(
                 "processing_time": processing_time,
                 "weave_domain": normalize_fabric_kind(fabric.get("weave_domain")),
                 "fabric_kind_label": fabric_kind_label(fabric.get("weave_domain")),
+                "retrieve_all": query_retrieve_all,
+                "retrieval": retrieval_meta or {
+                    "retrieved_chunks": len(context_chunks),
+                    "packed_chunks": len(context_chunks),
+                    "context_truncated": False,
+                },
             },
             error=None
         )

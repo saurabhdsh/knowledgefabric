@@ -126,6 +126,14 @@ class Settings(BaseSettings):
     DEFAULT_LLM_PROVIDER: str = os.environ.get("DEFAULT_LLM_PROVIDER", "openai")
     ONTOLOGY_LLM_PROVIDER: Optional[str] = os.environ.get("ONTOLOGY_LLM_PROVIDER")
     OPENAI_QUERY_MODEL: str = os.environ.get("OPENAI_QUERY_MODEL", "gpt-4")
+    # Test LLM /query: retrieve the full fabric by default (no tiny top_k window).
+    QUERY_RETRIEVE_ALL: bool = os.environ.get("QUERY_RETRIEVE_ALL", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
+    # Soft pack limit so huge fabrics still fit model context (~200k tokens).
+    # Retrieval itself is not capped; only prompt packing may truncate with a notice.
+    QUERY_MAX_CONTEXT_CHARS: int = int(os.environ.get("QUERY_MAX_CONTEXT_CHARS", str(350_000)))
+    QUERY_MAX_COMPLETION_TOKENS: int = int(os.environ.get("QUERY_MAX_COMPLETION_TOKENS", "4000"))
     ENABLED_LLM_PROVIDERS_RAW: str = Field(
         default="openai,bedrock",
         validation_alias="ENABLED_LLM_PROVIDERS",

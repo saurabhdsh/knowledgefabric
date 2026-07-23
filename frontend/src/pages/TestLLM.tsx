@@ -100,7 +100,9 @@ const TestLLM: React.FC = () => {
         },
         body: JSON.stringify({
           query: testQuery,
-          llm_provider: selectedLLM
+          llm_provider: selectedLLM,
+          retrieve_all: true,
+          top_k: 0,
         })
       });
 
@@ -114,6 +116,7 @@ const TestLLM: React.FC = () => {
         confidence: data.success ? data.data.confidence || 0.85 : 0.0,
         timestamp: new Date().toISOString(),
         relevantChunks: data.success ? (data.data.relevant_chunks ?? data.data.relevant_chunks_found ?? 0) : 0,
+        packedChunks: data.success ? (data.data.retrieval?.packed_chunks ?? data.data.relevant_chunks_found ?? 0) : 0,
         processingTime: data.success ? data.data.processing_time || '1.2s' : '0s'
       };
 
@@ -310,7 +313,7 @@ const TestLLM: React.FC = () => {
                   <div className="flex items-center justify-between text-xs text-gray-500">
                     <span>Confidence: {(result.confidence * 100).toFixed(1)}%</span>
                     <span>Processing: {result.processingTime}</span>
-                    <span>Chunks: {result.relevantChunks}</span>
+                    <span>Chunks: {result.relevantChunks}{result.packedChunks && result.packedChunks !== result.relevantChunks ? ` (packed ${result.packedChunks})` : ''}</span>
                   </div>
                 </div>
               ))

@@ -408,9 +408,35 @@ class VectorService:
         doc_ids = self.add_documents(doc_list, source_id)
         return source_id
 
-    def search_similar_chunks(self, query: str, source_id: str = None, top_k: int = 3) -> List[Dict[str, Any]]:
-        """Search for similar chunks in the knowledge base"""
+    def count_source_documents(self, source_id: str) -> int:
+        """Return how many chunks are stored for a fabric/source id."""
         try:
+            results = self.documents_collection.get(where={"source_id": source_id})
+            docs = results.get("documents") if isinstance(results, dict) else None
+            return len(docs) if docs else 0
+        except Exception as e:
+            print(f"Error counting source documents for {source_id}: {e}")
+            return 0
+
+    def search_similar_chunks(self, query: str, source_id: str = None, top_k: int = 3) -> List[Dict[str, Any]]:
+        """Search for similar chunks in the knowledge base.
+
+        Pass ``top_k <= 0`` to retrieve **all** chunks for the source (ranked by
+        similarity). This is used by Test with LLM so answers are not capped at
+        a tiny fixed retrieval window.
+        """
+        try:
+            available = 0
+            if source_id:
+                available = self.count_source_documents(source_id)
+            if top_k is None or int(top_k) <= 0:
+                requested = available or 10_000
+            else:
+                requested = int(top_k)
+            if available > 0:
+                requested = min(requested, available)
+            requested = max(1, requested)
+
             # Create query embedding
             query_embedding = self.create_embeddings([query])[0]
             
@@ -422,7 +448,7 @@ class VectorService:
             # Search in collection
             results = self.documents_collection.query(
                 query_embeddings=[query_embedding],
-                n_results=top_k,
+                n_results=requested,
                 where=where_clause
             )
             

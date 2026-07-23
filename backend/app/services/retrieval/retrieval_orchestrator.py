@@ -21,18 +21,31 @@ class RetrievalOrchestrator:
         top_k: int = 5,
         graph_hops: int = 1,
         use_graph: Optional[bool] = None,
+        retrieve_all: bool = False,
     ) -> Dict[str, Any]:
         fabric = fabric_store.get(fabric_id)
         if not fabric:
             raise ValueError("Fabric not found")
 
-        top_k = max(1, min(top_k, 25))
+        if retrieve_all or top_k is None or int(top_k) <= 0:
+            # Full-fabric retrieval for Test LLM / comprehensive answers.
+            top_k = 0
+        else:
+            # Keep a sane upper bound for partner retrieve API defaults only when
+            # callers pass an explicit positive top_k without retrieve_all.
+            top_k = max(1, int(top_k))
+
         graph_enabled = use_graph if use_graph is not None else settings.USE_GRAPH_RETRIEVAL
         version_id = fabric.get("approved_ontology_version_id")
 
         trace: List[Dict[str, Any]] = []
         chunks = vector_service.search_similar_chunks(query, fabric_id, top_k=top_k)
-        trace.append({"stage": "vector_search", "count": len(chunks)})
+        trace.append({
+            "stage": "vector_search",
+            "count": len(chunks),
+            "retrieve_all": bool(retrieve_all or top_k <= 0),
+            "requested_top_k": top_k,
+        })
 
         graph_context: Dict[str, Any] = {"nodes": [], "edges": [], "paths": []}
         entities: List[Dict[str, Any]] = []
