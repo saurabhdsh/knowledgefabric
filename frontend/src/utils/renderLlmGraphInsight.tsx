@@ -11,6 +11,11 @@ const THEME_STYLES = {
     orderedNum: 'text-slate-500',
     strong: 'font-semibold text-slate-100',
     code: 'rounded bg-white/10 px-1.5 py-0.5 font-mono text-[13px] text-cyan-200/90',
+    tableWrap: 'my-3 overflow-x-auto rounded-lg border border-white/10',
+    table: 'min-w-full border-collapse text-left text-[13px]',
+    th: 'border-b border-white/10 bg-white/[0.04] px-3 py-2 font-semibold uppercase tracking-wide text-[10px] text-slate-400',
+    td: 'border-b border-white/[0.06] px-3 py-2 text-slate-200/95 tabular-nums',
+    trAlt: 'bg-white/[0.02]',
   },
   light: {
     heading: 'mt-5 border-b border-emerald-200/60 pb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700/80',
@@ -20,6 +25,11 @@ const THEME_STYLES = {
     orderedNum: 'text-gray-500',
     strong: 'font-semibold text-gray-900',
     code: 'rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[13px] text-emerald-800',
+    tableWrap: 'my-3 overflow-x-auto rounded-lg border border-gray-200',
+    table: 'min-w-full border-collapse text-left text-sm',
+    th: 'border-b border-gray-200 bg-gray-50 px-3 py-2 font-semibold uppercase tracking-wide text-[10px] text-gray-500',
+    td: 'border-b border-gray-100 px-3 py-2 text-gray-800 tabular-nums',
+    trAlt: 'bg-gray-50/60',
   },
 } as const;
 
@@ -63,8 +73,34 @@ function renderInlineMarkdown(text: string, theme: LlmMarkdownTheme): React.Reac
   return nodes.length > 0 ? nodes : [text];
 }
 
+function isTableSeparator(line: string): boolean {
+  // | --- | :---: | ---: |
+  const trimmed = line.trim();
+  if (!trimmed.includes('|')) return false;
+  const parts = trimmed
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((c) => c.trim());
+  if (parts.length === 0) return false;
+  return parts.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function splitTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  return trimmed.split('|').map((c) => c.trim());
+}
+
+function looksLikeTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.includes('|')) return false;
+  if (isTableSeparator(trimmed)) return true;
+  // Require at least one pipe with content on both sides or leading/trailing pipes
+  return /^\|?.+\|.+\|?$/.test(trimmed) && splitTableRow(trimmed).length >= 2;
+}
+
 /**
- * Renders LLM markdown (headings, lists, bold, code) as formatted UI — no raw ## or ** visible.
+ * Renders LLM markdown (headings, lists, bold, code, tables) as formatted UI.
  */
 export function renderLlmMarkdown(raw: string, theme: LlmMarkdownTheme = 'dark'): React.ReactNode {
   const styles = THEME_STYLES[theme];
@@ -84,6 +120,53 @@ export function renderLlmMarkdown(raw: string, theme: LlmMarkdownTheme = 'dark')
       prevContent = false;
       continue;
     }
+
+    // Markdown table block
+    if (looksLikeTableRow(trimmed)) {
+      const tableLines: string[] = [];
+      let j = i;
+      while (j < lines.length && looksLikeTableRow(lines[j].trim())) {
+        tableLines.push(lines[j].trim());
+        j += 1;
+      }
+      const dataLines = tableLines.filter((line) => !isTableSeparator(line));
+      if (dataLines.length >= 1) {
+        const header = splitTableRow(dataLines[0]);
+        const body = dataLines.slice(1).map(splitTableRow);
+        out.push(
+          <div key={`t-${k++}`} className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  {header.map((cell, idx) => (
+                    <th key={`th-${idx}`} className={styles.th}>
+                      {renderInlineMarkdown(cell, theme)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              {body.length > 0 && (
+                <tbody>
+                  {body.map((row, rIdx) => (
+                    <tr key={`tr-${rIdx}`} className={rIdx % 2 === 1 ? styles.trAlt : undefined}>
+                      {header.map((_, cIdx) => (
+                        <td key={`td-${rIdx}-${cIdx}`} className={styles.td}>
+                          {renderInlineMarkdown(row[cIdx] ?? '', theme)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              )}
+            </table>
+          </div>
+        );
+        prevContent = true;
+        i = j - 1;
+        continue;
+      }
+    }
+
     prevContent = true;
 
     const heading = trimmed.match(/^(#{1,6})\s+(.*)$/);

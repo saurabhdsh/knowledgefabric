@@ -31,6 +31,12 @@ from app.services.llm.fabric_intelligence import (
     fabric_kind_label,
     normalize_fabric_kind,
 )
+from app.services.analytics.tabular_analytics import (
+    analyze_source_documents,
+    is_analytical_query,
+    format_value_counts_answer,
+    markdown_table,
+)
 from app.utils.json_sanitize import sanitize_for_json
 import time
 import json
@@ -323,6 +329,47 @@ def _is_duplicate_count_query(query: str) -> bool:
         return False
     duplicate_tokens = ("duplicate", "duplicates", "near duplicate", "corrected claim", "match type")
     return any(token in q for token in duplicate_tokens)
+
+
+def _deterministic_analytical_answer_for_source(
+    source_id: str,
+    query: str,
+    *,
+    fabric_name: str,
+) -> Optional[Dict[str, Any]]:
+    """Run full-fabric tabular analytics (counts, distributions, numeric aggs)."""
+    if not is_analytical_query(query):
+        return None
+    try:
+        source_docs = vector_service.get_source_documents(source_id)
+    except Exception as exc:
+        print(f"Deterministic analytical fetch failed for {source_id}: {exc}")
+        return None
+    documents = source_docs.get("documents") or []
+    metadatas = source_docs.get("metadatas") or []
+    if not documents:
+        return None
+    return analyze_source_documents(
+        documents,
+        query,
+        metadatas=metadatas,
+        fabric_name=fabric_name,
+    )
+
+
+def _fabric_metadata_context_without_samples(fabric: Dict[str, Any]) -> str:
+    """Build metadata context for fallbacks — never include sample_rows (misleading to LLM)."""
+    conn = dict(fabric.get("connection_info") or {})
+    conn.pop("sample_rows", None)
+    return (
+        f"Knowledge Fabric: {fabric.get('name')}\n"
+        f"Document Count: {fabric.get('document_count', 0)}\n"
+        f"Total Chunks: {fabric.get('total_chunks', 0)}\n"
+        f"Model Status: {fabric.get('model_status', 'unknown')}\n"
+        f"Indexed vector chunks: {vector_service.count_source_documents(str(fabric.get('id') or ''))}\n"
+        f"Connection Info (sample_rows omitted): {conn}\n"
+        "NOTE: sample_rows are preview metadata only and must not be used for totals or distributions."
+    )
 
 
 def _deterministic_duplicate_counts_for_source(source_id: str) -> Optional[Dict[str, Any]]:
@@ -3155,6 +3202,39 @@ async def query_knowledge_base(
                 error="Query is required"
             )
         
+        # True analytical queries (counts, distributions, numeric aggregates, unique)
+        # scan ALL indexed row chunks — never sample_rows / tiny top-k windows.
+        if fabric.get("source_type") == "database" and is_analytical_query(query):
+            # Duplicate-specific counts keep their dedicated formatter below.
+            if not _is_duplicate_count_query(query):
+                analytical = _deterministic_analytical_answer_for_source(
+                    fabric_id,
+                    query,
+                    fabric_name=str(fabric.get("name") or fabric_id),
+                )
+                if analytical and analytical.get("answer"):
+                    row_total = int(analytical.get("row_total", 0) or 0)
+                    processing_time = f"{time.time() - processing_start:.1f}s"
+                    return APIResponse(
+                        success=True,
+                        message="Knowledge base query completed",
+                        data={
+                            "fabric_id": fabric_id,
+                            "fabric_name": fabric["name"],
+                            "query": query,
+                            "answer": analytical["answer"],
+                            "confidence": 0.98,
+                            "model_status": fabric.get("model_status"),
+                            "relevant_chunks_found": row_total,
+                            "relevant_chunks": row_total,
+                            "llm_provider": "deterministic",
+                            "analytics_intent": analytical.get("intent"),
+                            "analytics_metrics": analytical.get("metrics"),
+                            "processing_time": processing_time,
+                        },
+                        error=None,
+                    )
+
         # For count-intent duplicate queries, bypass top-k retrieval and compute exact counts deterministically.
         if fabric.get("source_type") == "database" and _is_duplicate_count_query(query):
             deterministic_counts = _deterministic_duplicate_counts_for_source(fabric_id)
@@ -3165,23 +3245,32 @@ async def query_knowledge_base(
                 pair_breakdown = deterministic_counts.get("duplicate_pair_breakdown", {}) or {}
 
                 if row_total > 0 and row_breakdown:
-                    not_duplicate = int(row_breakdown.get("Not Duplicate", 0))
-                    true_dup = int(row_breakdown.get("True Duplicate", 0))
-                    near_dup = int(row_breakdown.get("Near Duplicate", 0))
-                    corrected = int(row_breakdown.get("Corrected Claim", 0))
-                    answer = (
-                        f"Total rows: {row_total}\n"
-                        f"Not Duplicate: {not_duplicate}\n"
-                        f"True Duplicate: {true_dup}\n"
-                        f"Near Duplicate: {near_dup}\n"
-                        f"Corrected Claim: {corrected}"
+                    answer = format_value_counts_answer(
+                        str(fabric.get("name") or fabric_id),
+                        "duplicate_match_type",
+                        {str(k): int(v) for k, v in row_breakdown.items()},
+                        include_pct=True,
                     )
                 else:
-                    pair_breakdown_text = ", ".join([f"{k}: {v}" for k, v in pair_breakdown.items()]) if pair_breakdown else "No match-type breakdown available"
-                    answer = (
-                        f"The fabric contains {pair_total} duplicate-linked pairs "
-                        f"(deterministic count across all indexed chunks). "
-                        f"Breakdown: {pair_breakdown_text}."
+                    pair_rows = [[str(k), int(v)] for k, v in pair_breakdown.items()]
+                    if pair_rows:
+                        pair_rows.append(["**Total**", pair_total])
+                        table = markdown_table(["Match type", "Count"], pair_rows)
+                    else:
+                        table = markdown_table(
+                            ["Metric", "Value"],
+                            [["Duplicate-linked pairs", pair_total]],
+                        )
+                    answer = "\n".join(
+                        [
+                            "## Summary",
+                            f"Duplicate-linked pairs in **{fabric.get('name') or fabric_id}**.",
+                            "",
+                            table,
+                            "",
+                            "### Notes",
+                            "- Deterministic count across **all indexed chunks**, not preview `sample_rows`.",
+                        ]
                     )
                 processing_time = f"{time.time() - processing_start:.1f}s"
                 return APIResponse(
@@ -3327,17 +3416,41 @@ async def query_knowledge_base(
                         score = 0.8
                         context_chunks.append(f"Content Chunk {i+1}: {content}\nRelevance Score: {score:.3f}")
                 
-                # If no results from vector database, use fabric metadata
+                # If orchestrator returned nothing, load every indexed chunk directly.
                 if not context_chunks:
-                    print("No vector database results, using fabric metadata")
-                    fabric_info = f"Knowledge Fabric: {fabric['name']}\nDocument Count: {fabric.get('document_count', 0)}\nTotal Chunks: {fabric.get('total_chunks', 0)}\nModel Status: {fabric.get('model_status', 'unknown')}\nConnection Info: {fabric.get('connection_info', {})}"
+                    print("No orchestrator chunks; loading full source index via list_source_chunks")
+                    try:
+                        all_chunks = vector_service.list_source_chunks(fabric_id)
+                        for i, result in enumerate(all_chunks):
+                            content = result.get("content", "") if isinstance(result, dict) else str(result)
+                            if content and str(content).strip():
+                                context_chunks.append(
+                                    f"Content Chunk {i+1}: {content}\nRelevance Score: 0.75"
+                                )
+                    except Exception as list_exc:
+                        print(f"list_source_chunks failed for {fabric_id}: {list_exc}")
+
+                # Last resort: fabric metadata WITHOUT sample_rows (preview only — not totals).
+                if not context_chunks:
+                    print("No vector documents indexed; using fabric metadata without sample_rows")
+                    fabric_info = _fabric_metadata_context_without_samples(fabric)
                     context_chunks.append(f"Content: {fabric_info}\nRelevance Score: 0.80")
-                    
+
             except Exception as e:
                 print(f"Error searching vector database: {e}")
-                # Fallback to fabric metadata
-                fabric_info = f"Knowledge Fabric: {fabric['name']}\nDocument Count: {fabric.get('document_count', 0)}\nTotal Chunks: {fabric.get('total_chunks', 0)}\nModel Status: {fabric.get('model_status', 'unknown')}\nConnection Info: {fabric.get('connection_info', {})}"
-                context_chunks.append(f"Content: {fabric_info}\nRelevance Score: 0.80")
+                try:
+                    all_chunks = vector_service.list_source_chunks(fabric_id)
+                    for i, result in enumerate(all_chunks):
+                        content = result.get("content", "") if isinstance(result, dict) else str(result)
+                        if content and str(content).strip():
+                            context_chunks.append(
+                                f"Content Chunk {i+1}: {content}\nRelevance Score: 0.75"
+                            )
+                except Exception as list_exc:
+                    print(f"list_source_chunks fallback failed for {fabric_id}: {list_exc}")
+                if not context_chunks:
+                    fabric_info = _fabric_metadata_context_without_samples(fabric)
+                    context_chunks.append(f"Content: {fabric_info}\nRelevance Score: 0.80")
         else:
             # PDF / document fabrics: prefer full vector index for the fabric, then PDF text.
             try:

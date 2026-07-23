@@ -418,60 +418,99 @@ class VectorService:
             print(f"Error counting source documents for {source_id}: {e}")
             return 0
 
+    def list_source_chunks(self, source_id: str) -> List[Dict[str, Any]]:
+        """Return every stored chunk for a fabric/source (no top-k)."""
+        raw = self.get_source_documents(source_id)
+        documents = raw.get("documents") or []
+        metadatas = raw.get("metadatas") or []
+        ids = raw.get("ids") or []
+        chunks: List[Dict[str, Any]] = []
+        for i, content in enumerate(documents):
+            meta = metadatas[i] if i < len(metadatas) and isinstance(metadatas[i], dict) else {}
+            chunks.append({
+                "content": content,
+                "metadata": meta,
+                "similarity_score": 1.0,
+                "rank": i + 1,
+                "id": ids[i] if i < len(ids) else f"{source_id}_{i}",
+                "chunk_type": str(meta.get("chunk_type", "")).strip().lower(),
+            })
+        return chunks
+
     def search_similar_chunks(self, query: str, source_id: str = None, top_k: int = 3) -> List[Dict[str, Any]]:
         """Search for similar chunks in the knowledge base.
 
-        Pass ``top_k <= 0`` to retrieve **all** chunks for the source (ranked by
-        similarity). This is used by Test with LLM so answers are not capped at
-        a tiny fixed retrieval window.
+        Pass ``top_k <= 0`` to retrieve **all** chunks for the source. Full-fabric
+        loads use ``get`` (list all docs) so CSV/DB fabrics are never reduced to
+        a tiny similarity window or metadata sample_rows.
         """
         try:
-            available = 0
-            if source_id:
-                available = self.count_source_documents(source_id)
-            if top_k is None or int(top_k) <= 0:
-                requested = available or 10_000
-            else:
-                requested = int(top_k)
+            if source_id and (top_k is None or int(top_k) <= 0):
+                all_chunks = self.list_source_chunks(source_id)
+                if not all_chunks:
+                    return []
+                try:
+                    query_embedding = self.create_embeddings([query])[0]
+                    results = self.documents_collection.query(
+                        query_embeddings=[query_embedding],
+                        n_results=len(all_chunks),
+                        where={"source_id": source_id},
+                    )
+                    scored: Dict[str, float] = {}
+                    if results.get("ids") and results["ids"][0]:
+                        for doc_id, distance in zip(results["ids"][0], results["distances"][0]):
+                            scored[str(doc_id)] = 1.0 - float(distance)
+                    for chunk in all_chunks:
+                        chunk["similarity_score"] = scored.get(
+                            str(chunk.get("id")), float(chunk.get("similarity_score") or 0.5)
+                        )
+                    all_chunks.sort(
+                        key=lambda c: float(c.get("similarity_score") or 0.0),
+                        reverse=True,
+                    )
+                    for i, chunk in enumerate(all_chunks):
+                        chunk["rank"] = i + 1
+                except Exception as rank_exc:
+                    print(f"Full-fabric re-rank skipped for {source_id}: {rank_exc}")
+                return all_chunks
+
+            available = self.count_source_documents(source_id) if source_id else 0
+            requested = max(1, int(top_k) if top_k is not None else 3)
             if available > 0:
                 requested = min(requested, available)
-            requested = max(1, requested)
 
-            # Create query embedding
             query_embedding = self.create_embeddings([query])[0]
-            
-            # Prepare where clause for source filtering
-            where_clause = None
-            if source_id:
-                where_clause = {"source_id": source_id}
-            
-            # Search in collection
+            where_clause = {"source_id": source_id} if source_id else None
             results = self.documents_collection.query(
                 query_embeddings=[query_embedding],
                 n_results=requested,
-                where=where_clause
+                where=where_clause,
             )
-            
-            # Process results
+
             processed_results = []
             if results["documents"] and results["documents"][0]:
                 for i, (doc, metadata, distance) in enumerate(zip(
                     results["documents"][0],
                     results["metadatas"][0],
-                    results["distances"][0]
+                    results["distances"][0],
                 )):
                     processed_results.append({
                         "content": doc,
                         "metadata": metadata,
-                        "similarity_score": 1 - distance,  # Convert distance to similarity
-                        "rank": i + 1
+                        "similarity_score": 1 - distance,
+                        "rank": i + 1,
                     })
-            
             return processed_results
-            
+
         except Exception as e:
             print(f"Error in search_similar_chunks: {e}")
+            if source_id and (top_k is None or int(top_k) <= 0):
+                try:
+                    return self.list_source_chunks(source_id)
+                except Exception:
+                    return []
             return []
+
 
 # Global instance
 vector_service = VectorService() 

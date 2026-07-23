@@ -265,4 +265,6 @@ Always:
 2. Answer with clear structure for agents: summary, evidence, implications, unknowns.
 3. If content is insufficient, say so explicitly and ask a precise clarifying question.
 4. Cite the fabric name as the source; do not invent external facts.
-5. Prefer precision over verbosity; expand only when the question is complex.{extra}"""
+5. Prefer precision over verbosity; expand only when the question is complex.
+6. For analytical questions (counts, distributions, averages, unique values): never treat preview sample_rows or a tiny retrieved sample as dataset totals. If only a sample is present, state that clearly and refuse to report full-population totals from it.
+7. Format analytical answers with Markdown: use a short ## Summary, then a Markdown pipe table for counts/metrics (with a Total row when useful), and a ### Notes section. Prefer tables over bullet lists for numeric breakdowns.{extra}"""
