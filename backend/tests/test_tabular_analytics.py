@@ -249,3 +249,94 @@ def test_analytics_snapshot_blocks_sample_reasoning():
     assert "FULL-FABRIC ANALYTICS SNAPSHOT" in snap
     assert "Indexed row chunks: 100" in snap
     assert "sample chunks" in snap.lower() or "Do NOT compute" in snap
+
+
+def _claims_like_rows(n: int = 2000):
+    statuses = ["In Review", "Denied", "Paid", "Pending"]
+    payers = ["Aetna", "UHC", "Cigna"]
+    rows = []
+    for i in range(n):
+        rows.append(
+            {
+                "claim_id": f"CLM{i}",
+                "member_id": f"MBR{i % 100}",
+                "adjudication_status": statuses[i % len(statuses)],
+                "payer_name": payers[i % len(payers)],
+                "claim_amount": 100 + (i % 50),
+            }
+        )
+    return rows
+
+
+def test_soft_group_by_status_resolves_adjudication_status():
+    """NL 'group by status' must map to adjudication_status — not total_rows."""
+    rows = _claims_like_rows(2000)
+    result = analyze_tabular_query(
+        rows,
+        "Count claims group by status",
+        fabric_name="ClaimsData",
+    )
+    assert result is not None
+    assert result["intent"] == "group_by_counts"
+    assert result["group_by"] == "adjudication_status"
+    assert sum(result["metrics"]["counts"].values()) == 2000
+    assert result["metrics"]["counts"]["In Review"] == 500
+    assert "| adjudication_status |" in result["answer"]
+
+
+def test_exact_group_by_column_still_works():
+    rows = _claims_like_rows(100)
+    result = analyze_tabular_query(
+        rows,
+        "Count group by adjudication_status",
+        fabric_name="ClaimsData",
+    )
+    assert result is not None
+    assert result["intent"] == "group_by_counts"
+    assert result["group_by"] == "adjudication_status"
+
+
+def test_average_amount_by_payer_soft_names():
+    rows = _claims_like_rows(120)
+    result = analyze_tabular_query(
+        rows,
+        "Average amount by payer",
+        fabric_name="ClaimsData",
+    )
+    assert result is not None
+    assert result["intent"] == "group_average"
+    assert result["group_by"] == "payer_name"
+    assert result["field"] == "claim_amount"
+
+
+def test_how_many_claims_still_total_rows():
+    rows = _claims_like_rows(2000)
+    result = analyze_tabular_query(rows, "How many claims", fabric_name="ClaimsData")
+    assert result is not None
+    assert result["intent"] == "total_rows"
+    assert result["row_total"] == 2000
+
+
+def test_ambiguous_group_by_id_clarifies():
+    rows = _claims_like_rows(40)
+    result = analyze_tabular_query(
+        rows,
+        "Count claims group by id",
+        fabric_name="ClaimsData",
+    )
+    assert result is not None
+    assert result["intent"] == "group_by_unresolved"
+    assert "clarification" in result["answer"].lower() or "Candidate columns" in result["answer"]
+    assert "claim_id" in result["answer"] or "claim_id" in (result.get("metrics") or {}).get("candidates", [])
+
+
+def test_soft_group_by_outcome_on_cyp_fabric():
+    rows = _cyp_like_rows(90)
+    result = analyze_tabular_query(
+        rows,
+        "Count compounds group by outcome",
+        fabric_name="CYP",
+    )
+    assert result is not None
+    assert result["intent"] == "group_by_counts"
+    assert result["group_by"] == "PUBCHEM_ACTIVITY_OUTCOME"

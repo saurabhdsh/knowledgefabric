@@ -108,6 +108,22 @@ PREFERRED_NUMERIC_FIELDS = (
     "yield_pct",
 )
 
+# Soft NL tokens → column name patterns (suffix/contains), fabric-agnostic.
+COLUMN_SYNONYMS: Dict[str, Tuple[str, ...]] = {
+    "status": ("status", "outcome", "state", "disposition"),
+    "outcome": ("outcome", "result", "disposition"),
+    "result": ("result", "outcome"),
+    "payer": ("payer",),
+    "provider": ("provider",),
+    "amount": ("amount", "paid", "billed", "allowed", "cost", "price"),
+    "score": ("score",),
+    "label": ("label", "class", "category"),
+    "class": ("class", "label", "category"),
+    "type": ("type", "kind", "category"),
+    "state": ("state", "status"),
+}
+
+
 FilterSpec = Dict[str, Any]
 
 
@@ -160,7 +176,7 @@ def _columns(rows: Sequence[Dict[str, str]]) -> List[str]:
 
 
 def _find_column(text: str, columns: Sequence[str], *, min_len: int = 2) -> Optional[str]:
-    """Match a column mentioned in text (spaces/underscores insensitive)."""
+    """Match a column when a column token appears inside ``text`` (forward match)."""
     q = str(text or "").lower()
     q_norm = _norm_key(q)
     best: Optional[Tuple[int, str]] = None
@@ -181,6 +197,88 @@ def _find_column(text: str, columns: Sequence[str], *, min_len: int = 2) -> Opti
     return best[1] if best else None
 
 
+def _resolve_column_fragment(
+    fragment: str,
+    columns: Sequence[str],
+    *,
+    min_len: int = 3,
+) -> Tuple[Optional[str], List[str]]:
+    """
+    Resolve a short NL fragment (e.g. ``status``) to a fabric column.
+
+    Priority: exact → suffix → synonym pattern → contains.
+    Returns ``(resolved_or_none, candidates)``. When multiple strong matches
+    exist, ``resolved`` is None and ``candidates`` lists the options.
+    """
+    raw = str(fragment or "").strip(" .,;:?!\"'")
+    if not raw:
+        return None, []
+    frag_l = raw.lower().strip()
+    frag_norm = _norm_key(frag_l)
+    if len(frag_norm) < 2:
+        return None, []
+
+    exact: List[str] = []
+    suffix: List[str] = []
+    synonym: List[str] = []
+    contains: List[str] = []
+
+    for col in columns:
+        col_l = col.lower()
+        col_norm = _norm_key(col)
+        col_spaced = col_l.replace("_", " ")
+        if (
+            col_norm == frag_norm
+            or col_l == frag_l
+            or col_spaced == frag_l
+            or col_l.replace("_", "") == frag_l.replace(" ", "")
+        ):
+            exact.append(col)
+            continue
+        if len(frag_norm) >= min_len and (
+            col_norm.endswith(frag_norm)
+            or col_l.endswith("_" + frag_l)
+            or col_l.endswith(frag_l)
+            or col_spaced.endswith(frag_l)
+        ):
+            suffix.append(col)
+            continue
+        if len(frag_norm) >= min_len and frag_norm in col_norm:
+            contains.append(col)
+
+    # Synonym / alias layer (status → *status*, *outcome*, …)
+    for syn_key, patterns in COLUMN_SYNONYMS.items():
+        if frag_norm != _norm_key(syn_key) and frag_l != syn_key:
+            continue
+        for col in columns:
+            col_l = col.lower()
+            col_norm = _norm_key(col)
+            if any(p in col_l or _norm_key(p) in col_norm for p in patterns):
+                synonym.append(col)
+
+    def _uniq(items: List[str]) -> List[str]:
+        out: List[str] = []
+        seen = set()
+        # Prefer longer (more specific) names first within a bucket.
+        for col in sorted(items, key=lambda c: (-len(_norm_key(c)), c.lower())):
+            if col in seen:
+                continue
+            seen.add(col)
+            out.append(col)
+        return out
+
+    for bucket in (exact, suffix, synonym, contains):
+        uniq = _uniq(bucket)
+        if not uniq:
+            continue
+        if len(uniq) == 1:
+            return uniq[0], uniq
+        # Multiple strong matches → do not guess; caller may clarify.
+        return None, uniq
+
+    return None, []
+
+
 def _find_all_columns(text: str, columns: Sequence[str]) -> List[str]:
     """Return all columns mentioned in text, longest match first (no nested dups)."""
     hits: List[Tuple[int, str]] = []
@@ -199,6 +297,11 @@ def _find_all_columns(text: str, columns: Sequence[str]) -> List[str]:
             if variant in q or _norm_key(variant) in q_norm:
                 hits.append((len(_norm_key(col)), col))
                 break
+    # Also pick up soft fragments via resolve (status → adjudication_status).
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", q):
+        resolved, _cands = _resolve_column_fragment(token, columns)
+        if resolved:
+            hits.append((len(_norm_key(resolved)), resolved))
     hits.sort(key=lambda x: -x[0])
     out: List[str] = []
     seen = set()
@@ -279,6 +382,15 @@ def _pick_categorical_field(
     mentioned = _find_column(query, columns)
     if mentioned and _norm_key(mentioned) not in exclude_set and not _column_is_mostly_numeric(rows, mentioned):
         return mentioned
+    # Soft tokens in query (status, outcome, …)
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", str(query or "")):
+        resolved, _cands = _resolve_column_fragment(token, columns)
+        if (
+            resolved
+            and _norm_key(resolved) not in exclude_set
+            and not _column_is_mostly_numeric(rows, resolved)
+        ):
+            return resolved
     if mentioned and _norm_key(mentioned) not in exclude_set:
         # Mentioned numeric field is not categorical
         pass
@@ -323,6 +435,16 @@ def _pick_numeric_field(
             continue
         if _column_is_mostly_numeric(rows, mentioned):
             return mentioned
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", str(query or "")):
+        if token.lower() in {"group", "by", "count", "average", "mean", "sum", "how", "many", "what", "the"}:
+            continue
+        resolved, _cands = _resolve_column_fragment(token, columns)
+        if (
+            resolved
+            and _norm_key(resolved) not in exclude_set
+            and _column_is_mostly_numeric(rows, resolved)
+        ):
+            return resolved
     lower_map = {_norm_key(c): c for c in columns}
     for preferred in PREFERRED_NUMERIC_FIELDS:
         hit = lower_map.get(_norm_key(preferred))
@@ -412,37 +534,94 @@ def _match_value_to_column(
     return None
 
 
-def extract_group_by_field(query: str, columns: Sequence[str]) -> Optional[str]:
-    """Parse group-by field from the question."""
+def _group_by_requested(query: str) -> bool:
+    q = str(query or "").lower()
+    return bool(
+        re.search(
+            r"group(?:ed|ing)?\s*by|breakdown\s+by|count(?:s)?\s+by|"
+            r"\baverage\b.+\bby\b|\bavg\b.+\bby\b|\bsum\b.+\bby\b|\bper\b\s+[a-z0-9_]",
+            q,
+        )
+    )
+
+
+def extract_group_by_fragment(query: str) -> Optional[str]:
+    """Return the raw group-by fragment from the question (before column resolve)."""
     q = str(query or "")
     patterns = [
         r"group(?:ed|ing)?\s*by\s+([A-Za-z0-9_ ]+?)(?:\s+and\s+|\s*,|\s*$|\s+with|\s+where|\s+for|\s+having)",
         r"breakdown\s+by\s+([A-Za-z0-9_ ]+?)(?:\s+and\s+|\s*,|\s*$|\s+with|\s+where)",
         r"\bper\s+([A-Za-z0-9_ ]+?)(?:\s+and\s+|\s*,|\s*$|\s+with|\s+where)",
-        r"\bby\s+([A-Za-z0-9_ ]+?)(?:\s+and\s+|\s*,|\s*$|\s+with|\s+where|\s+for\b)",
         r"count(?:s)?\s+by\s+([A-Za-z0-9_ ]+)",
         r"average\s+.+\s+by\s+([A-Za-z0-9_ ]+)",
         r"avg\s+.+\s+by\s+([A-Za-z0-9_ ]+)",
         r"sum\s+.+\s+by\s+([A-Za-z0-9_ ]+)",
+        r"\bby\s+([A-Za-z0-9_ ]+?)(?:\s+and\s+|\s*,|\s*$|\s+with|\s+where|\s+for\b)",
     ]
     for pattern in patterns:
         match = re.search(pattern, q, flags=re.IGNORECASE)
         if not match:
             continue
         fragment = match.group(1).strip(" .,;:?")
-        # Stop words that leak into capture
         fragment = re.split(
             r"\b(?:with|where|that|which|and|or|for|in|on|of|the)\b",
             fragment,
             maxsplit=1,
             flags=re.IGNORECASE,
         )[0].strip(" .,;:?")
-        if not fragment:
-            continue
-        col = _find_column(fragment, columns)
-        if col:
-            return col
+        if fragment:
+            return fragment
     return None
+
+
+def extract_group_by_field(
+    query: str,
+    columns: Sequence[str],
+) -> Tuple[Optional[str], Optional[str], List[str]]:
+    """
+    Parse and resolve group-by field.
+
+    Returns ``(resolved_column, raw_fragment, candidates)``.
+    """
+    fragment = extract_group_by_fragment(query)
+    if not fragment:
+        return None, None, []
+    # Prefer soft resolve (status → adjudication_status); fall back to forward match.
+    resolved, candidates = _resolve_column_fragment(fragment, columns)
+    if resolved:
+        return resolved, fragment, candidates
+    forward = _find_column(fragment, columns)
+    if forward:
+        return forward, fragment, [forward]
+    return None, fragment, candidates
+
+
+def format_unresolved_group_by_answer(
+    fabric_name: str,
+    fragment: str,
+    columns: Sequence[str],
+    candidates: Sequence[str],
+) -> str:
+    col_list = list(candidates) if candidates else list(columns)[:20]
+    rows = [[c] for c in col_list]
+    note = (
+        f"Could not uniquely map **group by `{fragment}`** to a column in **{fabric_name}**."
+        if candidates
+        else f"No column matched **group by `{fragment}`** in **{fabric_name}**."
+    )
+    return "\n".join(
+        [
+            "## Needs clarification",
+            note,
+            "",
+            "Please retry with an exact column name, for example:",
+            "",
+            markdown_table(["Candidate columns"], rows or [["(no columns found)"]]),
+            "",
+            "### Notes",
+            "- Analytics did **not** fall back to a total-row count for this group-by question.",
+        ]
+    )
 
 
 def extract_filters(query: str, rows: Sequence[Dict[str, str]]) -> List[FilterSpec]:
@@ -454,6 +633,12 @@ def extract_filters(query: str, rows: Sequence[Dict[str, str]]) -> List[FilterSp
 
     def _overlap(start: int, end: int) -> bool:
         return any(not (end <= a or start >= b) for a, b in used_spans)
+
+    def _resolve_field(field_frag: str) -> Optional[str]:
+        resolved, _cands = _resolve_column_fragment(field_frag, columns)
+        if resolved:
+            return resolved
+        return _find_column(field_frag, columns)
 
     # Numeric comparisons: score > 40, amount >= 100, FIELD less than 5
     cmp_patterns = [
@@ -489,7 +674,7 @@ def extract_filters(query: str, rows: Sequence[Dict[str, str]]) -> List[FilterSp
             else:
                 op = fixed_op
                 number = float(match.group(2))
-            col = _find_column(field_frag, columns)
+            col = _resolve_field(field_frag)
             if not col:
                 continue
             filters.append({"field": col, "op": op if op != "==" else "=", "value": number, "kind": "compare"})
@@ -509,17 +694,15 @@ def extract_filters(query: str, rows: Sequence[Dict[str, str]]) -> List[FilterSp
             value_frag = match.group(2).strip(" .,;:?")
             if value_frag.lower() in {"the", "a", "an", "this", "that", "there", "it"}:
                 continue
-            col = _find_column(field_frag, columns)
+            col = _resolve_field(field_frag)
             if not col:
                 continue
-            # Prefer canonical casing from data
             matched = _match_value_to_column(value_frag, rows, [col], preferred_field=col)
             canon = matched[1] if matched else value_frag
             filters.append({"field": col, "op": "=", "value": canon, "kind": "equals"})
             used_spans.append((match.start(), match.end()))
 
     # Bare category labels as filters: "only Active", "Active compounds with..."
-    # Avoid treating multi-label distribution questions as filters when listing several labels.
     labels = _extract_target_labels(q)
     q_lower = q.lower()
     listing_distribution = (
@@ -529,12 +712,9 @@ def extract_filters(query: str, rows: Sequence[Dict[str, str]]) -> List[FilterSp
     )
     if not listing_distribution:
         for label in labels:
-            # Skip if already captured via equality on same value
             if any(str(f.get("value", "")).lower() == label.lower() for f in filters):
                 continue
-            # "Active, Inactive, and Inconclusive" listing → not a single filter
             if len(labels) >= 2 and "only" not in q_lower and "where" not in q_lower:
-                # Still allow "Active compounds with score > 40"
                 if not re.search(rf"\b{re.escape(label)}\b.{{0,40}}(with|>|<|greater|less|at least|at most|score|amount)", q, re.I):
                     if not re.search(rf"(only|where|filter).{{0,20}}\b{re.escape(label)}\b", q, re.I):
                         continue
@@ -935,7 +1115,7 @@ def analyze_tabular_query(
     filters = extract_filters(query, rows)
     filtered_rows = apply_filters(rows, filters)
     filter_clause = _format_filter_clause(filters)
-    group_by = extract_group_by_field(query, columns)
+    group_by, group_fragment, group_candidates = extract_group_by_field(query, columns)
     labels = _extract_target_labels(query)
     # If labels were applied as filters, don't also force distribution ordering on them
     label_filters = [f for f in filters if f.get("kind") == "equals" and str(f.get("value")) in labels]
@@ -946,6 +1126,26 @@ def analyze_tabular_query(
     unique_intent = _wants_unique(query)
     numeric_intent = _wants_numeric_agg(query)
     row_total = len(filtered_rows)
+
+    # Group-by requested but column unresolved → clarify (never silent total_rows).
+    if group_fragment and not group_by and _group_by_requested(query):
+        return {
+            "intent": "group_by_unresolved",
+            "row_total": unfiltered_total,
+            "answer": format_unresolved_group_by_answer(
+                fabric_name,
+                group_fragment,
+                columns,
+                group_candidates,
+            ),
+            "metrics": {
+                "fragment": group_fragment,
+                "candidates": list(group_candidates),
+                "columns": list(columns)[:40],
+            },
+            "filters": filters,
+            "group_by": None,
+        }
 
     # Filtered empty set
     if filters and row_total == 0:
