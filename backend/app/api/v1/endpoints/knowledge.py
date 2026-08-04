@@ -334,14 +334,14 @@ def _is_duplicate_count_query(query: str) -> bool:
 
 
 def _load_fabric_row_documents(source_id: str) -> Tuple[List[Any], List[Any], List[Dict[str, str]]]:
-    """Load indexed row chunks + parsed row dicts for a fabric."""
+    """Load indexed row chunks + parsed row dicts for a fabric (full index, not 5k cap)."""
     try:
-        source_docs = vector_service.get_source_documents(source_id)
+        chunks = vector_service.list_source_chunks(source_id, limit=0)
     except Exception as exc:
         print(f"Fabric row document fetch failed for {source_id}: {exc}")
         return [], [], []
-    documents = source_docs.get("documents") or []
-    metadatas = source_docs.get("metadatas") or []
+    documents = [c.get("content", "") for c in chunks]
+    metadatas = [c.get("metadata") or {} for c in chunks]
     rows = load_rows_from_source_documents(documents, metadatas)
     return documents, metadatas, rows
 
@@ -666,38 +666,116 @@ def _deterministic_multi_record_lookup_for_source(source_id: str, requested_ids:
     }
 
 
+def _mongo_value_to_jsonable(value: Any) -> Any:
+    """Convert MongoDB BSON values into JSON-safe primitives for fabric indexing."""
+    if value is None:
+        return None
+    # Prefer sanitize_for_json for numpy floats / NaN — also handles str conversion of opaque types.
+    if isinstance(value, dict):
+        return {str(k): _mongo_value_to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_mongo_value_to_jsonable(v) for v in value]
+    if isinstance(value, (bool, int, float, str)):
+        return sanitize_for_json(value)
+    # ObjectId, datetime, Decimal128, Binary, etc.
+    return sanitize_for_json(str(value))
+
+
 def _fetch_mongodb_records(connection_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Fetch documents from one or more MongoDB collections into a single fabric payload."""
     mongodb_conn = MongoDBConnection(**connection_data)
+    collection_names = mongodb_conn.resolved_collection_names()
+    if not collection_names:
+        raise HTTPException(
+            status_code=400,
+            detail="Select at least one MongoDB collection (collection_name or collection_names).",
+        )
+
     client = MongoClient(mongodb_conn.connection_string, serverSelectionTimeoutMS=5000)
-    client.admin.command('ping')
-    db = client[mongodb_conn.database_name]
-    collection = db[mongodb_conn.collection_name]
-    query = mongodb_conn.query or {}
-    projection = mongodb_conn.projection
-    limit = mongodb_conn.limit or 1000
-    cursor = collection.find(query, projection).limit(limit)
-    rows = list(cursor)
-    client.close()
+    try:
+        client.admin.command('ping')
+        db = client[mongodb_conn.database_name]
+        available = set(db.list_collection_names())
+        missing = [n for n in collection_names if n not in available]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"MongoDB collection(s) not found in '{mongodb_conn.database_name}': {', '.join(missing)}",
+            )
 
-    processed_rows: List[Dict[str, Any]] = []
-    for doc in rows:
-        row: Dict[str, Any] = {}
-        for key, value in doc.items():
-            row[key] = str(value) if hasattr(value, "__dict__") else value
-        processed_rows.append(row)
+        query = mongodb_conn.query or {}
+        projection = mongodb_conn.projection
+        # Per-collection limit: when multiple collections are selected, apply the limit to each.
+        per_collection_limit = max(1, int(mongodb_conn.limit or 1000))
 
+        processed_rows: List[Dict[str, Any]] = []
+        per_collection: List[Dict[str, Any]] = []
+        for coll_name in collection_names:
+            collection = db[coll_name]
+            cursor = collection.find(query, projection).limit(per_collection_limit)
+            rows = list(cursor)
+            coll_columns: List[str] = []
+            for doc in rows:
+                row: Dict[str, Any] = {}
+                for key, value in doc.items():
+                    row[str(key)] = _mongo_value_to_jsonable(value)
+                row["__source_collection"] = coll_name
+                processed_rows.append(row)
+                for key in row.keys():
+                    if key != "__source_collection" and key not in coll_columns:
+                        coll_columns.append(key)
+            per_collection.append({
+                "name": coll_name,
+                "documents_imported": len(rows),
+                "columns": coll_columns,
+            })
+    finally:
+        client.close()
+
+    if not processed_rows:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No documents found in selected collection(s): {', '.join(collection_names)}"
+            ),
+        )
+
+    label = (
+        "_".join(collection_names)
+        if len(collection_names) <= 3
+        else f"{len(collection_names)}_collections"
+    )
+    fabric_name = f"{mongodb_conn.database_name}_{label}"
+    source_name = (
+        collection_names[0]
+        if len(collection_names) == 1
+        else f"{mongodb_conn.database_name}_multi"
+    )
+    desc_collections = ", ".join(collection_names)
     return {
         "rows": processed_rows,
-        "source_name": mongodb_conn.collection_name,
-        "fabric_name": f"{mongodb_conn.database_name}_{mongodb_conn.collection_name}",
+        "source_name": source_name,
+        "fabric_name": fabric_name,
         "connection_info": {
             "type": "mongodb",
             "database": mongodb_conn.database_name,
-            "collection": mongodb_conn.collection_name,
-            "documents_imported": len(processed_rows)
+            "collection": collection_names[0],
+            "collections": collection_names,
+            "documents_imported": len(processed_rows),
+            "per_collection": per_collection,
+            "limit_per_collection": per_collection_limit,
         },
-        "tags": [mongodb_conn.database_name, "mongodb", "atlas", mongodb_conn.collection_name],
-        "description": f"Knowledge fabric created from MongoDB Atlas {mongodb_conn.database_name}.{mongodb_conn.collection_name}"
+        "tags": [
+            mongodb_conn.database_name,
+            "mongodb",
+            "atlas",
+            *collection_names,
+            *(["multi-collection"] if len(collection_names) > 1 else []),
+        ],
+        "description": (
+            f"Knowledge fabric created from MongoDB Atlas "
+            f"{mongodb_conn.database_name}: {desc_collections}"
+        ),
     }
 
 
@@ -2398,11 +2476,29 @@ async def get_fabric_knowledge_graph(fabric_id: str, include_llm: bool = True):
                 "edge_count": canonical.get("edge_count", 0),
             }
         else:
-            source_docs = vector_service.get_source_documents(fabric_id)
+            # Cap exploratory NER graph build — loading 50k–100k+ Mongo chunks OOM-kills the API.
+            exploratory_doc_limit = 2000
+            source_docs = vector_service.get_source_documents(
+                fabric_id, limit=exploratory_doc_limit
+            )
             documents = source_docs.get("documents") or []
+            sampled_count = len(documents)
+            total_indexed = int(
+                fabric.get("total_chunks")
+                or fabric.get("document_count")
+                or 0
+            )
+            if total_indexed <= 0:
+                try:
+                    total_indexed = vector_service.count_source_documents(fabric_id)
+                except Exception:
+                    total_indexed = sampled_count
 
             if not documents:
                 documents = _reconstruct_graph_documents(fabric)
+                sampled_count = len(documents)
+                if total_indexed <= 0:
+                    total_indexed = sampled_count
 
             graph_data = knowledge_graph_service.build_graph(
                 fabric_id=fabric_id,
@@ -2410,6 +2506,14 @@ async def get_fabric_knowledge_graph(fabric_id: str, include_llm: bool = True):
                 documents=documents,
             )
             graph_data["graph_type"] = "exploratory"
+            graph_data["document_sample_size"] = sampled_count
+            graph_data["document_total"] = max(total_indexed, sampled_count)
+            graph_data["document_sample_capped"] = max(total_indexed, sampled_count) > sampled_count
+            if graph_data["document_sample_capped"]:
+                graph_data["graph_note"] = (
+                    f"Exploratory graph built from a sample of {sampled_count:,} / "
+                    f"{graph_data['document_total']:,} indexed chunks to keep memory bounded."
+                )
         if graph_data.get("node_count", 1) <= 1 and str(fabric.get("source_type", "")).startswith("servicenow"):
             structured_graph = _build_structured_servicenow_graph(fabric)
             if structured_graph:
@@ -2625,30 +2729,37 @@ async def validate_knowledge_base(fabric_id: str, request: dict):
 async def test_mongodb_simple(connection_data: MongoDBConnection):
     """Simple test endpoint to isolate MongoDB connection issues"""
     try:
-        print(f"Testing MongoDB connection to {connection_data.database_name}.{connection_data.collection_name}")
-        
-        # Connect to MongoDB Atlas
+        names = connection_data.resolved_collection_names()
+        label = ", ".join(names) if names else "(no collection selected)"
+        print(f"Testing MongoDB connection to {connection_data.database_name}.{label}")
+
         client = MongoClient(connection_data.connection_string, serverSelectionTimeoutMS=5000)
         print("MongoDB client created successfully")
-        
+
         db = client[connection_data.database_name]
-        collection = db[connection_data.collection_name]
-        print(f"Connected to collection: {connection_data.collection_name}")
-        
-        # Fetch just 1 document
-        cursor = collection.find().limit(1)
-        data = list(cursor)
-        print(f"Fetched {len(data)} documents from MongoDB")
-        
+        sample = None
+        document_count = 0
+        if names:
+            collection = db[names[0]]
+            print(f"Connected to collection: {names[0]}")
+            cursor = collection.find().limit(1)
+            data = list(cursor)
+            document_count = len(data)
+            sample = data[0] if data else None
+        else:
+            available = db.list_collection_names()
+            document_count = len(available)
+
         client.close()
         print("MongoDB connection closed successfully")
-        
+
         return {
             "success": True,
             "message": "MongoDB connection test successful",
             "data": {
-                "document_count": len(data),
-                "sample_document": data[0] if data else None
+                "document_count": document_count,
+                "sample_document": sample,
+                "collections": names,
             }
         }
         
@@ -3450,7 +3561,7 @@ async def query_knowledge_base(
                 if not context_chunks:
                     print("No orchestrator chunks; loading full source index via list_source_chunks")
                     try:
-                        all_chunks = vector_service.list_source_chunks(fabric_id)
+                        all_chunks = vector_service.list_source_chunks(fabric_id, limit=0)
                         for i, result in enumerate(all_chunks):
                             content = result.get("content", "") if isinstance(result, dict) else str(result)
                             if content and str(content).strip():
@@ -3469,7 +3580,7 @@ async def query_knowledge_base(
             except Exception as e:
                 print(f"Error searching vector database: {e}")
                 try:
-                    all_chunks = vector_service.list_source_chunks(fabric_id)
+                    all_chunks = vector_service.list_source_chunks(fabric_id, limit=0)
                     for i, result in enumerate(all_chunks):
                         content = result.get("content", "") if isinstance(result, dict) else str(result)
                         if content and str(content).strip():

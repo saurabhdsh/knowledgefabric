@@ -171,9 +171,12 @@ const FabricKnowledgeGraph: React.FC = () => {
       setLoading(true);
       setError(null);
       const response = await apiRequest(`api/v1/knowledge/${fabricId}/knowledge-graph?include_llm=true`);
+      if (response.status === 401) {
+        throw new Error('Session expired after a long fabric create. Sign in again, then reopen this fabric from Available Fabrics.');
+      }
       const payload = await response.json();
       if (!response.ok || !payload?.success) {
-        throw new Error(payload?.message || `Request failed: ${response.status}`);
+        throw new Error(payload?.detail || payload?.message || payload?.error || `Request failed: ${response.status}`);
       }
       const data = payload.data || {};
       const normalized = normalizeGraphPayload(data);

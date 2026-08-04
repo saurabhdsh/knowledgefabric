@@ -37,9 +37,16 @@ interface MongoDBConnectionData {
   connection_string: string;
   database_name: string;
   collection_name: string;
+  collection_names: string[];
   query?: any;
-  limit?: number;
+  /** Stored as string so the input can be cleared while typing (e.g. 1000 → 60000). */
+  limit?: string;
   projection?: any;
+}
+
+interface MongoCollectionInfo {
+  name: string;
+  document_count?: number;
 }
 
 interface FabricGuardrails {
@@ -123,8 +130,11 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
     connection_string: '',
     database_name: '',
     collection_name: '',
-    limit: 1000
+    collection_names: [],
+    limit: '1000'
   });
+  const [mongoCollections, setMongoCollections] = useState<MongoCollectionInfo[]>([]);
+  const [loadingCollections, setLoadingCollections] = useState(false);
   const [databricksData, setDatabricksData] = useState({
     server_hostname: '',
     warehouse_id: '',
@@ -133,7 +143,7 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
     schema: 'default',
     table_name: '',
     query: '',
-    limit: 1000
+    limit: '1000'
   });
   const [snowflakeData, setSnowflakeData] = useState({
     account: '',
@@ -145,8 +155,12 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
     role: '',
     table_name: '',
     query: '',
-    limit: 1000
+    limit: '1000'
   });
+  const parseDocLimit = (raw: string | undefined, fallback = 1000): number => {
+    const n = parseInt(String(raw ?? '').trim(), 10);
+    return Number.isFinite(n) && n >= 1 ? n : fallback;
+  };
   const [trainModel, setTrainModel] = useState(true);
   const [inputMode, setInputMode] = useState<'live' | 'csv'>('live');
   const [csvFiles, setCsvFiles] = useState<File[]>([]);
@@ -165,11 +179,21 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
 
   const getCurrentConnectionPayload = () => {
     if (connectionType === 'mongodb') {
+      const selected =
+        mongodbData.collection_names.length > 0
+          ? mongodbData.collection_names
+          : mongodbData.collection_name.trim()
+            ? [mongodbData.collection_name.trim()]
+            : [];
       return {
-        ...mongodbData,
         connection_string: mongodbData.connection_string.trim(),
         database_name: mongodbData.database_name.trim(),
-        collection_name: mongodbData.collection_name.trim(),
+        collection_names: selected,
+        // Keep legacy field for single-collection / older clients
+        collection_name: selected.length === 1 ? selected[0] : selected[0] || '',
+        limit: parseDocLimit(mongodbData.limit),
+        ...(mongodbData.query ? { query: mongodbData.query } : {}),
+        ...(mongodbData.projection ? { projection: mongodbData.projection } : {}),
       };
     }
     if (connectionType === 'databricks') {
@@ -185,6 +209,7 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
         schema: databricksData.schema.trim() || 'default',
         table_name: databricksData.table_name.trim(),
         query: databricksData.query.trim(),
+        limit: parseDocLimit(databricksData.limit),
       };
     }
     if (connectionType === 'snowflake') {
@@ -192,6 +217,7 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
         ...snowflakeData,
         account: snowflakeData.account.trim(),
         user: snowflakeData.user.trim(),
+        limit: parseDocLimit(snowflakeData.limit),
         password: snowflakeData.password,
         warehouse: snowflakeData.warehouse.trim(),
         database: snowflakeData.database.trim(),
@@ -213,7 +239,9 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
       const missing: string[] = [];
       if (isBlank(mongodbData.connection_string)) missing.push('Connection String');
       if (isBlank(mongodbData.database_name)) missing.push('Database Name');
-      if (isBlank(mongodbData.collection_name)) missing.push('Collection Name');
+      const hasCollections =
+        mongodbData.collection_names.length > 0 || !isBlank(mongodbData.collection_name);
+      if (!hasCollections) missing.push('at least one Collection');
       if (missing.length > 0) return `Please fill in: ${missing.join(', ')}.`;
       return null;
     }
@@ -241,6 +269,83 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
       return null;
     }
     return 'Selected database type is not yet supported for live connection.';
+  };
+
+  const toggleMongoCollection = (name: string) => {
+    setMongodbData((prev) => {
+      const exists = prev.collection_names.includes(name);
+      const nextNames = exists
+        ? prev.collection_names.filter((n) => n !== name)
+        : [...prev.collection_names, name];
+      return {
+        ...prev,
+        collection_names: nextNames,
+        collection_name: nextNames.length === 1 ? nextNames[0] : nextNames[0] || '',
+      };
+    });
+  };
+
+  const selectAllMongoCollections = () => {
+    const names = mongoCollections.map((c) => c.name);
+    setMongodbData((prev) => ({
+      ...prev,
+      collection_names: names,
+      collection_name: names.length === 1 ? names[0] : names[0] || '',
+    }));
+  };
+
+  const clearMongoCollections = () => {
+    setMongodbData((prev) => ({
+      ...prev,
+      collection_names: [],
+      collection_name: '',
+    }));
+  };
+
+  const handleListMongoCollections = async () => {
+    if (isBlank(mongodbData.connection_string) || isBlank(mongodbData.database_name)) {
+      setConnectionStatus('error');
+      setConnectionMessage('Enter Connection String and Database Name, then list collections.');
+      return;
+    }
+    setLoadingCollections(true);
+    setConnectionStatus('testing');
+    setConnectionMessage('Listing MongoDB collections...');
+    try {
+      const response = await apiRequest('api/v1/database/mongodb/collections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          connection_string: mongodbData.connection_string.trim(),
+          database_name: mongodbData.database_name.trim(),
+          // collection optional for listing
+          collection_name: mongodbData.collection_names[0] || '',
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) {
+        setConnectionStatus('error');
+        setConnectionMessage(
+          formatKnowledgeApiError(result, result.message || 'Failed to list collections')
+        );
+        setMongoCollections([]);
+        return;
+      }
+      const list: MongoCollectionInfo[] = Array.isArray(result.data?.collections)
+        ? result.data.collections
+        : [];
+      setMongoCollections(list);
+      setConnectionStatus('success');
+      setConnectionMessage(
+        `Found ${list.length} collection(s). Select one or more, then create fabric.`
+      );
+    } catch (err) {
+      setConnectionStatus('error');
+      setConnectionMessage(err instanceof Error ? err.message : 'Failed to list collections');
+      setMongoCollections([]);
+    } finally {
+      setLoadingCollections(false);
+    }
   };
 
   const handleTestConnection = async () => {
@@ -446,11 +551,27 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
           ...(guardrails ? { guardrails } : {}),
         }),
       });
-      const result = await response.json();
-      if (!result.success) {
-        throw new Error(result.message || 'Failed to create knowledge fabric');
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          formatKnowledgeApiError(result, `Failed to create fabric (${response.status})`)
+        );
       }
-      return result.data.source_id;
+      if (!result.success) {
+        throw new Error(
+          formatKnowledgeApiError(
+            result,
+            typeof result.message === 'string'
+              ? result.message
+              : 'Failed to create knowledge fabric'
+          )
+        );
+      }
+      const fabricId = result.data?.source_id || result.data?.fabric_id;
+      if (!fabricId) {
+        throw new Error('Fabric created but no fabric id was returned by the API.');
+      }
+      return fabricId;
     });
   };
 
@@ -609,29 +730,131 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
               
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Collection Name *
+                  Document Limit (per collection)
                 </label>
                 <input
                   type="text"
-                  value={mongodbData.collection_name}
-                  onChange={(e) => setMongodbData({...mongodbData, collection_name: e.target.value})}
-                  placeholder="my_collection"
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Document Limit
-                </label>
-                <input
-                  type="number"
-                  value={mongodbData.limit}
-                  onChange={(e) => setMongodbData({...mongodbData, limit: parseInt(e.target.value) || 1000})}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={mongodbData.limit ?? ''}
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(/[^\d]/g, '');
+                    setMongodbData({ ...mongodbData, limit: raw });
+                  }}
+                  onBlur={() => {
+                    if (!mongodbData.limit?.trim()) {
+                      setMongodbData({ ...mongodbData, limit: '1000' });
+                    }
+                  }}
                   placeholder="1000"
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
                 />
+                <p className="mt-1 text-[11px] text-[#8b9cb0]">
+                  Applied to each selected collection (e.g. 2 collections × 60000 = up to 120000 docs). Clear and type freely.
+                </p>
               </div>
+            </div>
+
+            <div className="rounded-xl border border-[rgba(148,163,184,0.2)] bg-white/[0.03] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                <div>
+                  <p className="text-sm font-semibold text-[#e8edf4]">Collections *</p>
+                  <p className="text-xs text-[#8b9cb0] mt-0.5">
+                    List collections from Atlas, then multi-select into one fabric.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleListMongoCollections}
+                    disabled={isConnecting || loadingCollections}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.12)] px-3 py-1.5 text-xs font-medium text-[#d9f4ff] hover:bg-[rgba(94,200,242,0.2)] disabled:opacity-50"
+                  >
+                    <CircleStackIcon className="h-3.5 w-3.5" />
+                    {loadingCollections ? 'Listing…' : 'List Collections'}
+                  </button>
+                  {mongoCollections.length > 0 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={selectAllMongoCollections}
+                        className="rounded-lg border border-[rgba(148,163,184,0.25)] px-3 py-1.5 text-xs text-[#cbd5e1] hover:bg-white/[0.05]"
+                      >
+                        Select all
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearMongoCollections}
+                        className="rounded-lg border border-[rgba(148,163,184,0.25)] px-3 py-1.5 text-xs text-[#cbd5e1] hover:bg-white/[0.05]"
+                      >
+                        Clear
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {mongoCollections.length === 0 ? (
+                <div className="space-y-3">
+                  <p className="text-xs text-[#8b9cb0]">
+                    Or type a single collection name (legacy):
+                  </p>
+                  <input
+                    type="text"
+                    value={mongodbData.collection_name}
+                    onChange={(e) =>
+                      setMongodbData({
+                        ...mongodbData,
+                        collection_name: e.target.value,
+                        collection_names: e.target.value.trim()
+                          ? [e.target.value.trim()]
+                          : [],
+                      })
+                    }
+                    placeholder="my_collection"
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                  />
+                </div>
+              ) : (
+                <div className="max-h-56 overflow-y-auto space-y-1.5">
+                  {mongoCollections.map((coll) => {
+                    const checked = mongodbData.collection_names.includes(coll.name);
+                    return (
+                      <label
+                        key={coll.name}
+                        className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
+                          checked
+                            ? 'border-[rgba(94,200,242,0.4)] bg-[rgba(94,200,242,0.12)]'
+                            : 'border-[rgba(148,163,184,0.15)] hover:bg-white/[0.04]'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleMongoCollection(coll.name)}
+                            className="rounded border-gray-400"
+                          />
+                          <span className="text-sm text-[#e8edf4] truncate">{coll.name}</span>
+                        </span>
+                        <span className="text-[11px] text-[#8b9cb0] shrink-0">
+                          {typeof coll.document_count === 'number'
+                            ? `${coll.document_count.toLocaleString()} docs`
+                            : ''}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+
+              {mongodbData.collection_names.length > 0 && (
+                <p className="mt-3 text-xs text-[#3ecf9b]">
+                  Selected {mongodbData.collection_names.length} collection
+                  {mongodbData.collection_names.length === 1 ? '' : 's'}:{' '}
+                  {mongodbData.collection_names.join(', ')}
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -709,13 +932,23 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Row Limit</label>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   value={databricksData.limit}
-                  onChange={(e) => setDatabricksData({ ...databricksData, limit: parseInt(e.target.value) || 1000 })}
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(/[^\d]/g, '');
+                    setDatabricksData({ ...databricksData, limit: raw });
+                  }}
+                  onBlur={() => {
+                    if (!databricksData.limit?.trim()) {
+                      setDatabricksData({ ...databricksData, limit: '1000' });
+                    }
+                  }}
                   placeholder="1000"
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg"
                 />
-                <p className="mt-1 text-[11px] text-[#8b9cb0]">Used when no Custom SQL is provided.</p>
+                <p className="mt-1 text-[11px] text-[#8b9cb0]">Used when no Custom SQL is provided. Clear and type freely.</p>
               </div>
             </div>
             <div>

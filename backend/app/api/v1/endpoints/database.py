@@ -318,85 +318,110 @@ async def sync_database_changes(
 # MongoDB Atlas specific endpoints
 @router.post("/mongodb/connect", response_model=APIResponse)
 async def connect_mongodb(connection: MongoDBConnection):
-    """Connect to MongoDB Atlas and import data"""
+    """Connect to MongoDB Atlas and import one or more collections into a single source."""
     try:
-        # Test MongoDB connection
+        collection_names = connection.resolved_collection_names()
+        if not collection_names:
+            raise HTTPException(
+                status_code=400,
+                detail="Select at least one collection (collection_name or collection_names).",
+            )
+
         client = MongoClient(connection.connection_string, serverSelectionTimeoutMS=5000)
-        
-        # Test the connection
         client.admin.command('ping')
-        
-        # Get database and collection
         db = client[connection.database_name]
-        collection = db[connection.collection_name]
-        
-        # Execute query
+        available = set(db.list_collection_names())
+        missing = [n for n in collection_names if n not in available]
+        if missing:
+            client.close()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Collection(s) not found: {', '.join(missing)}",
+            )
+
         query = connection.query or {}
         projection = connection.projection
         limit = connection.limit or 1000
-        
-        # Get data from MongoDB
-        cursor = collection.find(query, projection).limit(limit)
-        data = list(cursor)
-        
-        if not data:
-            raise HTTPException(status_code=400, detail="No data found in the collection")
-        
-        # Convert MongoDB documents to list of dictionaries
-        # Remove ObjectId and other non-serializable fields
+
         processed_data = []
-        for doc in data:
-            # Convert ObjectId to string and handle other non-serializable types
-            doc_dict = {}
-            for key, value in doc.items():
-                if hasattr(value, '__dict__'):  # Handle ObjectId and other custom types
-                    doc_dict[key] = str(value)
-                else:
-                    doc_dict[key] = value
-            processed_data.append(doc_dict)
-        
-        # Process data for knowledge fabric
-        documents = document_service.process_database_data(processed_data, connection.collection_name)
-        
-        # Create source ID
+        per_collection = []
+        for coll_name in collection_names:
+            collection = db[coll_name]
+            cursor = collection.find(query, projection).limit(limit)
+            data = list(cursor)
+            for doc in data:
+                doc_dict = {}
+                for key, value in doc.items():
+                    if hasattr(value, '__dict__'):
+                        doc_dict[key] = str(value)
+                    else:
+                        doc_dict[key] = value
+                doc_dict["__source_collection"] = coll_name
+                processed_data.append(doc_dict)
+            per_collection.append({"name": coll_name, "documents_imported": len(data)})
+
+        if not processed_data:
+            client.close()
+            raise HTTPException(status_code=400, detail="No data found in the selected collection(s)")
+
+        source_label = (
+            collection_names[0]
+            if len(collection_names) == 1
+            else f"{connection.database_name}_multi"
+        )
+        documents = document_service.process_database_data(processed_data, source_label)
         source_id = str(uuid.uuid4())
-        
-        # Add documents to vector database
         document_ids = vector_service.add_documents(documents, source_id)
-        
-        # Create knowledge source
+
+        fabric_label = (
+            "_".join(collection_names)
+            if len(collection_names) <= 3
+            else f"{len(collection_names)}_collections"
+        )
         knowledge_source = KnowledgeSource(
             id=source_id,
-            name=f"{connection.database_name}_{connection.collection_name}",
+            name=f"{connection.database_name}_{fabric_label}",
             source_type="database",
-            description=f"MongoDB Atlas connection to {connection.database_name}.{connection.collection_name}",
-            tags=[connection.database_name, "mongodb", "atlas", connection.collection_name],
+            description=(
+                f"MongoDB Atlas connection to {connection.database_name}: "
+                f"{', '.join(collection_names)}"
+            ),
+            tags=[
+                connection.database_name,
+                "mongodb",
+                "atlas",
+                *collection_names,
+                *(["multi-collection"] if len(collection_names) > 1 else []),
+            ],
             created_at=datetime.now(),
             updated_at=datetime.now(),
             document_count=len(documents),
             status="active"
         )
-        
-        # Close MongoDB connection
+
         client.close()
-        
+
         return APIResponse(
             success=True,
             message="MongoDB Atlas connected and data imported successfully",
             data={
                 "source_id": source_id,
-                "source_name": f"{connection.database_name}_{connection.collection_name}",
+                "source_name": f"{connection.database_name}_{fabric_label}",
                 "documents_processed": len(documents),
                 "document_ids": document_ids,
                 "knowledge_source": knowledge_source.dict(),
                 "connection_info": {
                     "database": connection.database_name,
-                    "collection": connection.collection_name,
-                    "documents_imported": len(processed_data)
+                    "collection": collection_names[0],
+                    "collections": collection_names,
+                    "documents_imported": len(processed_data),
+                    "per_collection": per_collection,
                 }
             }
         )
-        
+
+    except HTTPException:
+        raise
     except ConnectionFailure as e:
         raise HTTPException(status_code=400, detail=f"MongoDB connection failed: {str(e)}")
     except ServerSelectionTimeoutError as e:
@@ -406,24 +431,33 @@ async def connect_mongodb(connection: MongoDBConnection):
 
 @router.post("/mongodb/test-connection", response_model=APIResponse)
 async def test_mongodb_connection(connection: MongoDBConnection):
-    """Test MongoDB Atlas connection without importing data"""
+    """Test MongoDB Atlas connection without importing data."""
     try:
-        # Test MongoDB connection
         client = MongoClient(connection.connection_string, serverSelectionTimeoutMS=5000)
-        
-        # Test the connection
         client.admin.command('ping')
-        
-        # Get database and collection
         db = client[connection.database_name]
-        collection = db[connection.collection_name]
-        
-        # Count documents
-        document_count = collection.count_documents(connection.query or {})
-        
-        # Close connection
+        available = db.list_collection_names()
+        selected = connection.resolved_collection_names()
+
+        document_count = 0
+        per_collection = []
+        if selected:
+            missing = [n for n in selected if n not in available]
+            if missing:
+                client.close()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Collection(s) not found: {', '.join(missing)}",
+                )
+            for name in selected:
+                count = db[name].count_documents(connection.query or {})
+                document_count += count
+                per_collection.append({"name": name, "document_count": count})
+        else:
+            document_count = sum(db[n].count_documents({}) for n in available[:20])
+
         client.close()
-        
+
         return APIResponse(
             success=True,
             message="MongoDB Atlas connection successful",
@@ -431,10 +465,15 @@ async def test_mongodb_connection(connection: MongoDBConnection):
                 "connection_status": "success",
                 "document_count": document_count,
                 "database_name": connection.database_name,
-                "collection_name": connection.collection_name
+                "collection_name": selected[0] if len(selected) == 1 else None,
+                "collections": selected or available,
+                "per_collection": per_collection,
+                "total_collections_in_db": len(available),
             }
         )
-        
+
+    except HTTPException:
+        raise
     except ConnectionFailure as e:
         raise HTTPException(status_code=400, detail=f"MongoDB connection failed: {str(e)}")
     except ServerSelectionTimeoutError as e:
@@ -493,44 +532,54 @@ async def preview_mongodb_data(
     connection: MongoDBConnection,
     limit: int = 10
 ):
-    """Preview data from a MongoDB collection"""
+    """Preview data from one or more MongoDB collections."""
     try:
-        # Connect to MongoDB
+        collection_names = connection.resolved_collection_names()
+        if not collection_names:
+            raise HTTPException(status_code=400, detail="Select at least one collection to preview.")
+
         client = MongoClient(connection.connection_string, serverSelectionTimeoutMS=5000)
-        
-        # Test the connection
         client.admin.command('ping')
-        
-        # Get database and collection
         db = client[connection.database_name]
-        collection = db[connection.collection_name]
-        
-        # Execute preview query
         query = connection.query or {}
         projection = connection.projection
-        
-        # Get sample documents
-        cursor = collection.find(query, projection).limit(limit)
-        documents = list(cursor)
-        
-        # Convert to preview format
-        preview_data = {
-            "sample_documents": documents,
-            "total_documents": collection.count_documents(query),
-            "preview_count": len(documents),
-            "collection_name": connection.collection_name,
-            "database_name": connection.database_name
-        }
-        
-        # Close connection
+
+        per_collection = []
+        sample_documents = []
+        total_documents = 0
+        for coll_name in collection_names:
+            collection = db[coll_name]
+            count = collection.count_documents(query)
+            total_documents += count
+            docs = list(collection.find(query, projection).limit(limit))
+            for doc in docs:
+                sample = {k: (str(v) if hasattr(v, "__dict__") else v) for k, v in doc.items()}
+                sample["__source_collection"] = coll_name
+                sample_documents.append(sample)
+            per_collection.append({
+                "collection_name": coll_name,
+                "total_documents": count,
+                "preview_count": len(docs),
+            })
+
         client.close()
-        
+
         return APIResponse(
             success=True,
             message="MongoDB preview generated successfully",
-            data=preview_data
+            data={
+                "sample_documents": sample_documents,
+                "total_documents": total_documents,
+                "preview_count": len(sample_documents),
+                "collection_name": collection_names[0] if len(collection_names) == 1 else None,
+                "collections": collection_names,
+                "per_collection": per_collection,
+                "database_name": connection.database_name,
+            }
         )
-        
+
+    except HTTPException:
+        raise
     except ConnectionFailure as e:
         raise HTTPException(status_code=400, detail=f"MongoDB connection failed: {str(e)}")
     except ServerSelectionTimeoutError as e:

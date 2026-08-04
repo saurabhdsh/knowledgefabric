@@ -97,17 +97,24 @@ class VectorService:
                 fallback_embeddings.append(vec.tolist())
             return fallback_embeddings
     
-    def add_documents(self, documents: List[Dict[str, Any]], source_id: str) -> List[str]:
-        """Add documents to the vector database"""
-        if not documents:
-            return []
-        
-        # Extract texts and metadata
-        texts = [doc["content"] for doc in documents]
-        metadatas = []
-        ids = []
-        
+    def _chroma_max_batch_size(self) -> int:
+        """Chroma hard limit for a single collection.add() call (often ~41k)."""
+        try:
+            max_bs = self.client.get_max_batch_size()
+            if isinstance(max_bs, int) and max_bs > 0:
+                return max_bs
+        except Exception:
+            pass
+        return 5000
+
+    def _prepare_document_payload(
+        self, documents: List[Dict[str, Any]], source_id: str, id_offset: int = 0
+    ) -> tuple:
+        texts: List[str] = []
+        metadatas: List[Dict[str, Any]] = []
+        ids: List[str] = []
         for i, doc in enumerate(documents):
+            texts.append(doc["content"])
             doc_metadata = doc.get("metadata", {}) or {}
             metadata = {
                 **doc_metadata,
@@ -118,21 +125,48 @@ class VectorService:
                 "file_name": doc.get("file_name"),
                 "created_at": doc.get("created_at"),
             }
-            metadatas.append(metadata)
-            ids.append(f"{source_id}_{i}_{uuid.uuid4().hex[:8]}")
-        
-        # Create embeddings
-        embeddings = self.create_embeddings(texts)
-        
-        # Add to collection
-        self.documents_collection.add(
-            embeddings=embeddings,
-            documents=texts,
-            metadatas=metadatas,
-            ids=ids
-        )
-        
-        return ids
+            # Chroma rejects None / nested values in metadata.
+            cleaned: Dict[str, Any] = {}
+            for key, value in metadata.items():
+                if value is None:
+                    cleaned[str(key)] = ""
+                elif isinstance(value, (str, int, float, bool)):
+                    cleaned[str(key)] = value
+                else:
+                    cleaned[str(key)] = str(value)
+            metadatas.append(cleaned)
+            ids.append(f"{source_id}_{id_offset + i}_{uuid.uuid4().hex[:8]}")
+        return texts, metadatas, ids
+
+    def add_documents(self, documents: List[Dict[str, Any]], source_id: str) -> List[str]:
+        """Add documents to the vector database in Chroma-safe batches."""
+        if not documents:
+            return []
+
+        # Stay under Chroma's max_batch_size and keep memory bounded for large Mongo pulls.
+        chroma_max = self._chroma_max_batch_size()
+        chunk_size = max(1, min(chroma_max - 1, 4000))
+
+        all_ids: List[str] = []
+        total = len(documents)
+        for start in range(0, total, chunk_size):
+            batch = documents[start : start + chunk_size]
+            texts, metadatas, ids = self._prepare_document_payload(batch, source_id, id_offset=start)
+            embeddings = self.create_embeddings(texts)
+            self.documents_collection.add(
+                embeddings=embeddings,
+                documents=texts,
+                metadatas=metadatas,
+                ids=ids,
+            )
+            all_ids.extend(ids)
+            if total > chunk_size:
+                print(
+                    f"Indexed documents {start + 1}-{start + len(batch)} / {total} "
+                    f"(batch size {len(batch)}, chroma max {chroma_max})"
+                )
+
+        return all_ids
     
     def search_documents(self, query: str, limit: int = 5, threshold: float = 0.7, 
                         filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -350,12 +384,17 @@ class VectorService:
                 "last_training": None
             }
 
-    def get_source_documents(self, source_id: str):
-        """Get documents for a specific source"""
+    def get_source_documents(self, source_id: str, limit: Optional[int] = None):
+        """Get documents for a specific source.
+
+        Pass ``limit`` for large fabrics (e.g. Knowledge Graph) so callers do not
+        pull every chunk into memory and OOM the API process.
+        """
         try:
-            results = self.documents_collection.get(
-                where={"source_id": source_id}
-            )
+            kwargs: Dict[str, Any] = {"where": {"source_id": source_id}}
+            if limit is not None and int(limit) > 0:
+                kwargs["limit"] = int(limit)
+            results = self.documents_collection.get(**kwargs)
             return results
         except Exception as e:
             print(f"Error getting source documents: {e}")
@@ -409,32 +448,102 @@ class VectorService:
         return source_id
 
     def count_source_documents(self, source_id: str) -> int:
-        """Return how many chunks are stored for a fabric/source id."""
+        """Return how many chunks are stored for a fabric/source id.
+
+        Uses id-only fetches in pages so large Mongo fabrics do not load all
+        document bodies just to count them.
+        """
         try:
-            results = self.documents_collection.get(where={"source_id": source_id})
-            docs = results.get("documents") if isinstance(results, dict) else None
-            return len(docs) if docs else 0
+            total = 0
+            offset = 0
+            page = 5000
+            while True:
+                batch = self.documents_collection.get(
+                    where={"source_id": source_id},
+                    include=[],
+                    limit=page,
+                    offset=offset,
+                )
+                ids = batch.get("ids") or []
+                total += len(ids)
+                if len(ids) < page:
+                    break
+                offset += page
+            return total
         except Exception as e:
             print(f"Error counting source documents for {source_id}: {e}")
             return 0
 
-    def list_source_chunks(self, source_id: str) -> List[Dict[str, Any]]:
-        """Return every stored chunk for a fabric/source (no top-k)."""
-        raw = self.get_source_documents(source_id)
-        documents = raw.get("documents") or []
-        metadatas = raw.get("metadatas") or []
-        ids = raw.get("ids") or []
+    def list_source_chunks(self, source_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Return stored chunks for a fabric/source.
+
+        Default caps at 5000 to avoid OOM on very large database fabrics.
+        Pass ``limit=0`` or a negative value for **uncapped** (full-fabric retrieve /
+        analytics). Uncapped loads page through Chroma in batches of 5000.
+        """
+        effective_limit: Optional[int]
+        if limit is None:
+            effective_limit = 5000
+        elif int(limit) <= 0:
+            effective_limit = None
+        else:
+            effective_limit = int(limit)
+
+        def _to_chunks(
+            documents: List[Any],
+            metadatas: List[Any],
+            ids: List[Any],
+            rank_start: int,
+        ) -> List[Dict[str, Any]]:
+            out: List[Dict[str, Any]] = []
+            for i, content in enumerate(documents):
+                meta = metadatas[i] if i < len(metadatas) and isinstance(metadatas[i], dict) else {}
+                out.append({
+                    "content": content,
+                    "metadata": meta,
+                    "similarity_score": 1.0,
+                    "rank": rank_start + i,
+                    "id": ids[i] if i < len(ids) else f"{source_id}_{rank_start + i - 1}",
+                    "chunk_type": str(meta.get("chunk_type", "")).strip().lower(),
+                })
+            return out
+
+        # Bounded fetch
+        if effective_limit is not None:
+            raw = self.get_source_documents(source_id, limit=effective_limit)
+            documents = raw.get("documents") or []
+            metadatas = raw.get("metadatas") or []
+            ids = raw.get("ids") or []
+            return _to_chunks(documents, metadatas, ids, 1)
+
+        # Uncapped: page so Chroma/large fabrics are not truncated at the old 5k default.
         chunks: List[Dict[str, Any]] = []
-        for i, content in enumerate(documents):
-            meta = metadatas[i] if i < len(metadatas) and isinstance(metadatas[i], dict) else {}
-            chunks.append({
-                "content": content,
-                "metadata": meta,
-                "similarity_score": 1.0,
-                "rank": i + 1,
-                "id": ids[i] if i < len(ids) else f"{source_id}_{i}",
-                "chunk_type": str(meta.get("chunk_type", "")).strip().lower(),
-            })
+        offset = 0
+        page = 5000
+        try:
+            while True:
+                batch = self.documents_collection.get(
+                    where={"source_id": source_id},
+                    limit=page,
+                    offset=offset,
+                )
+                documents = batch.get("documents") or []
+                metadatas = batch.get("metadatas") or []
+                ids = batch.get("ids") or []
+                if not documents:
+                    break
+                chunks.extend(_to_chunks(documents, metadatas, ids, len(chunks) + 1))
+                if len(documents) < page:
+                    break
+                offset += page
+        except Exception as e:
+            print(f"Error listing all source chunks for {source_id}: {e}")
+            # Fall back to single get without limit
+            raw = self.get_source_documents(source_id, limit=None)
+            documents = raw.get("documents") or []
+            metadatas = raw.get("metadatas") or []
+            ids = raw.get("ids") or []
+            return _to_chunks(documents, metadatas, ids, 1)
         return chunks
 
     def search_similar_chunks(self, query: str, source_id: str = None, top_k: int = 3) -> List[Dict[str, Any]]:
@@ -446,7 +555,7 @@ class VectorService:
         """
         try:
             if source_id and (top_k is None or int(top_k) <= 0):
-                all_chunks = self.list_source_chunks(source_id)
+                all_chunks = self.list_source_chunks(source_id, limit=0)
                 if not all_chunks:
                     return []
                 try:
@@ -506,7 +615,7 @@ class VectorService:
             print(f"Error in search_similar_chunks: {e}")
             if source_id and (top_k is None or int(top_k) <= 0):
                 try:
-                    return self.list_source_chunks(source_id)
+                    return self.list_source_chunks(source_id, limit=0)
                 except Exception:
                     return []
             return []

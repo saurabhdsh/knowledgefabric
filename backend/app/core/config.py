@@ -100,7 +100,9 @@ class Settings(BaseSettings):
     
     # Security Configuration
     SECRET_KEY: str = "your-secret-key-change-in-production"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # Long Mongo/database fabric creates routinely exceed 30 minutes on local Mac/Docker.
+    # Short expiry causes "fabric created → OK → load failed" via 401 Unauthorized.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "720"))
     
     # Training Configuration
     BATCH_SIZE: int = 32

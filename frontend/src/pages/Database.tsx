@@ -24,8 +24,10 @@ interface MongoDBConnectionData {
   connection_string: string;
   database_name: string;
   collection_name: string;
+  collection_names: string[];
   query?: any;
-  limit?: number;
+  /** Stored as string so the input can be cleared while typing (e.g. 1000 → 60000). */
+  limit?: string;
   projection?: any;
 }
 
@@ -39,10 +41,46 @@ const Database: React.FC = () => {
     connection_string: '',
     database_name: '',
     collection_name: '',
-    limit: 1000
+    collection_names: [],
+    limit: '1000'
   });
   const [collections, setCollections] = useState<any[]>([]);
   const [previewData, setPreviewData] = useState<any>(null);
+
+  const parseDocLimit = (raw: string | undefined, fallback = 1000): number => {
+    const n = parseInt(String(raw ?? '').trim(), 10);
+    return Number.isFinite(n) && n >= 1 ? n : fallback;
+  };
+
+  const selectedMongoCollections =
+    mongodbData.collection_names.length > 0
+      ? mongodbData.collection_names
+      : mongodbData.collection_name.trim()
+        ? [mongodbData.collection_name.trim()]
+        : [];
+
+  const mongoPayload = () => ({
+    connection_string: mongodbData.connection_string.trim(),
+    database_name: mongodbData.database_name.trim(),
+    collection_names: selectedMongoCollections,
+    collection_name:
+      selectedMongoCollections.length === 1 ? selectedMongoCollections[0] : selectedMongoCollections[0] || '',
+    limit: parseDocLimit(mongodbData.limit),
+  });
+
+  const toggleCollection = (name: string) => {
+    setMongodbData((prev) => {
+      const exists = prev.collection_names.includes(name);
+      const next = exists
+        ? prev.collection_names.filter((n) => n !== name)
+        : [...prev.collection_names, name];
+      return {
+        ...prev,
+        collection_names: next,
+        collection_name: next.length === 1 ? next[0] : next[0] || '',
+      };
+    });
+  };
 
   const databaseConnections: DatabaseConnection[] = [
     {
@@ -92,9 +130,9 @@ const Database: React.FC = () => {
   };
 
   const handleMongoDBTest = async () => {
-    if (!mongodbData.connection_string || !mongodbData.database_name || !mongodbData.collection_name) {
+    if (!mongodbData.connection_string || !mongodbData.database_name || selectedMongoCollections.length === 0) {
       setConnectionStatus('error');
-      setConnectionMessage('Please fill in connection string, database name, and collection name');
+      setConnectionMessage('Please fill in connection string, database name, and select at least one collection');
       return;
     }
 
@@ -105,21 +143,16 @@ const Database: React.FC = () => {
     try {
       const response = await apiRequest('api/v1/database/mongodb/test-connection', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          connection_string: mongodbData.connection_string,
-          database_name: mongodbData.database_name,
-          collection_name: mongodbData.collection_name
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mongoPayload()),
       });
-
       const result = await response.json();
-
       if (result.success) {
         setConnectionStatus('success');
-        setConnectionMessage(`Connection successful! Found ${result.data.document_count} documents in ${result.data.collection_name}`);
+        const names = result.data.collections || selectedMongoCollections;
+        setConnectionMessage(
+          `Connection successful! ${result.data.document_count} documents across ${names.length} collection(s)`
+        );
       } else {
         setConnectionStatus('error');
         setConnectionMessage(result.message || 'Connection failed');
@@ -133,9 +166,9 @@ const Database: React.FC = () => {
   };
 
   const handleMongoDBConnect = async () => {
-    if (!mongodbData.connection_string || !mongodbData.database_name || !mongodbData.collection_name) {
+    if (!mongodbData.connection_string || !mongodbData.database_name || selectedMongoCollections.length === 0) {
       setConnectionStatus('error');
-      setConnectionMessage('Please fill in all required fields');
+      setConnectionMessage('Please fill in connection string, database name, and select at least one collection');
       return;
     }
 
@@ -146,25 +179,24 @@ const Database: React.FC = () => {
     try {
       const response = await apiRequest('api/v1/database/mongodb/connect', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(mongodbData),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mongoPayload()),
       });
-
       const result = await response.json();
-
       if (result.success) {
         setConnectionStatus('success');
-        setConnectionMessage(`Successfully imported ${result.data.documents_processed} documents from ${result.data.connection_info.database}.${result.data.connection_info.collection}`);
-        
-        // Reset form
+        const collLabel = (result.data.connection_info?.collections || selectedMongoCollections).join(', ');
+        setConnectionMessage(
+          `Successfully imported ${result.data.documents_processed} documents from ${result.data.connection_info.database}: ${collLabel}`
+        );
         setMongodbData({
           connection_string: '',
           database_name: '',
           collection_name: '',
-          limit: 1000
+          collection_names: [],
+          limit: '1000',
         });
+        setCollections([]);
         setSelectedConnection(null);
         setShowMongoForm(false);
       } else {
@@ -187,18 +219,18 @@ const Database: React.FC = () => {
 
     try {
       const response = await apiRequest('api/v1/database/mongodb/collections', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(mongodbData),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          connection_string: mongodbData.connection_string.trim(),
+          database_name: mongodbData.database_name.trim(),
+          collection_name: '',
+        }),
       });
-
       const result = await response.json();
-
       if (result.success) {
         setCollections(result.data.collections);
-        setConnectionMessage(`Found ${result.data.total_collections} collections`);
+        setConnectionMessage(`Found ${result.data.total_collections} collections — multi-select below`);
       } else {
         setConnectionMessage(result.message || 'Failed to get collections');
       }
@@ -208,25 +240,23 @@ const Database: React.FC = () => {
   };
 
   const handlePreviewData = async () => {
-    if (!mongodbData.connection_string || !mongodbData.database_name || !mongodbData.collection_name) {
-      setConnectionMessage('Please fill in all required fields first');
+    if (!mongodbData.connection_string || !mongodbData.database_name || selectedMongoCollections.length === 0) {
+      setConnectionMessage('Please fill in all required fields and select collections first');
       return;
     }
 
     try {
       const response = await apiRequest('api/v1/database/mongodb/preview', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(mongodbData),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mongoPayload()),
       });
-
       const result = await response.json();
-
       if (result.success) {
         setPreviewData(result.data);
-        setConnectionMessage(`Preview generated with ${result.data.preview_count} sample documents`);
+        setConnectionMessage(
+          `Preview generated with ${result.data.preview_count} sample documents from ${selectedMongoCollections.length} collection(s)`
+        );
       } else {
         setConnectionMessage(result.message || 'Failed to preview data');
       }
@@ -323,17 +353,58 @@ const Database: React.FC = () => {
               />
             </div>
             
-            <div>
+            <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Collection Name *
+                Collections * (multi-select after List Collections)
               </label>
-              <input
-                type="text"
-                value={mongodbData.collection_name}
-                onChange={(e) => setMongodbData({...mongodbData, collection_name: e.target.value})}
-                placeholder="my_collection"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-              />
+              {collections.length === 0 ? (
+                <input
+                  type="text"
+                  value={mongodbData.collection_name}
+                  onChange={(e) =>
+                    setMongodbData({
+                      ...mongodbData,
+                      collection_name: e.target.value,
+                      collection_names: e.target.value.trim() ? [e.target.value.trim()] : [],
+                    })
+                  }
+                  placeholder="Type one collection, or click Get Collections to multi-select"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                />
+              ) : (
+                <div className="max-h-48 overflow-y-auto space-y-1 rounded-lg border border-gray-200 p-2">
+                  {collections.map((coll: any) => {
+                    const checked = mongodbData.collection_names.includes(coll.name);
+                    return (
+                      <label
+                        key={coll.name}
+                        className={`flex items-center justify-between gap-2 rounded-md px-2 py-1.5 cursor-pointer ${
+                          checked ? 'bg-indigo-50' : 'hover:bg-gray-50'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleCollection(coll.name)}
+                          />
+                          <span className="text-sm text-gray-900">{coll.name}</span>
+                        </span>
+                        <span className="text-xs text-gray-500">
+                          {typeof coll.document_count === 'number'
+                            ? `${coll.document_count} docs`
+                            : ''}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+              {selectedMongoCollections.length > 0 && (
+                <p className="mt-2 text-xs text-green-700">
+                  Selected {selectedMongoCollections.length}: {selectedMongoCollections.join(', ')}
+                </p>
+              )}
             </div>
             
             <div>
@@ -341,9 +412,19 @@ const Database: React.FC = () => {
                 Document Limit
               </label>
               <input
-                type="number"
-                value={mongodbData.limit}
-                onChange={(e) => setMongodbData({...mongodbData, limit: parseInt(e.target.value) || 1000})}
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={mongodbData.limit ?? ''}
+                onChange={(e) => {
+                  const raw = e.target.value.replace(/[^\d]/g, '');
+                  setMongodbData({ ...mongodbData, limit: raw });
+                }}
+                onBlur={() => {
+                  if (!mongodbData.limit?.trim()) {
+                    setMongodbData({ ...mongodbData, limit: '1000' });
+                  }
+                }}
                 placeholder="1000"
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               />

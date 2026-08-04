@@ -318,6 +318,8 @@ def is_analytical_query(query: str, columns: Optional[Sequence[str]] = None) -> 
     q = str(query or "").strip().lower()
     if not q:
         return False
+    if _is_inchikey_validity_query(q):
+        return True
     if any(token in q for token in ANALYTICAL_TOKENS):
         return True
     if re.search(r"\bby\b", q) and any(tok in q for tok in ("count", "sum", "avg", "average", "mean", "total", "per")):
@@ -339,6 +341,151 @@ def is_analytical_query(query: str, columns: Optional[Sequence[str]] = None) -> 
         ):
             return True
     return False
+
+
+_INCHIKEY_FORMAT_RE = re.compile(r"^[A-Z]{14}-[A-Z]{10}-[A-Z]$")
+
+
+def _is_inchikey_validity_query(query: str) -> bool:
+    q = str(query or "").strip().lower()
+    if not re.search(r"\binchi[\s_-]*keys?\b", q):
+        return False
+    return bool(
+        re.search(
+            r"\b(invalid|valid|rejected|reject|malformed|bad|missing|blank|empty|format|well[- ]?formed)\b",
+            q,
+        )
+    )
+
+
+def _pick_inchikey_field(columns: Sequence[str]) -> Optional[str]:
+    preferred = (
+        "PUBCHEM_IUPAC_INCHIKEY",
+        "INCHIKEY",
+        "InChIKey",
+        "inchikey",
+        "INCHI_KEY",
+    )
+    lower_map = {str(c).lower().replace(" ", "_"): c for c in columns}
+    for pref in preferred:
+        key = pref.lower().replace(" ", "_")
+        if key in lower_map:
+            return lower_map[key]
+    for col in columns:
+        if "inchi" in str(col).lower():
+            return col
+    return None
+
+
+def _classify_inchikey_value(raw: Any) -> str:
+    s = "" if raw is None else str(raw).strip()
+    if not s or s.lower() in {"n/a", "na", "null", "none", "nan", "-", "error", "failed", "invalid", "unknown"}:
+        return "blank"
+    if _INCHIKEY_FORMAT_RE.match(s.upper()):
+        return "valid"
+    return "invalid"
+
+
+def analyze_inchikey_validity(
+    rows: Sequence[Dict[str, str]],
+    *,
+    fabric_name: str = "knowledge fabric",
+) -> Optional[Dict[str, Any]]:
+    """Count valid vs invalid InChIKeys by standard 14-10-1 format over all rows."""
+    if not rows:
+        return None
+    columns = _columns(rows)
+    field = _pick_inchikey_field(columns)
+    if not field:
+        return {
+            "intent": "inchikey_format_validity",
+            "row_total": len(rows),
+            "answer": "\n".join(
+                [
+                    f"## InChIKey format validity — **{fabric_name}**",
+                    "",
+                    "No InChIKey-like column was found on this fabric.",
+                    "",
+                    "Candidate columns:",
+                    "",
+                    markdown_table(["Column"], [[c] for c in list(columns)[:30]] or [["(none)"]]),
+                ]
+            ),
+            "metrics": {"row_total": len(rows), "field": None},
+        }
+
+    valid = invalid = blank = 0
+    invalid_examples: List[str] = []
+    for row in rows:
+        status = _classify_inchikey_value(row.get(field))
+        if status == "valid":
+            valid += 1
+        elif status == "blank":
+            blank += 1
+        else:
+            invalid += 1
+            val = str(row.get(field, "")).strip()
+            if val and val not in invalid_examples and len(invalid_examples) < 12:
+                invalid_examples.append(val)
+
+    total = len(rows)
+    rejected = invalid + blank
+
+    def pct(n: int) -> str:
+        return f"{(100.0 * n / total):.2f}" if total else "0.00"
+
+    example_lines: List[str] = []
+    if invalid_examples:
+        example_lines = [
+            "",
+            "### Example invalid / non-standard values",
+            "",
+            markdown_table(["Value"], [[v] for v in invalid_examples]),
+        ]
+    else:
+        example_lines = ["", "_No malformed (non-blank) InChIKey strings were found._"]
+
+    answer = "\n".join(
+        [
+            f"## InChIKey format validity — **{fabric_name}**",
+            "",
+            f"Column: `{field}`. Valid = standard shape `XXXXXXXXXXXXXX-XXXXXXXXXX-X` (14-10-1 letters).",
+            "Blank/missing and malformed strings count as **rejected** for this check.",
+            "",
+            markdown_table(
+                ["Status", "Count", "% of rows"],
+                [
+                    ["Valid InChIKeys", valid, f"{pct(valid)}%"],
+                    ["Invalid / malformed", invalid, f"{pct(invalid)}%"],
+                    ["Blank / missing", blank, f"{pct(blank)}%"],
+                    ["**Rejected (invalid + blank)**", f"**{rejected}**", f"**{pct(rejected)}%**"],
+                    ["Total rows", total, "100%"],
+                ],
+            ),
+            "",
+            f"**Answer:** **{rejected:,}** InChIKeys were rejected by format checks "
+            f"(**{invalid:,}** malformed + **{blank:,}** blank/missing) out of **{total:,}** rows.",
+            *example_lines,
+            "",
+            "### Notes",
+            f"- Computed over **all {total:,} indexed row chunks** in Weave (full fabric).",
+            "- Structural format only — not ChemSpider/NIH chemistry validation.",
+        ]
+    )
+    return {
+        "intent": "inchikey_format_validity",
+        "row_total": total,
+        "field": field,
+        "answer": answer,
+        "metrics": {
+            "field": field,
+            "valid": valid,
+            "invalid": invalid,
+            "blank": blank,
+            "rejected": rejected,
+            "row_total": total,
+        },
+    }
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -1126,6 +1273,13 @@ def analyze_tabular_query(
     unique_intent = _wants_unique(query)
     numeric_intent = _wants_numeric_agg(query)
     row_total = len(filtered_rows)
+
+    # InChIKey structural validity (invalid / rejected / blank) over full fabric rows.
+    if _is_inchikey_validity_query(query):
+        result = analyze_inchikey_validity(filtered_rows or rows, fabric_name=fabric_name)
+        if result is not None:
+            result["filters"] = filters
+            return result
 
     # Group-by requested but column unresolved → clarify (never silent total_rows).
     if group_fragment and not group_by and _group_by_requested(query):

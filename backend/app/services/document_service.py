@@ -151,7 +151,20 @@ class DocumentService:
     def process_database_data(self, data: List[Dict[str, Any]], source_name: str) -> List[Dict[str, Any]]:
         """Process data from database connection"""
         row_documents = self._build_row_documents(data, source_name)
-        linked_documents = self._build_linked_row_documents(data, source_name)
+        # Multi-collection Mongo pulls must not build cross-collection link pairs
+        # (heterogeneous schemas + shared `_id` can explode memory / fail fabric create).
+        source_collections = {
+            str(row.get("__source_collection") or "").strip()
+            for row in data
+            if row.get("__source_collection")
+        }
+        if len(source_collections) > 1:
+            linked_documents: List[Dict[str, Any]] = []
+            for coll in sorted(source_collections):
+                subset = [r for r in data if str(r.get("__source_collection") or "").strip() == coll]
+                linked_documents.extend(self._build_linked_row_documents(subset, f"{source_name}_{coll}"))
+        else:
+            linked_documents = self._build_linked_row_documents(data, source_name)
         if linked_documents:
             # Keep both granular row chunks (for deterministic counts) and linked chunks (for relational reasoning).
             return row_documents + linked_documents
@@ -178,9 +191,11 @@ class DocumentService:
                     "source_type": "database",
                     "chunk_type": "row",
                     "columns": ",".join(column_keys),
-                    "duplicate_match_type": duplicate_match_type,
-                    "prior_matching_claim_id": prior_match,
-                    "claim_id": claim_id,
+                    "duplicate_match_type": duplicate_match_type or "",
+                    "prior_matching_claim_id": prior_match or "",
+                    "claim_id": claim_id or "",
+                    # Chroma rejects None metadata values — always use a string.
+                    "source_collection": str(row.get("__source_collection") or ""),
                 }
             })
         return documents

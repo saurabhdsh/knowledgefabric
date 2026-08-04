@@ -28,12 +28,32 @@ class DatabaseConnection(BaseModel):
     database_type: str = "postgresql"  # postgresql, mysql, sqlite, mongodb
 
 class MongoDBConnection(BaseModel):
+    """MongoDB Atlas connection.
+
+    Use ``collection_name`` for a single collection (legacy) or ``collection_names``
+    to import one or more collections into a single knowledge fabric.
+    """
+
     connection_string: str
     database_name: str
-    collection_name: str
+    collection_name: Optional[str] = None
+    collection_names: Optional[List[str]] = None
     query: Optional[Dict[str, Any]] = None
     limit: Optional[int] = 1000
     projection: Optional[Dict[str, Any]] = None
+
+    def resolved_collection_names(self) -> List[str]:
+        """Return de-duplicated collection names (multi-select preferred)."""
+        names: List[str] = []
+        if self.collection_names:
+            for n in self.collection_names:
+                cleaned = (n or "").strip()
+                if cleaned and cleaned not in names:
+                    names.append(cleaned)
+        single = (self.collection_name or "").strip()
+        if single and single not in names:
+            names.append(single)
+        return names
 
 class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Search query")
