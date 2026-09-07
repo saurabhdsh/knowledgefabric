@@ -653,12 +653,33 @@ class ConceptExtractor:
             ("user", "User"),
         ]
 
+        # Explicit primary-key / grain columns beat related_* FKs.
+        # ServiceNow CSV demos often have incident_number + related_change_id;
+        # matching "change" inside related_change_id previously mis-labeled the root as Change.
+        grain_exact = [
+            ({"incident_number", "incident_id", "incident_sys_id"}, "Incident"),
+            ({"claim_id", "claim_number", "claim_sys_id"}, "Claim"),
+            ({"ticket_number", "ticket_id", "case_number"}, "Ticket"),
+            ({"change_number", "change_request_id", "chg_number", "change_request_number"}, "Change"),
+            ({"problem_number", "problem_id", "prb_number"}, "Problem"),
+            ({"request_number", "request_id", "ritm_number"}, "Request"),
+            ({"member_id", "member_number"}, "Member"),
+            ({"patient_id", "patient_number", "mrn"}, "Patient"),
+        ]
+        key_set = set(kl)
+        for markers, label in grain_exact:
+            if key_set & markers:
+                # problem_id alone is often a related FK on an incident row — require
+                # it not be only related_problem_id (already handled by exact set).
+                return label
+
+        # Strong prefix signal: several columns share the entity prefix (incident_*).
+        for hint, label in priority:
+            prefix_hits = sum(1 for k in kl if k == hint or k.startswith(hint + "_"))
+            if prefix_hits >= 2 and hint in {"incident", "claim", "ticket", "member", "patient"}:
+                return label
+
         # Strongest signal: the FIRST column is almost always the row grain.
-        # Recognize three flavors:
-        #   1. A *Dim / *Fact / *Lookup / *Bridge / *Mapping column
-        #      (MemberDim, MEMBER_DIM, member_dim) → root = Member
-        #   2. A *_id or *Id column (member_id, memberId, MEMBER_ID) → root = Member
-        #   3. Otherwise fall through to the heuristics below.
         def _matches_priority(name: str) -> Optional[str]:
             lname = name.lower()
             for hint, label in priority:
@@ -666,50 +687,72 @@ class ConceptExtractor:
                     return label
             return None
 
+        def _is_related_fk(col_lower: str) -> bool:
+            return (
+                col_lower.startswith("related_")
+                or col_lower.startswith("parent_")
+                or col_lower.startswith("prior_")
+                or col_lower.endswith("_ref")
+            )
+
         if keys:
             first = keys[0]
             first_lower = first.lower().replace("-", "_")
-            for suf in ENTITY_REF_SUFFIXES:
-                suf_l = suf.lower()
-                if first_lower.endswith(suf_l) and len(first_lower) > len(suf_l):
-                    stripped = first[: len(first) - len(suf_l)].rstrip("_")
-                    if stripped:
-                        derived = self._normalize_mixed_token(stripped) or stripped
-                        return _matches_priority(derived) or derived
-            # *_id / *ID / *_number / *_no — first column is row primary key.
-            for marker in ("_id", "_number", "_no", "_uid", "_pk"):
-                if first_lower.endswith(marker) and len(first_lower) > len(marker):
-                    derived = self._column_base_entity_name(first[: len(first) - len(marker)])
-                    if derived:
-                        return _matches_priority(derived) or derived
-            # *Id / *Number (camelCase)
-            for marker_re in (r"^([a-z][a-z0-9]*(?:[A-Z][a-z0-9]+)*)Id$",
-                              r"^([a-z][a-z0-9]*(?:[A-Z][a-z0-9]+)*)Number$"):
-                camel_match = re.match(marker_re, first)
-                if camel_match:
-                    derived = self._column_base_entity_name(camel_match.group(1))
-                    if derived:
-                        return _matches_priority(derived) or derived
+            # Skip non-grain metadata columns as "first column"
+            if first_lower not in {"record_type", "row_id", "data_source", "knowledge_domain"}:
+                for suf in ENTITY_REF_SUFFIXES:
+                    suf_l = suf.lower()
+                    if first_lower.endswith(suf_l) and len(first_lower) > len(suf_l):
+                        stripped = first[: len(first) - len(suf_l)].rstrip("_")
+                        if stripped:
+                            derived = self._normalize_mixed_token(stripped) or stripped
+                            return _matches_priority(derived) or derived
+                # *_id / *ID / *_number / *_no — first column is row primary key.
+                for marker in ("_id", "_number", "_no", "_uid", "_pk"):
+                    if first_lower.endswith(marker) and len(first_lower) > len(marker):
+                        derived = self._column_base_entity_name(first[: len(first) - len(marker)])
+                        if derived:
+                            return _matches_priority(derived) or derived
+                # *Id / *Number (camelCase)
+                for marker_re in (r"^([a-z][a-z0-9]*(?:[A-Z][a-z0-9]+)*)Id$",
+                                  r"^([a-z][a-z0-9]*(?:[A-Z][a-z0-9]+)*)Number$"):
+                    camel_match = re.match(marker_re, first)
+                    if camel_match:
+                        derived = self._column_base_entity_name(camel_match.group(1))
+                        if derived:
+                            return _matches_priority(derived) or derived
 
+        # *_id priority match — ignore related_* FKs so related_change_id ≠ root Change
         for hint, label in priority:
-            if any(k.endswith("_id") and hint in k for k in kl):
+            if any(
+                k.endswith("_id")
+                and hint in k
+                and not _is_related_fk(k)
+                for k in kl
+            ):
                 return label
 
         for hint, label in priority:
             for k in keys:
                 lower = k.lower()
+                if _is_related_fk(lower):
+                    continue
                 if hint in lower and any(lower.endswith(suf.lower()) for suf in ENTITY_REF_SUFFIXES):
                     return label
 
         for k in keys:
             lk = k.lower()
-            if lk.endswith("_id"):
+            if _is_related_fk(lk):
+                continue
+            if lk.endswith("_id") or lk.endswith("_number"):
                 guessed = self._column_base_entity_name(k)
                 if guessed:
                     return guessed
 
         for k in keys:
             lower = k.lower()
+            if _is_related_fk(lower):
+                continue
             for suf in ENTITY_REF_SUFFIXES:
                 suf_l = suf.lower()
                 if lower.endswith(suf_l) and len(lower) > len(suf_l):
