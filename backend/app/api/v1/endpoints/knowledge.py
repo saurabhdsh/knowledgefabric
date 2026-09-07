@@ -1,6 +1,6 @@
 import os
 import uuid
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Set
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Body, Request
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel
@@ -1375,6 +1375,675 @@ def _build_structured_servicenow_graph(fabric: Dict[str, Any]) -> Optional[Dict[
     }
 
 
+def _singularize_collection_name(name: str) -> str:
+    cleaned = (name or "").strip().lower()
+    if cleaned.endswith("ies") and len(cleaned) > 3:
+        return cleaned[:-3] + "y"
+    if cleaned.endswith("sses"):
+        return cleaned[:-2]
+    if cleaned.endswith("s") and not cleaned.endswith("ss") and len(cleaned) > 1:
+        return cleaned[:-1]
+    return cleaned
+
+
+def _humanize_collection_label(name: str) -> str:
+    return (name or "").replace("_", " ").strip().title() or "Collection"
+
+
+def _infer_logical_collections_from_columns(
+    columns: List[str],
+    *,
+    rows_imported: int = 0,
+) -> List[Dict[str, Any]]:
+    """Infer schema nodes for CSV / denormalized ITSM-CMDB extracts."""
+    cols = [str(c) for c in columns if str(c).strip()]
+    lower = {c.lower() for c in cols}
+    out: List[Dict[str, Any]] = []
+
+    def add(name: str, relevant: List[str]) -> None:
+        out.append(
+            {
+                "name": name,
+                "documents_imported": int(rows_imported or 0),
+                "columns": relevant[:40] or cols[:40],
+            }
+        )
+
+    if {"incident_number", "incident_id"} & lower or "short_description" in lower:
+        add(
+            "incidents",
+            [c for c in cols if c.lower().startswith("incident") or c.lower() in {
+                "short_description", "description", "priority", "state", "category",
+                "subcategory", "urgency", "impact", "opened_at", "resolved_at",
+                "close_code", "close_notes", "sla_id", "sla_name", "sla_breach_status",
+                "business_rule_text", "relationship_summary",
+                "cmdb_ci_id", "business_service_id", "assignment_group_id",
+                "caller_user_id", "related_problem_id", "related_change_id",
+            } or c.lower().endswith("_id")],
+        )
+    if any(c.startswith("cmdb_ci") or c in {"ci_id", "ci_name", "ci_class"} for c in lower):
+        add("cmdb_cis", [c for c in cols if "cmdb_ci" in c.lower() or c.lower().startswith("ci_")])
+    if {"business_service_id", "business_service", "service_id", "service_name"} & lower:
+        add(
+            "business_services",
+            [c for c in cols if "service" in c.lower()],
+        )
+    if {"assignment_group_id", "assignment_group", "group_id"} & lower:
+        add(
+            "assignment_groups",
+            [c for c in cols if "assignment_group" in c.lower() or c.lower() in {"group_id", "group_name"}],
+        )
+    if {"related_problem_id", "problem_id"} & lower:
+        add("problems", [c for c in cols if "problem" in c.lower()])
+    if {"related_change_id", "change_id", "change_type"} & lower:
+        add("change_requests", [c for c in cols if "change" in c.lower()])
+    if {"caller_user_id", "caller_name", "user_id"} & lower:
+        add("users", [c for c in cols if c.lower().startswith("caller") or c.lower().startswith("user")])
+
+    if not out and cols:
+        add("records", cols[:40])
+    return out
+
+
+def _parse_row_chunk_fields(content: str) -> Dict[str, str]:
+    """Parse ``key: value | key: value`` row chunks into a flat dict."""
+    fields: Dict[str, str] = {}
+    for part in str(content or "").split(" | "):
+        if ": " not in part:
+            continue
+        key, value = part.split(": ", 1)
+        key = key.strip()
+        value = value.strip()
+        if key and value and value.lower() not in {"none", "null", "{}"}:
+            fields[key] = value
+    return fields
+
+
+def _short_instance_label(collection: str, fields: Dict[str, str], fallback: str) -> str:
+    coll = (collection or "").lower()
+    preferred: List[str] = []
+    if "compound" in coll:
+        preferred = ["names", "inchikey", "connectivity_key", "compound_id", "_id"]
+    elif coll == "assays" or coll.endswith("assays"):
+        preferred = ["name", "target", "category", "assay_id", "_id"]
+    elif "observation" in coll:
+        preferred = ["compound_id", "assay_id", "dataset_id", "endpoint", "_id"]
+    elif "incident" in coll:
+        preferred = ["incident_number", "incident_id", "short_description", "priority", "_id"]
+    elif "cmdb" in coll or coll in {"cis", "ci"}:
+        preferred = ["cmdb_ci_name", "ci_name", "cmdb_ci_id", "ci_id", "name", "_id"]
+    elif "service" in coll:
+        preferred = ["business_service", "service_name", "business_service_id", "service_id", "name"]
+    elif "assignment" in coll or "group" in coll:
+        preferred = ["assignment_group", "group_name", "assignment_group_id", "group_id"]
+    elif "user" in coll or "caller" in coll:
+        preferred = ["caller_name", "name", "caller_user_id", "user_id", "email"]
+    elif "problem" in coll:
+        preferred = ["related_problem_id", "problem_id", "title", "name"]
+    elif "change" in coll:
+        preferred = ["related_change_id", "change_id", "change_type", "title"]
+    else:
+        preferred = [
+            "incident_number",
+            "short_description",
+            "name",
+            "title",
+            "label",
+            "cmdb_ci_name",
+            "business_service",
+            "inchikey",
+            "compound_id",
+            "assay_id",
+            "_id",
+        ]
+
+    for key in preferred:
+        for fk, fv in fields.items():
+            if fk.lower() != key.lower():
+                continue
+            text = fv
+            if text.startswith("{") and len(text) > 80:
+                text = text[:80] + "…"
+            if len(text) > 64:
+                text = text[:61] + "…"
+            return text
+    return fallback[:64]
+
+
+def _enrich_database_graph_with_samples(
+    fabric: Dict[str, Any],
+    graph_data: Dict[str, Any],
+    *,
+    per_collection_limit: int = 20,
+) -> Dict[str, Any]:
+    """Attach sampled row instances under each collection node (memory-bounded)."""
+    fabric_id = str(fabric.get("id") or "")
+    if not fabric_id or not graph_data:
+        return graph_data
+
+    conn = fabric.get("connection_info") or {}
+    collections = [
+        str(c).strip()
+        for c in (conn.get("collections") or [])
+        if str(c).strip()
+    ]
+    if not collections:
+        for entry in conn.get("per_collection") or []:
+            if isinstance(entry, dict) and entry.get("name"):
+                collections.append(str(entry["name"]).strip())
+    collections = [c for c in collections if c]
+    if not collections:
+        return graph_data
+
+    nodes = list(graph_data.get("nodes") or [])
+    edges = list(graph_data.get("edges") or [])
+    existing_ids = {str(n.get("id")) for n in nodes if n.get("id")}
+    compound_id_to_node: Dict[str, str] = {}
+    assay_id_to_node: Dict[str, str] = {}
+    cmdb_id_to_node: Dict[str, str] = {}
+    service_id_to_node: Dict[str, str] = {}
+    group_id_to_node: Dict[str, str] = {}
+    sampled_total = 0
+    csv_style = str(conn.get("type") or "").lower() in {
+        "csv_upload",
+        "csv",
+    } or any(
+        name in {"incidents", "cmdb_cis", "business_services", "assignment_groups"}
+        for name in collections
+    ) and not any(
+        # Real Mongo multi-collection fabrics keep native collection names from Atlas.
+        name in {"assay_observations", "compounds", "assays"}
+        for name in collections
+    )
+
+    def ensure_instance(
+        *,
+        coll_name: str,
+        key: str,
+        label: str,
+        fields: Dict[str, str],
+    ) -> Optional[str]:
+        if not key:
+            return None
+        coll_node_id = f"collection:{coll_name}"
+        if coll_node_id not in existing_ids:
+            return None
+        safe_key = re.sub(r"[^A-Za-z0-9_-]+", "_", str(key))[:80]
+        node_id = f"instance:{coll_name}:{safe_key}"
+        if node_id in existing_ids:
+            return node_id
+        nodes.append(
+            {
+                "id": node_id,
+                "label": label[:64] or str(key)[:64],
+                "type": "entity",
+                "group": coll_name,
+                "weight": 1,
+                "properties": {
+                    "collection": coll_name,
+                    "sample": True,
+                    "row_id": str(key),
+                },
+            }
+        )
+        existing_ids.add(node_id)
+        edges.append(
+            {
+                "source": coll_node_id,
+                "target": node_id,
+                "label": "includes",
+                "type": "includes",
+                "relation": "includes",
+                "weight": 1,
+            }
+        )
+        return node_id
+
+    # Sample compounds / assays / incidents first so dependent rows can link.
+    ordered = sorted(
+        collections,
+        key=lambda n: (
+            0
+            if "compound" in n.lower() or "incident" in n.lower()
+            else 1
+            if n.lower() in {"assays", "assay", "cmdb_cis", "business_services"}
+            or n.lower().endswith("assays")
+            else 2,
+            n,
+        ),
+    )
+
+    for coll_name in ordered:
+        coll_node_id = f"collection:{coll_name}"
+        if coll_node_id not in existing_ids:
+            continue
+        limit = per_collection_limit
+        if coll_name.lower() == "assays" or coll_name.lower().endswith("assays"):
+            limit = min(per_collection_limit, 12)
+
+        docs: List[Any] = []
+        metas: List[Any] = []
+        ids: List[Any] = []
+        try:
+            raw = vector_service.get_source_documents(
+                fabric_id,
+                limit=limit,
+                source_collection=coll_name,
+                chunk_type="row",
+            )
+            docs = raw.get("documents") or []
+            metas = raw.get("metadatas") or []
+            ids = raw.get("ids") or []
+        except Exception as exc:
+            print(f"Sample fetch failed for {coll_name}: {exc}")
+
+        # CSV / denormalized fabrics usually have empty source_collection metadata.
+        if not docs and (
+            csv_style
+            or coll_name
+            in {
+                "incidents",
+                "records",
+                "cmdb_cis",
+                "business_services",
+                "assignment_groups",
+                "users",
+                "problems",
+                "change_requests",
+            }
+        ):
+            try:
+                raw = vector_service.get_source_documents(
+                    fabric_id,
+                    limit=limit,
+                    chunk_type="row",
+                )
+                docs = raw.get("documents") or []
+                metas = raw.get("metadatas") or []
+                ids = raw.get("ids") or []
+            except Exception as exc:
+                print(f"Fallback sample fetch failed for {coll_name}: {exc}")
+                continue
+
+        # Only materialize row instances under the primary fact collection once for CSV.
+        if csv_style and coll_name not in {"incidents", "records"} and docs:
+            # Still useful to skip duplicate full-row dumps under every schema node.
+            if coll_name not in {"compounds", "assays"}:
+                continue
+
+        for idx, content in enumerate(docs):
+            fields = _parse_row_chunk_fields(str(content))
+            row_key = (
+                fields.get("incident_number")
+                or fields.get("incident_id")
+                or fields.get("_id")
+                or fields.get("inchikey")
+                or fields.get("compound_id")
+                or fields.get("assay_id")
+                or fields.get("cmdb_ci_id")
+                or (ids[idx] if idx < len(ids) else f"{coll_name}_{idx}")
+            )
+            label = _short_instance_label(coll_name, fields, fallback=str(row_key))
+            node_id = ensure_instance(
+                coll_name=coll_name,
+                key=str(row_key),
+                label=label,
+                fields=fields,
+            )
+            if not node_id:
+                continue
+            sampled_total += 1
+
+            # Mint related ITSM/CMDB instances from the same denormalized row.
+            ci_key = fields.get("cmdb_ci_id") or fields.get("ci_id")
+            if ci_key and "collection:cmdb_cis" in existing_ids:
+                ci_node = ensure_instance(
+                    coll_name="cmdb_cis",
+                    key=ci_key,
+                    label=fields.get("cmdb_ci_name") or fields.get("ci_name") or ci_key,
+                    fields=fields,
+                )
+                if ci_node:
+                    cmdb_id_to_node[ci_key] = ci_node
+                    edges.append(
+                        {
+                            "source": node_id,
+                            "target": ci_node,
+                            "label": "impacts_ci",
+                            "type": "references",
+                            "relation": "impacts_ci",
+                            "weight": 1,
+                        }
+                    )
+
+            svc_key = fields.get("business_service_id") or fields.get("service_id")
+            if svc_key and "collection:business_services" in existing_ids:
+                svc_node = ensure_instance(
+                    coll_name="business_services",
+                    key=svc_key,
+                    label=fields.get("business_service") or fields.get("service_name") or svc_key,
+                    fields=fields,
+                )
+                if svc_node:
+                    service_id_to_node[svc_key] = svc_node
+                    edges.append(
+                        {
+                            "source": node_id,
+                            "target": svc_node,
+                            "label": "impacts_service",
+                            "type": "references",
+                            "relation": "impacts_service",
+                            "weight": 1,
+                        }
+                    )
+
+            grp_key = fields.get("assignment_group_id") or fields.get("group_id")
+            if grp_key and "collection:assignment_groups" in existing_ids:
+                grp_node = ensure_instance(
+                    coll_name="assignment_groups",
+                    key=grp_key,
+                    label=fields.get("assignment_group") or fields.get("group_name") or grp_key,
+                    fields=fields,
+                )
+                if grp_node:
+                    group_id_to_node[grp_key] = grp_node
+                    edges.append(
+                        {
+                            "source": node_id,
+                            "target": grp_node,
+                            "label": "assigned_to_group",
+                            "type": "references",
+                            "relation": "assigned_to_group",
+                            "weight": 1,
+                        }
+                    )
+
+            cid = fields.get("compound_id") or (
+                fields.get("_id") if "compound" in coll_name.lower() else None
+            )
+            if cid and "compound" in coll_name.lower():
+                compound_id_to_node[str(cid)] = node_id
+                if fields.get("inchikey"):
+                    compound_id_to_node[str(fields["inchikey"])] = node_id
+            aid = fields.get("assay_id") or (
+                fields.get("_id")
+                if coll_name.lower() in {"assays"} or coll_name.lower().endswith("assays")
+                else None
+            )
+            if aid and (
+                coll_name.lower() == "assays" or coll_name.lower().endswith("assays")
+            ):
+                assay_id_to_node[str(aid)] = node_id
+
+            if "observation" in coll_name.lower():
+                c_ref = fields.get("compound_id")
+                if c_ref and c_ref in compound_id_to_node:
+                    edges.append(
+                        {
+                            "source": node_id,
+                            "target": compound_id_to_node[c_ref],
+                            "label": "compound_id",
+                            "type": "references",
+                            "relation": "references",
+                            "weight": 1,
+                        }
+                    )
+                elif c_ref and "collection:compounds" in existing_ids:
+                    edges.append(
+                        {
+                            "source": node_id,
+                            "target": "collection:compounds",
+                            "label": "compound_id",
+                            "type": "references",
+                            "relation": "references",
+                            "weight": 1,
+                        }
+                    )
+                a_ref = fields.get("assay_id")
+                if a_ref and a_ref in assay_id_to_node:
+                    edges.append(
+                        {
+                            "source": node_id,
+                            "target": assay_id_to_node[a_ref],
+                            "label": "assay_id",
+                            "type": "references",
+                            "relation": "references",
+                            "weight": 1,
+                        }
+                    )
+                elif a_ref and "collection:assays" in existing_ids:
+                    edges.append(
+                        {
+                            "source": node_id,
+                            "target": "collection:assays",
+                            "label": "assay_id",
+                            "type": "references",
+                            "relation": "references",
+                            "weight": 1,
+                        }
+                    )
+
+    # Deduplicate edges
+    seen: Set[tuple] = set()
+    unique_edges: List[Dict[str, Any]] = []
+    for edge in edges:
+        key = (edge.get("source"), edge.get("target"), edge.get("relation"), edge.get("label"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_edges.append(edge)
+
+    graph_data = dict(graph_data)
+    graph_data["nodes"] = nodes
+    graph_data["edges"] = unique_edges
+    graph_data["node_count"] = len(nodes)
+    graph_data["edge_count"] = len(unique_edges)
+    graph_data["rendered_node_count"] = len(nodes)
+    graph_data["rendered_edge_count"] = len(unique_edges)
+    graph_data["document_sample_size"] = sampled_total
+    graph_data["document_sample_capped"] = True
+    note = str(graph_data.get("graph_note") or "").strip()
+    sample_note = (
+        f"Showing schema plus sampled row instances "
+        f"(~{per_collection_limit}/collection; includes Incidents when present)."
+    )
+    graph_data["graph_note"] = f"{note} {sample_note}".strip()
+    return graph_data
+
+
+def _build_structured_database_graph(fabric: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Schema-level graph for database fabrics (Mongo/SQL), including Compounds.
+
+    Exploratory NER on a capped sample often never sees the ``compounds``
+    collection (assay rows are indexed first). This builds an explicit graph from
+    ``connection_info``: collection nodes + FK-style links (e.g. compound_id),
+    then attaches a bounded sample of real row instances.
+    """
+    if str(fabric.get("source_type") or "").lower() != "database":
+        return None
+
+    conn = dict(fabric.get("connection_info") or {})
+    per_collection = list(conn.get("per_collection") or [])
+    collections = [
+        str(c).strip()
+        for c in (conn.get("collections") or [])
+        if str(c).strip()
+    ]
+    if not collections:
+        single = (
+            conn.get("collection")
+            or conn.get("table")
+            or conn.get("table_name")
+            or ""
+        )
+        single = str(single).strip()
+        if single:
+            collections = [single]
+
+    # CSV / denormalized DB extracts often have columns but no Mongo collection list.
+    if not collections and not per_collection:
+        columns = [str(c) for c in (conn.get("columns") or []) if str(c).strip()]
+        rows_imported = int(
+            conn.get("rows_imported")
+            or fabric.get("document_count")
+            or fabric.get("total_chunks")
+            or 0
+        )
+        inferred = _infer_logical_collections_from_columns(
+            columns, rows_imported=rows_imported
+        )
+        if inferred:
+            per_collection = inferred
+            collections = [str(e["name"]) for e in inferred]
+            conn["collections"] = collections
+            conn["per_collection"] = per_collection
+            # Keep enrich() aware this is a logical CSV schema, not Atlas collections.
+            if not conn.get("type"):
+                conn["type"] = "csv_upload"
+
+    if not per_collection and not collections:
+        return None
+
+    # Prefer per_collection (has imported counts + columns); fall back to names only.
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for entry in per_collection:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            continue
+        by_name[name] = entry
+        if name not in collections:
+            collections.append(name)
+    if not collections:
+        return None
+
+    # Temporarily overlay inferred connection_info for sampling/enrichment.
+    fabric_for_graph = dict(fabric)
+    fabric_for_graph["connection_info"] = conn
+    fabric_id = str(fabric.get("id") or "")
+    fabric_name = str(fabric.get("name") or fabric_id)
+    singular_to_collection = {
+        _singularize_collection_name(name): name for name in collections
+    }
+    # Extra aliases for ITSM denormalized columns
+    singular_to_collection.setdefault("cmdb_ci", "cmdb_cis" if "cmdb_cis" in collections else singular_to_collection.get("cmdb_ci", ""))
+    singular_to_collection.setdefault(
+        "business_service",
+        "business_services" if "business_services" in collections else singular_to_collection.get("business_service", ""),
+    )
+    singular_to_collection.setdefault(
+        "assignment_group",
+        "assignment_groups" if "assignment_groups" in collections else singular_to_collection.get("assignment_group", ""),
+    )
+    singular_to_collection = {k: v for k, v in singular_to_collection.items() if v}
+
+    nodes: List[Dict[str, Any]] = [
+        {
+            "id": f"fabric:{fabric_id}",
+            "label": fabric_name,
+            "type": "fabric",
+            "group": "fabric",
+            "weight": 1,
+        }
+    ]
+    edges: List[Dict[str, Any]] = []
+    collection_node_ids: Dict[str, str] = {}
+
+    for name in collections:
+        meta = by_name.get(name) or {}
+        imported = int(meta.get("documents_imported") or 0)
+        columns = [str(c) for c in (meta.get("columns") or []) if c]
+        node_id = f"collection:{name}"
+        collection_node_ids[name] = node_id
+        nodes.append(
+            {
+                "id": node_id,
+                "label": _humanize_collection_label(name),
+                "type": "collection",
+                "group": "schema",
+                "weight": max(imported, 1),
+                "properties": {
+                    "collection": name,
+                    "documents_imported": imported,
+                    "columns": columns[:40],
+                },
+            }
+        )
+        edges.append(
+            {
+                "source": f"fabric:{fabric_id}",
+                "target": node_id,
+                "label": "contains",
+                "type": "contains",
+                "relation": "contains",
+                "weight": max(imported, 1),
+            }
+        )
+
+    # FK-style links: compound_id → compounds, assay_id → assays, etc.
+    for name in collections:
+        meta = by_name.get(name) or {}
+        columns = [str(c).strip() for c in (meta.get("columns") or []) if str(c).strip()]
+        source_id = collection_node_ids[name]
+        for col in columns:
+            col_l = col.lower()
+            if not col_l.endswith("_id") or col_l in {"_id", "id"}:
+                continue
+            ref_key = col_l[:-3]  # compound_id → compound
+            target_name = singular_to_collection.get(ref_key)
+            if not target_name or target_name == name:
+                continue
+            target_id = collection_node_ids.get(target_name)
+            if not target_id:
+                continue
+            edges.append(
+                {
+                    "source": source_id,
+                    "target": target_id,
+                    "label": col,
+                    "type": "references",
+                    "relation": "references",
+                    "weight": max(int(meta.get("documents_imported") or 1), 1),
+                }
+            )
+
+    # Deduplicate edges (same source/target/relation).
+    seen_edges: Set[tuple] = set()
+    unique_edges: List[Dict[str, Any]] = []
+    for edge in edges:
+        key = (edge.get("source"), edge.get("target"), edge.get("relation"), edge.get("label"))
+        if key in seen_edges:
+            continue
+        seen_edges.add(key)
+        unique_edges.append(edge)
+
+    graph_data: Dict[str, Any] = {
+        "fabric_id": fabric_id,
+        "fabric_name": fabric_name,
+        "graph_type": "database_schema",
+        "node_count": len(nodes),
+        "edge_count": len(unique_edges),
+        "rendered_node_count": len(nodes),
+        "rendered_edge_count": len(unique_edges),
+        "nodes": nodes,
+        "edges": unique_edges,
+        "graph_note": (
+            "Schema graph from database/CSV fabric "
+            "(Incidents, CMDB, services when column patterns match)."
+        ),
+        "document_total": int(
+            fabric.get("total_chunks")
+            or fabric.get("document_count")
+            or conn.get("documents_imported")
+            or conn.get("rows_imported")
+            or 0
+        ),
+        "document_sample_capped": False,
+    }
+    return _enrich_database_graph_with_samples(fabric_for_graph, graph_data, per_collection_limit=20)
+
+
 def _generate_graph_llm_insight(
     fabric_name: str,
     analytics: Dict[str, Any],
@@ -2476,44 +3145,49 @@ async def get_fabric_knowledge_graph(fabric_id: str, include_llm: bool = True):
                 "edge_count": canonical.get("edge_count", 0),
             }
         else:
-            # Cap exploratory NER graph build — loading 50k–100k+ Mongo chunks OOM-kills the API.
-            exploratory_doc_limit = 2000
-            source_docs = vector_service.get_source_documents(
-                fabric_id, limit=exploratory_doc_limit
-            )
-            documents = source_docs.get("documents") or []
-            sampled_count = len(documents)
-            total_indexed = int(
-                fabric.get("total_chunks")
-                or fabric.get("document_count")
-                or 0
-            )
-            if total_indexed <= 0:
-                try:
-                    total_indexed = vector_service.count_source_documents(fabric_id)
-                except Exception:
-                    total_indexed = sampled_count
-
-            if not documents:
-                documents = _reconstruct_graph_documents(fabric)
-                sampled_count = len(documents)
-                if total_indexed <= 0:
-                    total_indexed = sampled_count
-
-            graph_data = knowledge_graph_service.build_graph(
-                fabric_id=fabric_id,
-                fabric_name=fabric.get("name", fabric_id),
-                documents=documents,
-            )
-            graph_data["graph_type"] = "exploratory"
-            graph_data["document_sample_size"] = sampled_count
-            graph_data["document_total"] = max(total_indexed, sampled_count)
-            graph_data["document_sample_capped"] = max(total_indexed, sampled_count) > sampled_count
-            if graph_data["document_sample_capped"]:
-                graph_data["graph_note"] = (
-                    f"Exploratory graph built from a sample of {sampled_count:,} / "
-                    f"{graph_data['document_total']:,} indexed chunks to keep memory bounded."
+            structured_db_graph = _build_structured_database_graph(fabric)
+            if structured_db_graph:
+                # Prefer schema graph for DB fabrics so Compounds/Assays always appear.
+                graph_data = structured_db_graph
+            else:
+                # Cap exploratory NER graph build — loading 50k–100k+ Mongo chunks OOM-kills the API.
+                exploratory_doc_limit = 2000
+                source_docs = vector_service.get_source_documents(
+                    fabric_id, limit=exploratory_doc_limit
                 )
+                documents = source_docs.get("documents") or []
+                sampled_count = len(documents)
+                total_indexed = int(
+                    fabric.get("total_chunks")
+                    or fabric.get("document_count")
+                    or 0
+                )
+                if total_indexed <= 0:
+                    try:
+                        total_indexed = vector_service.count_source_documents(fabric_id)
+                    except Exception:
+                        total_indexed = sampled_count
+
+                if not documents:
+                    documents = _reconstruct_graph_documents(fabric)
+                    sampled_count = len(documents)
+                    if total_indexed <= 0:
+                        total_indexed = sampled_count
+
+                graph_data = knowledge_graph_service.build_graph(
+                    fabric_id=fabric_id,
+                    fabric_name=fabric.get("name", fabric_id),
+                    documents=documents,
+                )
+                graph_data["graph_type"] = "exploratory"
+                graph_data["document_sample_size"] = sampled_count
+                graph_data["document_total"] = max(total_indexed, sampled_count)
+                graph_data["document_sample_capped"] = max(total_indexed, sampled_count) > sampled_count
+                if graph_data["document_sample_capped"]:
+                    graph_data["graph_note"] = (
+                        f"Exploratory graph built from a sample of {sampled_count:,} / "
+                        f"{graph_data['document_total']:,} indexed chunks to keep memory bounded."
+                    )
         if graph_data.get("node_count", 1) <= 1 and str(fabric.get("source_type", "")).startswith("servicenow"):
             structured_graph = _build_structured_servicenow_graph(fabric)
             if structured_graph:

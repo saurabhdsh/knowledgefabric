@@ -175,9 +175,10 @@ class DiscoveryOrchestrator:
 
         # Tabular / fabric vector rows: "col: val | col: val" — verb-based rules miss these
         tabular_rb = self.concept_extractor.extract_from_tabular_row_chunks(all_text_chunks)
-        rule_entities.extend(tabular_rb["entities"])
-        rule_relationships.extend(tabular_rb["relationships"])
-        rule_attributes.extend(tabular_rb["attributes"])
+        rule_entities.extend(tabular_rb.get("entities") or [])
+        rule_relationships.extend(tabular_rb.get("relationships") or [])
+        rule_attributes.extend(tabular_rb.get("attributes") or [])
+        rule_rules.extend(tabular_rb.get("business_rules") or [])
 
         max_chunks_total = getattr(settings, "ONTOLOGY_MAX_CHUNKS_TOTAL", 0) or 0
         if max_chunks_total > 0 and len(all_text_chunks) > max_chunks_total:

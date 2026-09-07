@@ -203,6 +203,7 @@ class ConceptExtractor:
         entities: List[Dict[str, Any]] = []
         relationships: List[Dict[str, Any]] = []
         attributes: List[Dict[str, Any]] = []
+        business_rules: List[Dict[str, Any]] = []
 
         sampled_texts: List[str] = []
         for c in chunks[:max_chunks]:
@@ -218,6 +219,7 @@ class ConceptExtractor:
                 "entities": entities,
                 "relationships": relationships,
                 "attributes": attributes,
+                "business_rules": business_rules,
                 "enumerations": [],
             }
 
@@ -232,6 +234,7 @@ class ConceptExtractor:
                 "entities": entities,
                 "relationships": relationships,
                 "attributes": attributes,
+                "business_rules": business_rules,
                 "enumerations": [],
             }
 
@@ -338,10 +341,70 @@ class ConceptExtractor:
                 "confidence": 0.74,
             })
 
+        # Explicit / implicit business rules from CSV/DB row values.
+        # Columns like business_rule_text are common in ITSM/AMS demo extracts;
+        # also mine must/shall/cannot phrases from any cell (and description fields).
+        rule_column_hints = {
+            "business_rule_text",
+            "business_rule",
+            "business_rules",
+            "rule_text",
+            "policy_rule",
+            "constraint",
+            "validation_rule",
+        }
+        seen_rule_expr: set = set()
+
+        def _add_rule(expression: str, *, confidence: float, source_col: str = "") -> None:
+            expr = re.sub(r"\s+", " ", (expression or "").strip())
+            if len(expr) < 12:
+                return
+            key = expr.lower()[:240]
+            if key in seen_rule_expr:
+                return
+            seen_rule_expr.add(key)
+            business_rules.append({
+                "id": f"rule_tab_{uuid.uuid4().hex[:8]}",
+                "expression": expr[:500],
+                "source": "tabular_fabric",
+                "evidence_snippet": (
+                    f"From column {source_col}: {expr[:200]}" if source_col else expr[:200]
+                ),
+                "confidence": confidence,
+            })
+
+        rule_value_patterns = [
+            re.compile(r"(?:must|shall|required|mandatory)\b[^.?!]*[.?!]?", re.I),
+            re.compile(r"(?:cannot|must\s+not|should\s+not)\b[^.?!]*[.?!]?", re.I),
+            re.compile(r"(?:should|may)\b[^.?!]*[.?!]?", re.I),
+            re.compile(r"depends\s+on\b[^.?!]*[.?!]?", re.I),
+        ]
+
+        for pairs in pair_lists:
+            for k, v in pairs:
+                if not v or len(str(v).strip()) < 12:
+                    continue
+                value = str(v).strip()
+                col_l = k.lower().strip()
+                if col_l in rule_column_hints or "business_rule" in col_l or col_l.endswith("_rule"):
+                    _add_rule(value, confidence=0.88, source_col=k)
+                    continue
+                # Descriptions often embed "Business rule: ..." for demo CSVs
+                if col_l in {"description", "short_description", "close_notes", "relationship_summary"}:
+                    if re.search(r"\b(must|shall|cannot|should|required|mandatory)\b", value, re.I):
+                        for pat in rule_value_patterns:
+                            for m in pat.finditer(value):
+                                _add_rule(m.group(0), confidence=0.72, source_col=k)
+                elif re.search(r"\b(must|shall|cannot|must not|required|mandatory)\b", value, re.I):
+                    for pat in rule_value_patterns:
+                        for m in pat.finditer(value):
+                            _add_rule(m.group(0), confidence=0.65, source_col=k)
+
         return {
             "entities": entities,
             "relationships": relationships,
             "attributes": attributes,
+            "business_rules": business_rules,
             "enumerations": [],
         }
 

@@ -384,20 +384,47 @@ class VectorService:
                 "last_training": None
             }
 
-    def get_source_documents(self, source_id: str, limit: Optional[int] = None):
+    def get_source_documents(
+        self,
+        source_id: str,
+        limit: Optional[int] = None,
+        *,
+        source_collection: Optional[str] = None,
+        chunk_type: Optional[str] = None,
+    ):
         """Get documents for a specific source.
 
         Pass ``limit`` for large fabrics (e.g. Knowledge Graph) so callers do not
         pull every chunk into memory and OOM the API process.
+        Optional ``source_collection`` / ``chunk_type`` filter Mongo multi-collection
+        samples so Compounds are not drowned out by assay rows.
         """
         try:
-            kwargs: Dict[str, Any] = {"where": {"source_id": source_id}}
+            clauses: List[Dict[str, Any]] = [{"source_id": source_id}]
+            if source_collection:
+                clauses.append({"source_collection": str(source_collection)})
+            if chunk_type:
+                clauses.append({"chunk_type": str(chunk_type)})
+            where: Dict[str, Any]
+            if len(clauses) == 1:
+                where = clauses[0]
+            else:
+                where = {"$and": clauses}
+            kwargs: Dict[str, Any] = {"where": where}
             if limit is not None and int(limit) > 0:
                 kwargs["limit"] = int(limit)
             results = self.documents_collection.get(**kwargs)
             return results
         except Exception as e:
             print(f"Error getting source documents: {e}")
+            # Fallback without chunk_type if metadata filter is unsupported.
+            if chunk_type:
+                return self.get_source_documents(
+                    source_id,
+                    limit=limit,
+                    source_collection=source_collection,
+                    chunk_type=None,
+                )
             return {"documents": [], "metadatas": [], "ids": []}
 
     def export_source(self, source_id: str):
