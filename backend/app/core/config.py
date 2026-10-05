@@ -136,6 +136,9 @@ class Settings(BaseSettings):
     # Retrieval itself is not capped; only prompt packing may truncate with a notice.
     QUERY_MAX_CONTEXT_CHARS: int = int(os.environ.get("QUERY_MAX_CONTEXT_CHARS", str(350_000)))
     QUERY_MAX_COMPLETION_TOKENS: int = int(os.environ.get("QUERY_MAX_COMPLETION_TOKENS", "4000"))
+    AGENT_SESSION_TTL_HOURS: int = int(os.environ.get("AGENT_SESSION_TTL_HOURS", "24"))
+    AGENT_SESSION_MAX_TURNS: int = int(os.environ.get("AGENT_SESSION_MAX_TURNS", "40"))
+    AGENT_SESSION_CONTEXT_TURNS: int = int(os.environ.get("AGENT_SESSION_CONTEXT_TURNS", "8"))
     ENABLED_LLM_PROVIDERS_RAW: str = Field(
         default="openai,bedrock",
         validation_alias="ENABLED_LLM_PROVIDERS",

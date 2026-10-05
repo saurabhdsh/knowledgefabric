@@ -22,6 +22,8 @@ const TestLLM: React.FC = () => {
   const [llmProviders, setLlmProviders] = useState<Array<{ id: string; name: string; description?: string }>>([]);
   const [testQuery, setTestQuery] = useState<string>('');
   const [testResults, setTestResults] = useState<any[]>([]);
+  const [sessionByFabric, setSessionByFabric] = useState<Record<string, string>>({});
+  const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, string>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [fabrics, setFabrics] = useState<KnowledgeFabric[]>([]);
   const [loadingFabrics, setLoadingFabrics] = useState(true);
@@ -103,6 +105,7 @@ const TestLLM: React.FC = () => {
           llm_provider: selectedLLM,
           retrieve_all: true,
           top_k: 0,
+          session_id: sessionByFabric[selectedFabric] || undefined,
         })
       });
 
@@ -117,8 +120,15 @@ const TestLLM: React.FC = () => {
         timestamp: new Date().toISOString(),
         relevantChunks: data.success ? (data.data.relevant_chunks ?? data.data.relevant_chunks_found ?? 0) : 0,
         packedChunks: data.success ? (data.data.retrieval?.packed_chunks ?? data.data.relevant_chunks_found ?? 0) : 0,
-        processingTime: data.success ? data.data.processing_time || '1.2s' : '0s'
+        processingTime: data.success ? data.data.processing_time || '1.2s' : '0s',
+        sessionId: data.success ? data.data.session_id : undefined,
+        episodeId: data.success ? data.data.episode_id : undefined,
+        feedbackState: null as string | null,
       };
+
+      if (data.success && data.data.session_id) {
+        setSessionByFabric((prev) => ({ ...prev, [selectedFabric]: data.data.session_id }));
+      }
 
       setTestResults(prev => [result, ...prev]);
       setStatusBanner({
@@ -146,6 +156,47 @@ const TestLLM: React.FC = () => {
     }
   };
 
+  const submitFeedback = async (index: number, rating: 'up' | 'down', applyCorrection: boolean) => {
+    const result = testResults[index];
+    if (!result?.episodeId || !result?.fabricId) {
+      setStatusBanner({ type: 'info', message: 'This answer has no episode id yet. Run the query again after restart.' });
+      return;
+    }
+    const correction = (feedbackDrafts[index] || '').trim();
+    try {
+      const response = await apiRequest('api/v1/agent/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fabric_id: result.fabricId,
+          episode_id: result.episodeId,
+          session_id: result.sessionId,
+          rating,
+          outcome: rating === 'up' ? 'helpful' : 'incorrect',
+          correction_text: correction || undefined,
+        }),
+      });
+      const data = await response.json();
+      if (!data.success) {
+        setStatusBanner({ type: 'error', message: data.error || data.message || 'Feedback failed.' });
+        return;
+      }
+      let note = rating === 'up' ? 'Marked helpful.' : 'Correction queued.';
+      const candidateId = data.data?.enrichment_candidate_id;
+      if (applyCorrection && candidateId) {
+        const approve = await apiRequest(`api/v1/agent/enrichment/${candidateId}/approve`, { method: 'POST' });
+        const approved = await approve.json();
+        note = approved.success
+          ? 'Correction written into the fabric. Later answers will use it.'
+          : (approved.error || approved.message || 'Could not apply correction.');
+      }
+      setTestResults((prev) => prev.map((item, i) => (i === index ? { ...item, feedbackState: note } : item)));
+      setStatusBanner({ type: 'success', message: note });
+    } catch {
+      setStatusBanner({ type: 'error', message: 'Feedback request failed.' });
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 text-[#cbd5e1] [&_.bg-white]:bg-[#10141d]/75 [&_.bg-gray-50]:bg-white/[0.03] [&_.bg-gray-100]:bg-white/[0.05] [&_.text-gray-900]:text-[#e8edf4] [&_.text-gray-800]:text-[#cbd5e1] [&_.text-gray-700]:text-[#cbd5e1] [&_.text-gray-600]:text-[#8b9cb0] [&_.text-gray-500]:text-[#8b9cb0] [&_.text-gray-400]:text-[#8b9cb0] [&_.text-gray-300]:text-[#8b9cb0] [&_.border-gray-200]:border-[rgba(148,163,184,0.11)] [&_.border-gray-300]:border-[rgba(148,163,184,0.2)] [&_input]:bg-[#10141d]/70 [&_input]:text-[#e8edf4] [&_input]:border-[rgba(148,163,184,0.2)] [&_input]:placeholder:text-[#8b9cb0] [&_textarea]:bg-[#10141d]/70 [&_textarea]:text-[#e8edf4] [&_textarea]:border-[rgba(148,163,184,0.2)] [&_textarea]:placeholder:text-[#8b9cb0] [&_select]:bg-[#10141d]/70 [&_select]:text-[#e8edf4] [&_select]:border-[rgba(148,163,184,0.2)]">
       <div className="mb-8">
@@ -155,7 +206,7 @@ const TestLLM: React.FC = () => {
           </div>
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Test with LLM</h1>
-            <p className="text-gray-600">Test your knowledge fabrics with advanced LLM capabilities</p>
+            <p className="text-gray-600">Ask a fabric. CKF keeps the session, the episode, and approved corrections.</p>
           </div>
         </div>
       </div>
@@ -211,6 +262,17 @@ const TestLLM: React.FC = () => {
                       {fabricKindLabel(fabrics.find(f => f.id === selectedFabric)?.weave_domain)}
                       {' — '}domain-aware reasoning is applied automatically for complex questions.
                     </p>
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      <span className="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded-full bg-cyan-500/15 text-cyan-200 border border-cyan-400/30">
+                        CKF session {sessionByFabric[selectedFabric] ? 'on' : 'starts on first query'}
+                      </span>
+                      <span className="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded-full bg-violet-500/15 text-violet-200 border border-violet-400/30">
+                        CKF episodic memory
+                      </span>
+                      <span className="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded-full bg-emerald-500/15 text-emerald-200 border border-emerald-400/30">
+                        CKF closed loop
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>
@@ -295,6 +357,16 @@ const TestLLM: React.FC = () => {
                       <span className="px-2 py-1 text-xs bg-emerald-100 text-emerald-700 rounded-full">
                         {result.llmProvider?.toUpperCase() || 'LLM'}
                       </span>
+                      {result.sessionId && (
+                        <span className="px-2 py-1 text-[10px] uppercase tracking-wide rounded-full bg-cyan-500/15 text-cyan-200">
+                          CKF session
+                        </span>
+                      )}
+                      {result.episodeId && (
+                        <span className="px-2 py-1 text-[10px] uppercase tracking-wide rounded-full bg-violet-500/15 text-violet-200">
+                          CKF episode
+                        </span>
+                      )}
                     </div>
                     <span className="text-xs text-gray-500">
                       {new Date(result.timestamp).toLocaleTimeString()}
@@ -315,6 +387,44 @@ const TestLLM: React.FC = () => {
                     <span>Processing: {result.processingTime}</span>
                     <span>Chunks: {result.relevantChunks}{result.packedChunks && result.packedChunks !== result.relevantChunks ? ` (packed ${result.packedChunks})` : ''}</span>
                   </div>
+                  {result.episodeId && (
+                    <div className="mt-3 space-y-2">
+                      <p className="text-[10px] uppercase tracking-wide text-emerald-200/80">CKF closed loop</p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => submitFeedback(index, 'up', false)}
+                          className="rounded-md border border-emerald-400/40 px-2 py-1 text-xs text-emerald-200"
+                        >
+                          Helpful
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => submitFeedback(index, 'down', false)}
+                          className="rounded-md border border-rose-400/40 px-2 py-1 text-xs text-rose-200"
+                        >
+                          Incorrect
+                        </button>
+                      </div>
+                      <textarea
+                        value={feedbackDrafts[index] || ''}
+                        onChange={(e) => setFeedbackDrafts((prev) => ({ ...prev, [index]: e.target.value }))}
+                        placeholder="Correction to write back into this fabric"
+                        className="w-full rounded-md border px-2 py-1 text-xs"
+                        rows={2}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => submitFeedback(index, 'down', true)}
+                        className="rounded-md bg-emerald-600 px-2 py-1 text-xs text-white"
+                      >
+                        Apply correction to fabric
+                      </button>
+                      {result.feedbackState && (
+                        <p className="text-xs text-emerald-200">{result.feedbackState}</p>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))
             )}

@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import upload, search, knowledge, training, database, ontology, platform, graph, auth, users
+from app.api.v1.endpoints import upload, search, knowledge, training, database, ontology, platform, graph, auth, users, agent
 
 api_router = APIRouter()
 
@@ -13,4 +13,5 @@ api_router.include_router(training.router, prefix="/training", tags=["training"]
 api_router.include_router(database.router, prefix="/database", tags=["database"])
 api_router.include_router(ontology.router, prefix="/ontology", tags=["ontology"])
 api_router.include_router(platform.router, prefix="/platform", tags=["platform"])
-api_router.include_router(graph.router, prefix="/graph", tags=["graph"]) 
+api_router.include_router(graph.router, prefix="/graph", tags=["graph"])
+api_router.include_router(agent.router, prefix="/agent", tags=["agent-memory"]) 

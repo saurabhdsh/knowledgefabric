@@ -39,6 +39,7 @@ from app.services.analytics.tabular_analytics import (
     load_rows_from_source_documents,
     markdown_table,
 )
+from app.services import agent_memory_service
 from app.utils.json_sanitize import sanitize_for_json
 import time
 import json
@@ -217,6 +218,34 @@ def user_fabric(fabric_id: str) -> Optional[Dict[str, Any]]:
 
 def persist_fabric(fabric_data: Dict[str, Any]) -> None:
     fabric_store.save(fabric_data)
+
+
+def _remember_query(
+    fabric_id: str,
+    query: str,
+    answer: str,
+    request: dict,
+    *,
+    llm_provider: Optional[str] = None,
+    analytics_intent: Optional[str] = None,
+    relevant_chunks: int = 0,
+    processing_time: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Attach session + episode ids. Failure must not block the answer."""
+    try:
+        return agent_memory_service.record_exchange(
+            fabric_id=fabric_id,
+            query=query,
+            answer=answer,
+            session_id=request.get("session_id"),
+            llm_provider=llm_provider,
+            analytics_intent=analytics_intent,
+            relevant_chunks=relevant_chunks,
+            processing_time=processing_time,
+        )
+    except Exception as exc:
+        print(f"Session memory record skipped for {fabric_id}: {exc}")
+        return {}
 
 
 def _enqueue_post_fabric_jobs(fabric_id: str, fabric_data: Dict[str, Any]) -> None:
@@ -4031,6 +4060,16 @@ async def query_knowledge_base(
                             "analytics_intent": analytical.get("intent"),
                             "analytics_metrics": analytical.get("metrics"),
                             "processing_time": processing_time,
+                            **_remember_query(
+                                fabric_id,
+                                query,
+                                analytical["answer"],
+                                request,
+                                llm_provider="deterministic",
+                                analytics_intent=analytical.get("intent"),
+                                relevant_chunks=row_total,
+                                processing_time=processing_time,
+                            ),
                         },
                         error=None,
                     )
@@ -4087,6 +4126,16 @@ async def query_knowledge_base(
                         "relevant_chunks": pair_total if pair_total > 0 else row_total,
                         "llm_provider": "deterministic",
                         "processing_time": processing_time,
+                        **_remember_query(
+                            fabric_id,
+                            query,
+                            answer,
+                            request,
+                            llm_provider="deterministic",
+                            analytics_intent="duplicate_counts",
+                            relevant_chunks=pair_total if pair_total > 0 else row_total,
+                            processing_time=processing_time,
+                        ),
                     },
                     error=None
                 )
@@ -4131,6 +4180,16 @@ async def query_knowledge_base(
                             "relevant_chunks": len(lookup.get("found", [])),
                             "llm_provider": "deterministic",
                             "processing_time": processing_time,
+                            **_remember_query(
+                                fabric_id,
+                                query,
+                                answer,
+                                request,
+                                llm_provider="deterministic",
+                                analytics_intent="record_lookup",
+                                relevant_chunks=len(lookup.get("found", [])),
+                                processing_time=processing_time,
+                            ),
                         },
                         error=None
                     )
@@ -4351,13 +4410,22 @@ async def query_knowledge_base(
                 )
 
                 context_text, retrieval_meta = _pack_context_chunks(context_chunks)
+                try:
+                    memory_context = agent_memory_service.build_query_context(
+                        fabric_id, request.get("session_id")
+                    )
+                except Exception as memory_exc:
+                    print(f"Session memory context skipped for {fabric_id}: {memory_exc}")
+                    memory_context = ""
+                memory_block = f"\n\n{memory_context}\n" if memory_context else ""
                 user_prompt = f"""Question: {query}
-
+{memory_block}
                     Knowledge Fabric Content ({retrieval_meta.get('packed_chunks', 0)} of {retrieval_meta.get('retrieved_chunks', 0)} retrieved chunks included):
                     {context_text}
 
                     Please analyze the above content from the knowledge fabric and provide a detailed, comprehensive answer to the question.
                     Use as much of the provided fabric evidence as needed. Do not invent rows or facts that are not present.
+                    If APPROVED FABRIC MEMORY is present, treat those corrections as authoritative over conflicting earlier answers.
                     If a section titled "FULL-FABRIC ANALYTICS SNAPSHOT" is present, treat those figures as authoritative population totals — never replace them with counts from a few sample chunks.
                     Format analytical answers with Markdown headings and pipe tables when reporting counts, group-by results, or numeric summaries.
                     If the content doesn't directly address the question, please state this clearly.
@@ -4427,6 +4495,15 @@ async def query_knowledge_base(
                 "weave_domain": normalize_fabric_kind(fabric.get("weave_domain")),
                 "fabric_kind_label": fabric_kind_label(fabric.get("weave_domain")),
                 "retrieve_all": query_retrieve_all,
+                **_remember_query(
+                    fabric_id,
+                    query,
+                    answer,
+                    request,
+                    llm_provider=llm_provider,
+                    relevant_chunks=len(context_chunks),
+                    processing_time=processing_time,
+                ),
                 "retrieval": retrieval_meta or {
                     "retrieved_chunks": len(context_chunks),
                     "packed_chunks": len(context_chunks),

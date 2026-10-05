@@ -175,3 +175,84 @@ class GraphBuildRunRecord(Base):
 
 Index("ix_graph_nodes_fabric_version", GraphNodeRecord.fabric_id, GraphNodeRecord.ontology_version_id)
 Index("ix_graph_edges_fabric_version", GraphEdgeRecord.fabric_id, GraphEdgeRecord.ontology_version_id)
+
+
+class AgentSessionRecord(Base):
+    """Short-term memory: one conversation bound to a fabric."""
+
+    __tablename__ = "agent_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    fabric_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    owner_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    title: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    turn_count: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    turns: Mapped[list["AgentSessionTurnRecord"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )
+
+
+class AgentSessionTurnRecord(Base):
+    __tablename__ = "agent_session_turns"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    session_id: Mapped[str] = mapped_column(String(64), ForeignKey("agent_sessions.id"), index=True)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    episode_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    session: Mapped["AgentSessionRecord"] = relationship(back_populates="turns")
+
+
+class RetrievalEpisodeRecord(Base):
+    """Append-only episodic log of a query and its answer."""
+
+    __tablename__ = "retrieval_episodes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    fabric_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    llm_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    analytics_intent: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    relevant_chunks: Mapped[int] = mapped_column(Integer, default=0)
+    processing_time: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    feedback_flag: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class FabricFeedbackRecord(Base):
+    __tablename__ = "fabric_feedback"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    fabric_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    episode_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rating: Mapped[str] = mapped_column(String(16), nullable=False)  # up | down
+    outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    correction_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="captured", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class EnrichmentCandidateRecord(Base):
+    """Correction waiting to be approved back into the fabric."""
+
+    __tablename__ = "enrichment_candidates"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    fabric_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    feedback_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    episode_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    query: Mapped[str] = mapped_column(Text, default="")
+    proposed_fact: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    vector_chunk_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
