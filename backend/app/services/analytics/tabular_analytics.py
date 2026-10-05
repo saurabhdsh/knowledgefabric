@@ -78,9 +78,12 @@ CATEGORY_HINT_LABELS = (
 )
 
 PREFERRED_CATEGORICAL_FIELDS = (
+    "outcome_label",
     "PUBCHEM_ACTIVITY_OUTCOME",
     "activity_outcome",
     "ACTIVITY_OUTCOME",
+    "outcome.phenotype",
+    "outcome.source_label",
     "outcome",
     "duplicate_match_type",
     "match_type",
@@ -90,6 +93,8 @@ PREFERRED_CATEGORICAL_FIELDS = (
     "result",
     "decision_route",
     "release_status",
+    "dataset_id",
+    "assay_id",
 )
 
 PREFERRED_NUMERIC_FIELDS = (
@@ -127,6 +132,50 @@ COLUMN_SYNONYMS: Dict[str, Tuple[str, ...]] = {
 FilterSpec = Dict[str, Any]
 
 
+def _flatten_nested_value(key: str, value: str, into: Dict[str, str]) -> None:
+    """
+    Flatten nested dict-like field values (Python / JSON) into sibling keys.
+
+    Example: outcome = "{'source_label': 'Inactive', 'phenotype': 'Inactive'}"
+    → outcome retained raw, plus outcome.source_label / outcome.phenotype, and
+      a normalized outcome_label for analytics.
+    """
+    raw = str(value or "").strip()
+    if not raw or raw[0] not in "{[":
+        return
+    nested: Any = None
+    try:
+        import ast
+        import json
+
+        try:
+            nested = ast.literal_eval(raw)
+        except Exception:
+            nested = json.loads(raw.replace("None", "null").replace("'", '"'))
+    except Exception:
+        return
+    if not isinstance(nested, dict):
+        return
+    for nk, nv in nested.items():
+        child_key = f"{key}.{nk}"
+        if nv is None:
+            into[child_key] = ""
+        elif isinstance(nv, (dict, list)):
+            into[child_key] = str(nv)
+        else:
+            into[child_key] = str(nv).strip()
+    if key.lower() in {"outcome", "activity_outcome", "pubchem_activity_outcome"}:
+        for label_key in ("phenotype", "source_label", "standard_label", "label"):
+            cand = nested.get(label_key)
+            if cand is not None and str(cand).strip() and str(cand).strip().lower() not in {
+                "none",
+                "null",
+                "nan",
+            }:
+                into["outcome_label"] = str(cand).strip()
+                break
+
+
 def parse_row_text(content: str) -> Dict[str, str]:
     """Parse `key: value | key: value` row chunk text into a dict."""
     parsed: Dict[str, str] = {}
@@ -139,6 +188,7 @@ def parse_row_text(content: str) -> Dict[str, str]:
         v = value.strip()
         if k:
             parsed[k] = v
+            _flatten_nested_value(k, v, parsed)
     return parsed
 
 
@@ -155,8 +205,22 @@ def load_rows_from_source_documents(
         if chunk_type and chunk_type != "row":
             continue
         row = parse_row_text(str(content or ""))
-        if row:
-            rows.append(row)
+        if not row:
+            continue
+        # Preserve source/file hints so multi-assay joins (CYP2C9 vs CYP2D6 …) work.
+        for meta_key, row_key in (
+            ("source_name", "_source_name"),
+            ("source_file", "_source_file"),
+            ("file_name", "_file_name"),
+            ("filename", "_file_name"),
+            ("original_filename", "_file_name"),
+            ("assay_name", "_assay_name"),
+            ("assay_id", "_assay_id"),
+        ):
+            val = metadata.get(meta_key)
+            if val is not None and str(val).strip() and row_key not in row:
+                row[row_key] = str(val).strip()
+        rows.append(row)
     return rows
 
 
@@ -320,6 +384,14 @@ def is_analytical_query(query: str, columns: Optional[Sequence[str]] = None) -> 
         return False
     if _is_inchikey_validity_query(q):
         return True
+    if _is_multi_assay_inactive_query(q):
+        return True
+    if _is_panel_observation_query(q):
+        return True
+    if _is_max_assays_per_compound_query(q):
+        return True
+    if _is_compound_inventory_query(q):
+        return True
     if any(token in q for token in ANALYTICAL_TOKENS):
         return True
     if re.search(r"\bby\b", q) and any(tok in q for tok in ("count", "sum", "avg", "average", "mean", "total", "per")):
@@ -365,6 +437,9 @@ def _pick_inchikey_field(columns: Sequence[str]) -> Optional[str]:
         "InChIKey",
         "inchikey",
         "INCHI_KEY",
+        "compound_id",  # Mongo chemical fabric observations
+        "InChIKeys",
+        "_id",  # compounds master collection on Mongo fabric
     )
     lower_map = {str(c).lower().replace(" ", "_"): c for c in columns}
     for pref in preferred:
@@ -372,9 +447,293 @@ def _pick_inchikey_field(columns: Sequence[str]) -> Optional[str]:
         if key in lower_map:
             return lower_map[key]
     for col in columns:
-        if "inchi" in str(col).lower():
+        cl = str(col).lower()
+        if "inchi" in cl or cl in {"compound_id", "compoundid"}:
             return col
     return None
+
+
+def _row_compound_key(row: Dict[str, str]) -> Optional[str]:
+    """Best InChIKey / compound identifier on a row (master or observation)."""
+    for field in (
+        "inchikey",
+        "InChIKey",
+        "INCHIKEY",
+        "PUBCHEM_IUPAC_INCHIKEY",
+        "compound_id",
+        "InChIKeys",
+        "_id",
+    ):
+        raw = str(row.get(field, "")).strip()
+        if not raw or raw.lower() in {"none", "null", "nan"}:
+            continue
+        upper = raw.upper()
+        if _INCHIKEY_FORMAT_RE.match(upper):
+            return upper
+        if raw.isdigit() and field.upper() in {"CID", "PUBCHEM_CID", "_ID"}:
+            return raw
+    # any inchi-ish column
+    for key, val in row.items():
+        if "inchi" not in str(key).lower() and str(key).lower() not in {"compound_id", "_id"}:
+            continue
+        raw = str(val or "").strip()
+        if raw and _INCHIKEY_FORMAT_RE.match(raw.upper()):
+            return raw.upper()
+    return None
+
+
+def _is_compound_master_row(row: Dict[str, str]) -> bool:
+    """True for compounds-collection rows (no assay dataset_id; has structure/coverage)."""
+    if str(row.get("dataset_id", "")).strip() or str(row.get("assay_id", "")).strip():
+        return False
+    if not _row_compound_key(row):
+        return False
+    # Positive signals from Mongo compounds master
+    if any(
+        str(row.get(k, "")).strip()
+        for k in (
+            "connectivity_key",
+            "data_coverage",
+            "structure",
+            "structure.canonical_smiles",
+            "datasets",
+            "inchikey",
+        )
+    ):
+        return True
+    # Master-like: has InChIKey _id and no observation outcome
+    if str(row.get("_id", "")).strip() and not str(row.get("outcome", "")).strip():
+        return True
+    return False
+
+
+def _is_compound_inventory_query(query: str) -> bool:
+    """How many chemical compounds / molecules are in the fabric/database."""
+    q = str(query or "").strip().lower()
+    if not re.search(r"\b(how many|count|number of|total|present)\b", q):
+        return False
+    if not re.search(r"\b((chemical\s+)?compounds?|molecules?|structures?)\b", q):
+        return False
+    # Observations / panels / inactive intersection — other handlers.
+    if re.search(
+        r"\b(observations?|assays?|inactive|across|cyp[\s_-]*\d|her2|pampa|rlm|solubility|per\s+compound)\b",
+        q,
+    ):
+        return False
+    if re.search(r"\binvalid\b|\brejected\b|\bmalformed\b|\bmaximum\b|\bmax\b", q):
+        return False
+    return True
+
+
+def analyze_compound_inventory(
+    rows: Sequence[Dict[str, str]],
+    *,
+    fabric_name: str = "knowledge fabric",
+) -> Optional[Dict[str, Any]]:
+    """Count unique chemical compounds (prefer compounds-master rows)."""
+    if not rows:
+        return None
+
+    master_keys: set = set()
+    obs_keys: set = set()
+    all_keys: set = set()
+    master_rows = 0
+    obs_rows = 0
+
+    for row in rows:
+        key = _row_compound_key(row)
+        if not key:
+            continue
+        all_keys.add(key)
+        if _is_compound_master_row(row):
+            master_keys.add(key)
+            master_rows += 1
+        elif str(row.get("dataset_id", "")).strip() or str(row.get("assay_id", "")).strip():
+            obs_keys.add(key)
+            obs_rows += 1
+        else:
+            # Unclassified row with an InChIKey — count toward all_keys only
+            pass
+
+    # Prefer master inventory when present; else distinct keys anywhere
+    if master_keys:
+        primary = len(master_keys)
+        primary_label = "Compounds (master collection)"
+        source = "master"
+    else:
+        primary = len(all_keys)
+        primary_label = "Distinct InChIKeys / compound IDs"
+        source = "distinct_all"
+
+    table = [
+        [primary_label, primary],
+        ["Distinct compounds in assay observations", len(obs_keys)],
+        ["Indexed rows scanned", len(rows)],
+        ["Compound-master rows", master_rows],
+        ["Assay observation rows (with compound id)", obs_rows],
+    ]
+
+    answer = "\n".join(
+        [
+            f"## Chemical compounds — **{fabric_name}**",
+            "",
+            markdown_table(["Metric", "Count"], table),
+            "",
+            f"**Answer:** **{primary:,}** chemical compounds "
+            + (
+                "in the compounds master collection."
+                if source == "master"
+                else "by distinct InChIKey / compound ID across indexed rows."
+            ),
+            "",
+            "### Notes",
+            "- Master count uses compound rows (`inchikey` / `_id`) without an assay `dataset_id`.",
+            "- Observation distinct count can be lower when not every master compound has measured assays.",
+            "- This is **not** the total fabric chunk count (observations + compounds + assays).",
+        ]
+    )
+    return {
+        "intent": "compound_inventory",
+        "row_total": len(rows),
+        "answer": answer,
+        "metrics": {
+            "compounds": primary,
+            "master_distinct": len(master_keys),
+            "observation_distinct": len(obs_keys),
+            "all_distinct": len(all_keys),
+            "master_rows": master_rows,
+            "observation_rows": obs_rows,
+            "source": source,
+        },
+    }
+
+
+def _is_max_assays_per_compound_query(query: str) -> bool:
+    """Max / distribution of distinct assays (or panels) per compound."""
+    q = str(query or "").strip().lower()
+    if not re.search(r"\b(assay|assays|panel|panels|dataset)\b", q):
+        return False
+    if not re.search(r"\b(compound|compounds|molecule|molecules|per\s+compound)\b", q):
+        return False
+    return bool(
+        re.search(
+            r"\b(max(?:imum)?|most|highest|how many.+per|per\s+compound|distribution|coverage)\b",
+            q,
+        )
+        or re.search(r"assays?\s+per\s+compounds?", q)
+        or re.search(r"compounds?\s+with\s+(?:the\s+)?most\s+assays?", q)
+    )
+
+
+def analyze_max_assays_per_compound(
+    rows: Sequence[Dict[str, str]],
+    *,
+    fabric_name: str = "knowledge fabric",
+) -> Optional[Dict[str, Any]]:
+    """Find max distinct assays/panels per compound and how many compounds hit that max."""
+    if not rows:
+        return None
+
+    by_dataset: Dict[str, set] = defaultdict(set)
+    by_assay: Dict[str, set] = defaultdict(set)
+
+    for row in rows:
+        key = _row_compound_key(row)
+        if not key:
+            # observation rows may only have compound_id
+            key = str(row.get("compound_id", "")).strip().upper()
+            if not key or not _INCHIKEY_FORMAT_RE.match(key):
+                continue
+        ds = str(row.get("dataset_id", "")).strip()
+        aid = str(row.get("assay_id", "")).strip()
+        if ds:
+            by_dataset[key].add(ds)
+        if aid:
+            by_assay[key].add(aid)
+
+    if not by_dataset and not by_assay:
+        return {
+            "intent": "max_assays_per_compound",
+            "row_total": len(rows),
+            "answer": "\n".join(
+                [
+                    f"## Assays per compound — **{fabric_name}**",
+                    "",
+                    "No rows with both a compound ID and `dataset_id` / `assay_id` were found.",
+                ]
+            ),
+            "metrics": {"max": 0, "compounds_at_max": 0},
+        }
+
+    # Prefer assay_id when present; fall back to dataset_id (panels).
+    use_assay = sum(1 for s in by_assay.values() if s) >= sum(1 for s in by_dataset.values() if s) * 0.8
+    primary = by_assay if use_assay else by_dataset
+    grain = "assay_id" if use_assay else "dataset_id"
+    grain_label = "distinct assays (`assay_id`)" if use_assay else "distinct panels (`dataset_id`)"
+
+    hist: Counter = Counter(len(s) for s in primary.values() if s)
+    max_n = max(hist) if hist else 0
+    at_max = hist.get(max_n, 0)
+    examples = sorted([cid for cid, s in primary.items() if len(s) == max_n])[:12]
+    example_panels = sorted(primary[examples[0]]) if examples else []
+
+    dist_rows = [[n, hist[n]] for n in sorted(hist)]
+    answer = "\n".join(
+        [
+            f"## Assays per compound — **{fabric_name}**",
+            "",
+            f"Counted **{grain_label}** per compound across assay observation rows.",
+            "",
+            markdown_table(
+                ["Metric", "Value"],
+                [
+                    [f"Maximum {grain_label}", max_n],
+                    ["Compounds at that maximum", at_max],
+                    ["Compounds with ≥1 assay/panel", len(primary)],
+                    ["Indexed rows scanned", len(rows)],
+                ],
+            ),
+            "",
+            f"**Answer:** Max = **{max_n}** {grain.replace('_', ' ')}s per compound; "
+            f"**{at_max:,}** compound{'s' if at_max != 1 else ''} reach that maximum.",
+            "",
+            "### Distribution",
+            "",
+            markdown_table([f"{grain} count", "Compounds"], dist_rows),
+            "",
+            "### Example compounds at the maximum"
+            if examples
+            else "### Examples",
+            "",
+            (
+                markdown_table(
+                    ["InChIKey / compound_id", grain],
+                    [[cid, ", ".join(sorted(primary[cid]))] for cid in examples],
+                )
+                if examples
+                else "_None._"
+            ),
+            "",
+            "### Notes",
+            f"- Grain: `{grain}`"
+            + (f" (e.g. {', '.join(example_panels)})." if example_panels else "."),
+            "- Duplicate observation rows for the same compound × assay count once.",
+            "- Compounds present only in the master collection (no assay rows) are excluded.",
+        ]
+    )
+    return {
+        "intent": "max_assays_per_compound",
+        "row_total": len(rows),
+        "answer": answer,
+        "metrics": {
+            "max": max_n,
+            "compounds_at_max": at_max,
+            "compounds_with_assays": len(primary),
+            "distribution": dict(hist),
+            "grain": grain,
+            "examples": examples,
+        },
+    }
 
 
 def _classify_inchikey_value(raw: Any) -> str:
@@ -484,6 +843,427 @@ def analyze_inchikey_validity(
             "blank": blank,
             "rejected": rejected,
             "row_total": total,
+        },
+    }
+
+
+# Panel / CYP / multi-assay -----------------------------------------------
+# Canonical panel name → match patterns against dataset_id / assay_id / source text.
+_PANEL_PATTERNS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("CYP2C9", (r"cyp[\s_-]*2c9", r"(?<![a-z0-9])2c9(?![a-z0-9])")),
+    ("CYP2D6", (r"cyp[\s_-]*2d6", r"(?<![a-z0-9])2d6(?![a-z0-9])")),
+    ("CYP3A4", (r"cyp[\s_-]*3a4", r"(?<![a-z0-9])3a4(?![a-z0-9])")),
+    ("CYP1A2", (r"cyp[\s_-]*1a2", r"(?<![a-z0-9])1a2(?![a-z0-9])")),
+    ("CYP2C19", (r"cyp[\s_-]*2c19", r"(?<![a-z0-9])2c19(?![a-z0-9])")),
+    ("HER2", (r"her[\s_-]*2", r"her2_activity")),
+    ("RLM", (r"(?<![a-z0-9])rlm(?![a-z0-9])", r"rlm_stability", r"microsomal")),
+    ("PAMPA_PH7", (r"pampa[\s_-]*ph[\s_-]*7", r"pampa_ph7")),
+    ("PAMPA_PH5", (r"pampa[\s_-]*ph[\s_-]*5", r"pampa_ph5")),
+    ("PAMPA", (r"(?<![a-z0-9])pampa(?![a-z0-9])",)),
+    ("SOLUBILITY", (r"solubility", r"kinetic_solubility")),
+)
+
+_CYP_ASSAY_PATTERNS = tuple(p for p in _PANEL_PATTERNS if p[0].startswith("CYP"))
+
+
+def _is_multi_assay_inactive_query(query: str) -> bool:
+    q = str(query or "").strip().lower()
+    if not re.search(r"\binactive\b", q):
+        return False
+    assays = _extract_assays_from_query(q)
+    if len(assays) >= 2:
+        return True
+    return bool(re.search(r"\b(across|all\s+three|union|intersection|common)\b", q) and "cyp" in q)
+
+
+def _extract_assays_from_query(query: str) -> List[str]:
+    """CYP assays named in the query (subset of panel extractor)."""
+    return [p for p in _extract_panels_from_query(query) if p.startswith("CYP")]
+
+
+def _extract_panels_from_query(query: str) -> List[str]:
+    q = str(query or "")
+    found: List[str] = []
+    for name, patterns in _PANEL_PATTERNS:
+        if name == "PAMPA":
+            # Prefer specific pH panels when they also match; keep generic PAMPA as a rollup request.
+            if any(re.search(p, q, flags=re.IGNORECASE) for p in patterns):
+                found.append(name)
+            continue
+        if any(re.search(p, q, flags=re.IGNORECASE) for p in patterns):
+            found.append(name)
+    return found
+
+
+def _row_panel_blob(row: Dict[str, str]) -> str:
+    parts = [
+        str(row.get("dataset_id", "")),
+        str(row.get("assay_id", "")),
+        str(row.get("_source_name", "")),
+        str(row.get("_source_file", "")),
+        str(row.get("_file_name", "")),
+        str(row.get("_assay_name", "")),
+        str(row.get("_assay_id", "")),
+        str(row.get("PUBCHEM_ACTIVITY_URL", "")),
+        str(row.get("ASSAY", "")),
+        str(row.get("assay", "")),
+        str(row.get("source_name", "")),
+        str(row.get("file_name", "")),
+        str(row.get("provenance.source_file", "")),
+    ]
+    return " ".join(parts)
+
+
+def _row_assay_label(row: Dict[str, str]) -> Optional[str]:
+    """Return the CYP assay tag for a row (used by multi-assay Inactive)."""
+    ds = str(row.get("dataset_id", "")).strip().upper()
+    if ds:
+        for name, _patterns in _CYP_ASSAY_PATTERNS:
+            if name in ds:
+                return name
+    blob = _row_panel_blob(row)
+    for name, patterns in _CYP_ASSAY_PATTERNS:
+        if any(re.search(p, blob, flags=re.IGNORECASE) for p in patterns):
+            return name
+    return None
+
+
+def _row_panel_labels(row: Dict[str, str]) -> List[str]:
+    """All panel tags that apply to a row (e.g. PAMPA_PH7 also counts as PAMPA)."""
+    blob = _row_panel_blob(row)
+    ds = str(row.get("dataset_id", "")).strip().upper()
+    labels: List[str] = []
+    for name, patterns in _PANEL_PATTERNS:
+        if name == "PAMPA":
+            continue
+        hit = False
+        if ds and (ds == name or name in ds):
+            hit = True
+        elif any(re.search(p, blob, flags=re.IGNORECASE) for p in patterns):
+            hit = True
+        if hit:
+            labels.append(name)
+    # Roll PAMPA_* into generic PAMPA
+    pampa_patterns = dict(_PANEL_PATTERNS).get("PAMPA", ())
+    if (
+        any(l.startswith("PAMPA_") for l in labels)
+        or (ds.startswith("PAMPA") if ds else False)
+        or any(re.search(p, blob, flags=re.IGNORECASE) for p in pampa_patterns)
+    ):
+        if "PAMPA" not in labels:
+            labels.append("PAMPA")
+    return labels
+
+
+def _is_panel_observation_query(query: str) -> bool:
+    q = str(query or "").strip().lower()
+    if _is_multi_assay_inactive_query(q):
+        return False
+    panels = _extract_panels_from_query(q)
+    if len(panels) < 1:
+        # Still allow "observations by dataset_id / assay"
+        if re.search(r"\b(observations?|rows?)\b", q) and re.search(
+            r"\b(dataset[_ ]?id|assay[_ ]?id|panel|assay)\b", q
+        ):
+            return True
+        return False
+    return bool(
+        re.search(
+            r"\b(how many|count|counts|number of|observations?|rows?|per)\b",
+            q,
+        )
+        or "/" in q
+        or "vs" in q
+        or "versus" in q
+    )
+
+
+def _pick_compound_key_field(columns: Sequence[str]) -> Optional[str]:
+    for pref in (
+        "compound_id",
+        "InChIKeys",
+        "INCHIKEY",
+        "InChIKey",
+        "PUBCHEM_IUPAC_INCHIKEY",
+        "PUBCHEM_CID",
+        "CID",
+    ):
+        resolved, _ = _resolve_column_fragment(pref, columns)
+        if resolved:
+            return resolved
+        hit = _find_column(pref, columns)
+        if hit:
+            return hit
+    # fallback: any inchi column
+    return _pick_inchikey_field(columns)
+
+
+def _pick_outcome_field(columns: Sequence[str]) -> Optional[str]:
+    for pref in (
+        "outcome_label",
+        "outcome.phenotype",
+        "outcome.source_label",
+        "outcome.standard_label",
+        "PUBCHEM_ACTIVITY_OUTCOME",
+        "ACTIVITY_OUTCOME",
+        "phenotype",
+        "outcome",
+    ):
+        resolved, _ = _resolve_column_fragment(pref, columns)
+        if resolved:
+            return resolved
+        hit = _find_column(pref, columns)
+        if hit:
+            return hit
+    for col in columns:
+        if "outcome" in str(col).lower():
+            return col
+    return None
+
+
+def analyze_panel_observation_counts(
+    rows: Sequence[Dict[str, str]],
+    query: str,
+    *,
+    fabric_name: str = "knowledge fabric",
+) -> Optional[Dict[str, Any]]:
+    """Count observations per named panel (dataset_id / assay tag)."""
+    if not rows:
+        return None
+    requested = _extract_panels_from_query(query)
+    # Count every panel that appears
+    panel_counts: Counter = Counter()
+    dataset_counts: Counter = Counter()
+    for row in rows:
+        ds = str(row.get("dataset_id", "")).strip()
+        if ds:
+            dataset_counts[ds] += 1
+        for label in _row_panel_labels(row):
+            panel_counts[label] += 1
+
+    # If user named panels, report those (expand PAMPA → specific pH rows + rollup).
+    if requested:
+        display: List[Tuple[str, int]] = []
+        seen = set()
+        for name in requested:
+            if name == "PAMPA":
+                for specific in ("PAMPA_PH7", "PAMPA_PH5"):
+                    if specific not in seen:
+                        display.append((specific, int(panel_counts.get(specific, 0))))
+                        seen.add(specific)
+                if "PAMPA (all)" not in seen:
+                    display.append(("PAMPA (all)", int(panel_counts.get("PAMPA", 0))))
+                    seen.add("PAMPA (all)")
+            else:
+                if name not in seen:
+                    display.append((name, int(panel_counts.get(name, 0))))
+                    seen.add(name)
+        table_rows = [[n, c] for n, c in display]
+        note_panels = ", ".join(f"`{n}`" for n, _ in display)
+    else:
+        # Full dataset_id breakdown (prefer raw dataset_id when present)
+        if dataset_counts:
+            table_rows = [[k, v] for k, v in dataset_counts.most_common()]
+            note_panels = "`dataset_id`"
+        else:
+            table_rows = [[k, v] for k, v in panel_counts.most_common() if k != "PAMPA"]
+            note_panels = "inferred panels"
+
+    total_matched = sum(c for _, c in table_rows if not str(_).endswith("(all)"))
+    # Avoid double-counting PAMPA (all) in the matched total
+    total_matched = 0
+    for label, count in table_rows:
+        if str(label).endswith("(all)"):
+            continue
+        total_matched += int(count)
+
+    answer = "\n".join(
+        [
+            f"## Observation counts by panel — **{fabric_name}**",
+            "",
+            f"Requested / reported panels: {note_panels}.",
+            "",
+            markdown_table(["Panel / dataset", "Observations"], table_rows or [["(none)", 0]]),
+            "",
+            f"**Answer:** **{total_matched:,}** observations across the listed panels "
+            f"(from **{len(rows):,}** indexed rows scanned).",
+            "",
+            "### Notes",
+            "- Counts use `dataset_id` / `assay_id` when present (Mongo chemical fabric), "
+            "not semantic retrieve.",
+            "- `PAMPA (all)` is the rollup of PAMPA_PH5 + PAMPA_PH7 when PAMPA is requested.",
+            "- Compound-master rows without a panel tag are excluded from panel totals.",
+        ]
+    )
+    return {
+        "intent": "panel_observation_counts",
+        "row_total": len(rows),
+        "answer": answer,
+        "metrics": {
+            "requested": requested,
+            "panel_counts": dict(panel_counts),
+            "dataset_counts": dict(dataset_counts),
+            "table": table_rows,
+            "matched": total_matched,
+        },
+    }
+
+
+def analyze_multi_assay_inactive(
+    rows: Sequence[Dict[str, str]],
+    query: str,
+    *,
+    fabric_name: str = "knowledge fabric",
+) -> Optional[Dict[str, Any]]:
+    """
+    Find compounds (by InChIKey/CID) that are Inactive in every requested CYP assay.
+
+    Requires each row to be taggable to an assay via source/file/assay metadata
+    (e.g. NCATS_CYP2C9_….xlsx) after ingestion into one fabric.
+    """
+    if not rows:
+        return None
+    assays = _extract_assays_from_query(query)
+    if len(assays) < 2:
+        assays = ["CYP2C9", "CYP2D6", "CYP3A4"]
+
+    columns = _columns(rows)
+    key_field = _pick_compound_key_field(columns)
+    outcome_field = _pick_outcome_field(columns)
+    if not key_field or not outcome_field:
+        return {
+            "intent": "multi_assay_inactive",
+            "row_total": len(rows),
+            "answer": "\n".join(
+                [
+                    f"## Multi-assay Inactive — **{fabric_name}**",
+                    "",
+                    "Could not find compound key (InChIKey/CID) and/or activity outcome columns.",
+                    "",
+                    markdown_table(["Column"], [[c] for c in list(columns)[:40]] or [["(none)"]]),
+                ]
+            ),
+            "metrics": {"assays": assays, "key_field": key_field, "outcome_field": outcome_field},
+        }
+
+    # compound -> assay -> set(outcomes)
+    by_compound: Dict[str, Dict[str, set]] = defaultdict(lambda: defaultdict(set))
+    assay_row_counts: Counter = Counter()
+    tagged = 0
+    for row in rows:
+        assay = _row_assay_label(row)
+        if not assay or assay not in assays:
+            continue
+        key = str(row.get(key_field, "")).strip()
+        if not key or key.lower() in {"string", "float", "integer", "none"}:
+            continue
+        if not (_INCHIKEY_FORMAT_RE.match(key.upper()) or key.isdigit()):
+            continue
+        labels_for_row = {
+            str(row.get(outcome_field, "")).strip(),
+            str(row.get("outcome.source_label", "")).strip(),
+            str(row.get("outcome.standard_label", "")).strip(),
+            str(row.get("outcome.phenotype", "")).strip(),
+            str(row.get("outcome_label", "")).strip(),
+            str(row.get("phenotype", "")).strip(),
+        }
+        labels_for_row = {
+            x
+            for x in labels_for_row
+            if x
+            and x.lower() not in {"none", "null", "nan", "string", "float", "integer"}
+            and not x.startswith("{")
+        }
+        if not labels_for_row:
+            continue
+        by_compound[key][assay].update(labels_for_row)
+        assay_row_counts[assay] += 1
+        tagged += 1
+
+    if tagged == 0:
+        return {
+            "intent": "multi_assay_inactive",
+            "row_total": len(rows),
+            "answer": "\n".join(
+                [
+                    f"## Multi-assay Inactive — **{fabric_name}**",
+                    "",
+                    f"Looking for Inactive across: {', '.join(f'`{a}`' for a in assays)}.",
+                    "",
+                    "No rows could be tagged to those assays. Rows need `dataset_id` / `assay_id` "
+                    "(e.g. `CYP2C9`) or assay names in the **source/file name**.",
+                    "",
+                    f"Scanned **{len(rows):,}** rows; compound key=`{key_field}`, outcome=`{outcome_field}`.",
+                ]
+            ),
+            "metrics": {
+                "assays": assays,
+                "tagged_rows": 0,
+                "key_field": key_field,
+                "outcome_field": outcome_field,
+            },
+        }
+
+    inactive_hits: List[str] = []
+    for key, assay_map in by_compound.items():
+        if not all(a in assay_map for a in assays):
+            continue
+        if all(
+            any(o.lower() == "inactive" for o in assay_map[a])
+            and not any(o.lower() == "active" for o in assay_map[a])
+            for a in assays
+        ):
+            # Prefer clear Inactive (allow Inactive-only even if also Inconclusive? user asked inactive)
+            # Require at least one Inactive per assay; disallow Active on any required assay.
+            inactive_hits.append(key)
+
+    inactive_hits.sort()
+    preview = inactive_hits[:40]
+    assay_count_rows = [[a, assay_row_counts.get(a, 0)] for a in assays]
+
+    answer = "\n".join(
+        [
+            f"## Compounds Inactive across {', '.join(assays)} — **{fabric_name}**",
+            "",
+            f"Compound key: `{key_field}` · Outcome: `{outcome_field}`.",
+            "A compound is counted only if it appears in **all** listed assays and is **Inactive** "
+            "(no **Active** outcome) on each.",
+            "",
+            markdown_table(["Assay", "Tagged rows"], assay_count_rows),
+            "",
+            f"**Answer:** **{len(inactive_hits):,}** compounds are Inactive across "
+            f"{', '.join(assays)} "
+            f"(out of **{len(by_compound):,}** compounds seen in ≥1 of these assays).",
+            "",
+            "### Example Inactive compounds"
+            if preview
+            else "### Examples",
+            "",
+            markdown_table([key_field], [[k] for k in preview])
+            if preview
+            else "_No compounds matched Inactive on all requested assays._",
+            "",
+            "### Notes",
+            f"- Deterministic full-fabric scan over **{len(rows):,}** rows "
+            f"(**{tagged:,}** rows tagged to requested assays).",
+            "- Assay membership inferred from source/file/assay metadata (e.g. `NCATS_CYP2C9_…`).",
+            "- This is **not** semantic retrieve; HER2/other panels are ignored unless named.",
+        ]
+    )
+    return {
+        "intent": "multi_assay_inactive",
+        "row_total": len(rows),
+        "field": key_field,
+        "answer": answer,
+        "metrics": {
+            "assays": assays,
+            "inactive_count": len(inactive_hits),
+            "compounds_seen": len(by_compound),
+            "tagged_rows": tagged,
+            "key_field": key_field,
+            "outcome_field": outcome_field,
+            "assay_row_counts": dict(assay_row_counts),
+            "examples": preview,
         },
     }
 
@@ -937,7 +1717,7 @@ def _wants_total_only(query: str, columns: Sequence[str], filters: Sequence[Filt
             return False
         return False
     entity_tokens = (
-        "compound", "compounds", "row", "rows", "record", "records",
+        "row", "rows", "record", "records",
         "entry", "entries", "item", "items", "claim", "claims", "total",
     )
     return any(tok in q for tok in entity_tokens) or q.strip() in {
@@ -1273,6 +2053,37 @@ def analyze_tabular_query(
     unique_intent = _wants_unique(query)
     numeric_intent = _wants_numeric_agg(query)
     row_total = len(filtered_rows)
+
+    # Multi-assay Inactive intersection (e.g. CYP2C9 ∩ CYP2D6 ∩ CYP3A4).
+    if _is_multi_assay_inactive_query(query):
+        result = analyze_multi_assay_inactive(filtered_rows or rows, query, fabric_name=fabric_name)
+        if result is not None:
+            result["filters"] = filters
+            return result
+
+    # Max distinct assays / panels per compound (before compound inventory —
+    # questions like "number of assays per compound" must not count as inventory).
+    if _is_max_assays_per_compound_query(query):
+        result = analyze_max_assays_per_compound(filtered_rows or rows, fabric_name=fabric_name)
+        if result is not None:
+            result["filters"] = filters
+            return result
+
+    # Chemical compound inventory (unique compounds in database / fabric).
+    if _is_compound_inventory_query(query):
+        result = analyze_compound_inventory(filtered_rows or rows, fabric_name=fabric_name)
+        if result is not None:
+            result["filters"] = filters
+            return result
+
+    # Panel / dataset observation counts (CYP2C9, HER2, RLM, PAMPA, …).
+    if _is_panel_observation_query(query):
+        result = analyze_panel_observation_counts(
+            filtered_rows or rows, query, fabric_name=fabric_name
+        )
+        if result is not None:
+            result["filters"] = filters
+            return result
 
     # InChIKey structural validity (invalid / rejected / blank) over full fabric rows.
     if _is_inchikey_validity_query(query):

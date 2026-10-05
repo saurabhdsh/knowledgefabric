@@ -16,6 +16,13 @@ interface KnowledgeFabric {
   fabric_kind_label?: string;
 }
 
+function shortRecordId(value?: string): string {
+  const id = String(value || '').trim();
+  if (!id) return '';
+  if (id.length <= 18) return id;
+  return `${id.slice(0, 8)}…${id.slice(-4)}`;
+}
+
 const TestLLM: React.FC = () => {
   const [selectedFabric, setSelectedFabric] = useState<string>('');
   const [selectedLLM, setSelectedLLM] = useState<string>('openai');
@@ -253,25 +260,40 @@ const TestLLM: React.FC = () => {
                   ))}
                 </select>
                 {selectedFabric && (
-                  <div className="mt-2 p-2 bg-emerald-50 border border-emerald-200 rounded-lg space-y-1">
-                    <p className="text-xs text-emerald-700">
-                      <strong>Selected:</strong> {fabrics.find(f => f.id === selectedFabric)?.name}
+                  <div className="mt-3 rounded-xl border border-[rgba(148,163,184,0.14)] bg-white/[0.03] px-3 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[10px] uppercase tracking-[0.16em] text-[#8b9cb0]">Selected fabric</p>
+                        <p className="mt-1 text-sm font-medium leading-snug text-[#e8edf4]">
+                          {fabrics.find(f => f.id === selectedFabric)?.name}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-full border border-[rgba(155,139,212,0.4)] bg-gradient-to-r from-[rgba(94,200,242,0.12)] to-[rgba(155,139,212,0.18)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#d7cff5]">
+                        CKF ready
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs leading-relaxed text-[#8b9cb0]">
+                      <span className="text-[#cbd5e1]">
+                        {fabricKindLabel(fabrics.find(f => f.id === selectedFabric)?.weave_domain)}
+                      </span>
+                      {' · '}domain-aware reasoning is applied automatically for complex questions.
                     </p>
-                    <p className="text-xs text-emerald-700">
-                      <strong>Intelligence:</strong>{' '}
-                      {fabricKindLabel(fabrics.find(f => f.id === selectedFabric)?.weave_domain)}
-                      {' — '}domain-aware reasoning is applied automatically for complex questions.
-                    </p>
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      <span className="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded-full bg-cyan-500/15 text-cyan-200 border border-cyan-400/30">
-                        CKF session {sessionByFabric[selectedFabric] ? 'on' : 'starts on first query'}
-                      </span>
-                      <span className="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded-full bg-violet-500/15 text-violet-200 border border-violet-400/30">
-                        CKF episodic memory
-                      </span>
-                      <span className="px-2 py-0.5 text-[10px] uppercase tracking-wide rounded-full bg-emerald-500/15 text-emerald-200 border border-emerald-400/30">
-                        CKF closed loop
-                      </span>
+                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <div className="rounded-lg border border-[rgba(148,163,184,0.11)] bg-[#10141d]/55 px-2.5 py-2">
+                        <p className="text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">CKF session</p>
+                        <p
+                          className="mt-1 truncate font-mono text-[11px] text-[#5ec8f2]"
+                          title={sessionByFabric[selectedFabric] || 'Starts on the first query'}
+                        >
+                          {sessionByFabric[selectedFabric]
+                            ? shortRecordId(sessionByFabric[selectedFabric])
+                            : 'Starts on first query'}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-[rgba(148,163,184,0.11)] bg-[#10141d]/55 px-2.5 py-2">
+                        <p className="text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">CKF closed loop</p>
+                        <p className="mt-1 text-[11px] text-[#cbd5e1]">Approved corrections rewrite this fabric</p>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -349,26 +371,40 @@ const TestLLM: React.FC = () => {
             ) : (
               testResults.map((result, index) => (
                 <div key={index} className="border border-gray-200 rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center space-x-2">
-                      <span className="text-sm font-medium text-gray-700">
-                        {fabrics.find(f => f.id === result.fabricId)?.name || 'Unknown Fabric'}
-                      </span>
-                      <span className="px-2 py-1 text-xs bg-emerald-100 text-emerald-700 rounded-full">
-                        {result.llmProvider?.toUpperCase() || 'LLM'}
-                      </span>
-                      {result.sessionId && (
-                        <span className="px-2 py-1 text-[10px] uppercase tracking-wide rounded-full bg-cyan-500/15 text-cyan-200">
-                          CKF session
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-medium text-[#e8edf4]">
+                          {fabrics.find(f => f.id === result.fabricId)?.name || 'Unknown Fabric'}
                         </span>
-                      )}
-                      {result.episodeId && (
-                        <span className="px-2 py-1 text-[10px] uppercase tracking-wide rounded-full bg-violet-500/15 text-violet-200">
-                          CKF episode
+                        <span className="rounded-full border border-[rgba(148,163,184,0.16)] bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#cbd5e1]">
+                          {result.llmProvider || 'LLM'}
                         </span>
+                      </div>
+                      {(result.sessionId || result.episodeId) && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {result.sessionId && (
+                            <span
+                              className="inline-flex items-center gap-2 rounded-md border border-[rgba(148,163,184,0.14)] bg-[#10141d]/55 px-2 py-1"
+                              title={result.sessionId}
+                            >
+                              <span className="text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">Session</span>
+                              <span className="font-mono text-[11px] text-[#5ec8f2]">{shortRecordId(result.sessionId)}</span>
+                            </span>
+                          )}
+                          {result.episodeId && (
+                            <span
+                              className="inline-flex items-center gap-2 rounded-md border border-[rgba(155,139,212,0.28)] bg-[rgba(155,139,212,0.08)] px-2 py-1"
+                              title={result.episodeId}
+                            >
+                              <span className="text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">Episode</span>
+                              <span className="font-mono text-[11px] text-[#d7cff5]">{shortRecordId(result.episodeId)}</span>
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
-                    <span className="text-xs text-gray-500">
+                    <span className="shrink-0 text-xs text-[#8b9cb0]">
                       {new Date(result.timestamp).toLocaleTimeString()}
                     </span>
                   </div>
@@ -388,20 +424,20 @@ const TestLLM: React.FC = () => {
                     <span>Chunks: {result.relevantChunks}{result.packedChunks && result.packedChunks !== result.relevantChunks ? ` (packed ${result.packedChunks})` : ''}</span>
                   </div>
                   {result.episodeId && (
-                    <div className="mt-3 space-y-2">
-                      <p className="text-[10px] uppercase tracking-wide text-emerald-200/80">CKF closed loop</p>
+                    <div className="mt-3 space-y-2 border-t border-[rgba(148,163,184,0.11)] pt-3">
+                      <p className="text-[10px] uppercase tracking-[0.16em] text-[#8b9cb0]">CKF closed loop</p>
                       <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
                           onClick={() => submitFeedback(index, 'up', false)}
-                          className="rounded-md border border-emerald-400/40 px-2 py-1 text-xs text-emerald-200"
+                          className="rounded-md border border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.08)] px-2.5 py-1 text-xs text-[#9af0ca]"
                         >
                           Helpful
                         </button>
                         <button
                           type="button"
                           onClick={() => submitFeedback(index, 'down', false)}
-                          className="rounded-md border border-rose-400/40 px-2 py-1 text-xs text-rose-200"
+                          className="rounded-md border border-[rgba(240,137,132,0.35)] bg-[rgba(240,137,132,0.08)] px-2.5 py-1 text-xs text-[#f3b4b0]"
                         >
                           Incorrect
                         </button>

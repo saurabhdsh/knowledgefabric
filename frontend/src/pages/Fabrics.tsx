@@ -458,6 +458,9 @@ const Fabrics: React.FC = () => {
                     <p className="text-[11px] text-[#5ec8f2] mt-0.5">
                       {fabricKindLabel(fabric.weave_domain)}
                     </p>
+                    <span className="mt-1.5 inline-flex items-center rounded-full border border-[rgba(155,139,212,0.45)] bg-gradient-to-r from-[rgba(94,200,242,0.16)] to-[rgba(155,139,212,0.24)] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#d7cff5]">
+                      CKF ready
+                    </span>
                   </div>
                 </div>
                 <span className={`px-3 py-1 text-xs font-medium rounded-full ${getStatusColor(fabric.status)}`}>
