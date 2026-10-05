@@ -1,0 +1,11 @@
+.git
+**/.venv
+**/node_modules
+**/chroma_db
+**/models
+**/uploads
+**/__pycache__
+**/*.pyc
+backend/data
+backend/ontology_data
+**/.pytest_cache

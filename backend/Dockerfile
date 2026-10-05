@@ -23,9 +23,11 @@ RUN pip install --upgrade pip \
         torch==2.1.0+cpu \
         --index-url https://download.pytorch.org/whl/cpu \
     && grep -v -E '^torch==' requirements.txt > /tmp/requirements.no-torch.txt \
+    && printf '%s\n' 'torch==2.1.0+cpu' > /tmp/constraints.txt \
     && pip install --no-cache-dir --default-timeout=600 \
+        -c /tmp/constraints.txt \
         -r /tmp/requirements.no-torch.txt \
-    && rm -f /tmp/requirements.no-torch.txt
+    && rm -f /tmp/requirements.no-torch.txt /tmp/constraints.txt
 
 # Copy application code
 COPY . .

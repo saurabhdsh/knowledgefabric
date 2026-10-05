@@ -1,0 +1,10 @@
+.venv
+chroma_db
+models
+uploads
+data
+ontology_data
+__pycache__
+*.pyc
+.pytest_cache
+tests
