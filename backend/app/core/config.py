@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     ONTOLOGY_UPLOAD_DIR: str = _resolve_dir(
         "KF_ONTOLOGY_UPLOAD_DIR", os.path.join("ontology_data", "uploads")
     )
-    ONTOLOGY_LLM_MODEL: str = "gpt-4"
+    ONTOLOGY_LLM_MODEL: str = os.environ.get("ONTOLOGY_LLM_MODEL", "gpt-4o")
     ONTOLOGY_LLM_TEMPERATURE: float = 0.2
     ONTOLOGY_MAX_RETRIES: int = 3
     # Scaling for high volume (millions of records): cap per run to avoid OOM/timeouts
@@ -127,7 +127,7 @@ class Settings(BaseSettings):
     # LLM Provider Configuration
     DEFAULT_LLM_PROVIDER: str = os.environ.get("DEFAULT_LLM_PROVIDER", "openai")
     ONTOLOGY_LLM_PROVIDER: Optional[str] = os.environ.get("ONTOLOGY_LLM_PROVIDER")
-    OPENAI_QUERY_MODEL: str = os.environ.get("OPENAI_QUERY_MODEL", "gpt-4")
+    OPENAI_QUERY_MODEL: str = os.environ.get("OPENAI_QUERY_MODEL", "gpt-4o")
     # Test LLM /query: retrieve the full fabric by default (no tiny top_k window).
     QUERY_RETRIEVE_ALL: bool = os.environ.get("QUERY_RETRIEVE_ALL", "true").lower() in (
         "1", "true", "yes", "on",
