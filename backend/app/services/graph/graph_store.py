@@ -40,6 +40,7 @@ class GraphStore:
         nodes: List[Dict[str, Any]],
         edges: List[Dict[str, Any]],
     ) -> Dict[str, int]:
+        node_ids = {str(n["id"]) for n in nodes if n.get("id")}
         with db_session() as session:
             for n in nodes:
                 session.add(
@@ -55,13 +56,20 @@ class GraphStore:
                         source_column=n.get("source_column"),
                     )
                 )
+            # autoflush is off — nodes must hit the table before edge FKs validate.
+            session.flush()
+            kept_edges = 0
             for e in edges:
+                src = str(e.get("source_node_id") or "")
+                tgt = str(e.get("target_node_id") or "")
+                if src not in node_ids or tgt not in node_ids:
+                    continue
                 session.add(
                     GraphEdgeRecord(
                         id=e["id"],
                         fabric_id=fabric_id,
-                        source_node_id=e["source_node_id"],
-                        target_node_id=e["target_node_id"],
+                        source_node_id=src,
+                        target_node_id=tgt,
                         relationship_type=e["relationship_type"],
                         ontology_version_id=ontology_version_id,
                         properties=e.get("properties") or {},
@@ -69,7 +77,8 @@ class GraphStore:
                         evidence_refs=e.get("evidence_refs") or [],
                     )
                 )
-        return {"node_count": len(nodes), "edge_count": len(edges)}
+                kept_edges += 1
+        return {"node_count": len(nodes), "edge_count": kept_edges}
 
     def record_build_run(
         self,

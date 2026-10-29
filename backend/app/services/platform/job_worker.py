@@ -67,21 +67,22 @@ class JobWorker:
 
         config = job.get("config") or {}
         fabric_id = job.get("fabric_id")
-        project_id = config.get("project_id")
-        if not project_id:
-            project_id = f"proj_{uuid.uuid4().hex[:12]}"
-            project_name = config.get("project_name") or f"Fabric {fabric_id}"
-            ontology_db_repository.ensure_project(
-                project_id,
-                name=project_name,
-                fabric_id=fabric_id,
-            )
-            fabric = fabric_store.get(fabric_id) if fabric_id else None
-            register_project_owner(
-                project_id,
-                project_name,
-                owner_id=fabric.get("owner_id") if fabric else None,
-            )
+        project_id = config.get("project_id") or f"proj_{uuid.uuid4().hex[:12]}"
+        project_name = config.get("project_name") or f"Fabric {fabric_id}"
+        # Always ensure the project row exists — callers often pre-assign project_id
+        # on the fabric before enqueueing, which previously skipped ensure_project
+        # and caused ontology_versions FK failures.
+        ontology_db_repository.ensure_project(
+            project_id,
+            name=project_name,
+            fabric_id=fabric_id,
+        )
+        fabric = fabric_store.get(fabric_id) if fabric_id else None
+        register_project_owner(
+            project_id,
+            project_name,
+            owner_id=fabric.get("owner_id") if fabric else None,
+        )
         job_service.update(job["id"], progress_percent=10.0)
 
         schema_profile = config.get("schema_profile")

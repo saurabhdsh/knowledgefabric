@@ -3734,6 +3734,99 @@ async def create_reference_flow_fabric():
         raise HTTPException(status_code=500, detail=f"Failed to create reference flow fabric: {str(e)}")
 
 
+@router.post("/create-cost-of-care-fabric", response_model=APIResponse)
+async def create_cost_of_care_fabric():
+    """Create a Cost of Care agent fabric with 500+ members including Lisa COPD.
+
+    Seeds members, plans, providers, claims, diagnoses, medications, care plans,
+    cost drivers, and SDOH — then enqueues ontology discovery for graph enrichment.
+    """
+    try:
+        from app.services.cost_of_care_seed import (
+            LISA_MEMBER_ID,
+            LISA_NAME,
+            MEMBER_COUNT,
+            build_cost_of_care_rows,
+        )
+
+        ts = int(time.time())
+        seed_id = uuid.uuid4().hex[:10]
+        fabric_name = "Cost of Care Agents — Lisa COPD Cohort"
+        fabric_id = f"fabric_cost_of_care_{ts}_{seed_id}"
+        weave_domain = normalize_fabric_kind("insurance_claims")
+
+        rows, connection_info = build_cost_of_care_rows()
+        documents = document_service.process_database_data(rows, "cost_of_care_agents")
+        for doc in documents:
+            meta = doc.get("metadata", {}) or {}
+            if isinstance(meta.get("columns"), list):
+                meta["columns"] = ",".join(str(col) for col in meta["columns"])
+            doc["metadata"] = meta
+        vector_service.add_documents(documents, fabric_id)
+
+        tags = [
+            "cost-of-care",
+            "csnp",
+            "copd",
+            "lisa-chen",
+            "care-management",
+            "claims",
+            "sdoh",
+            "data-for-ai",
+            "ckf-ready",
+        ]
+        tags.extend(domain_tags_for_kind(weave_domain))
+
+        fabric_data = {
+            "id": fabric_id,
+            "name": fabric_name,
+            "source_type": "database",
+            "description": (
+                f"Cost of Care agent fabric with {MEMBER_COUNT} members. "
+                f"Hero case: {LISA_NAME} ({LISA_MEMBER_ID}) — COPD with exacerbations, "
+                "avoidable ER, medication gaps, care plan, and SDOH barriers."
+            ),
+            "tags": tags,
+            "weave_domain": weave_domain,
+            "fabric_kind_label": fabric_kind_label(weave_domain),
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "document_count": len(rows),
+            "status": "active",
+            "model_status": "trained",
+            "last_training": None,
+            "total_chunks": len(documents),
+            "connection_info": connection_info,
+        }
+        persist_fabric(fabric_data)
+        _enqueue_post_fabric_jobs(fabric_id, fabric_data)
+
+        return APIResponse(
+            success=True,
+            message="Cost of Care fabric created; ontology discovery enqueued",
+            data={
+                "source_id": fabric_id,
+                "fabric_id": fabric_id,
+                "fabric_name": fabric_name,
+                "rows_imported": len(rows),
+                "total_chunks": len(documents),
+                "member_count": MEMBER_COUNT,
+                "hero_member_id": LISA_MEMBER_ID,
+                "hero_member_name": LISA_NAME,
+                "domains": connection_info.get("domains"),
+                "record_type_counts": connection_info.get("record_type_counts"),
+                "ontology_project_id": fabric_data.get("ontology_project_id"),
+                "weave_domain": weave_domain,
+            },
+            error=None,
+        )
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to create Cost of Care fabric: {str(e)}")
+
+
 @router.post("/create-servicenow-incident-fabric", response_model=APIResponse)
 async def create_servicenow_incident_fabric():
     """Create a ServiceNow-specific incident referential fabric with incident-centric nodes."""
