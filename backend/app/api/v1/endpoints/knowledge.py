@@ -1082,6 +1082,30 @@ def _parse_csv_files_to_rows(file_tuples: List[Tuple[str, bytes]]) -> Tuple[List
     return all_rows, filenames
 
 
+def _collection_name_from_csv_filename(filename: str) -> str:
+    """Map ``01_members.csv`` / ``claims.csv`` → a stable collection id."""
+    base = os.path.splitext(os.path.basename(str(filename or "records")))[0]
+    base = re.sub(r"^\d+[_\-\s]+", "", base.strip())
+    name = _safe_identifier(base, "records").lower()
+    aliases = {
+        "member": "members",
+        "plan": "plans",
+        "provider": "providers",
+        "claim": "claims",
+        "diagnosis": "diagnoses",
+        "medication": "medications",
+        "care_plan": "care_plans",
+        "careplan": "care_plans",
+        "care_manager": "care_managers",
+        "caremanager": "care_managers",
+        "cost_driver": "cost_drivers",
+        "costdriver": "cost_drivers",
+        "care_event": "care_events",
+        "careevent": "care_events",
+    }
+    return aliases.get(name, name)
+
+
 def _fetch_records_from_csv_upload(
     connection_type: str,
     file_tuples: List[Tuple[str, bytes]],
@@ -1091,7 +1115,40 @@ def _fetch_records_from_csv_upload(
     ct = (connection_type or "mongodb").lower()
     label_raw = (dataset_label or "").strip()
     label = _safe_identifier(label_raw, _safe_identifier(os.path.splitext(csv_names[0])[0], "dataset"))
-    fabric_name = f"{ct}_csv_{label}_{len(rows)}rows"
+    # Prefer a human fabric name when uploading the Cost of Care pack.
+    if any("member" in str(n).lower() for n in csv_names) and any(
+        "claim" in str(n).lower() for n in csv_names
+    ):
+        fabric_name = f"Cost of Care Agents — {label}" if label_raw else "Cost of Care Agents — Lisa COPD Cohort"
+    else:
+        fabric_name = f"{ct}_csv_{label}_{len(rows)}rows"
+
+    # Stamp each row with a logical collection so vector metadata + KG schema
+    # show Members / Claims / Plans instead of a flat "Records" hub.
+    per_collection_map: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        src = str(row.get("__source_csv") or (csv_names[0] if csv_names else "records.csv"))
+        coll = _collection_name_from_csv_filename(src)
+        row["__source_collection"] = coll
+        entry = per_collection_map.setdefault(
+            coll,
+            {"name": coll, "documents_imported": 0, "columns": [], "source_file": src},
+        )
+        entry["documents_imported"] += 1
+        if not entry["columns"]:
+            entry["columns"] = [str(k) for k in row.keys() if not str(k).startswith("__")]
+
+    per_collection = list(per_collection_map.values())
+    collections = [e["name"] for e in per_collection]
+    tables = [
+        {
+            "name": e["name"],
+            "columns": [{"name": c, "type": "string"} for c in (e.get("columns") or [])],
+            "primary_key": [],
+        }
+        for e in per_collection
+    ]
+
     return {
         "rows": rows,
         "source_name": f"csv_{csv_names[0]}",
@@ -1101,6 +1158,10 @@ def _fetch_records_from_csv_upload(
             "database_profile": ct,
             "files": csv_names,
             "rows_imported": len(rows),
+            "collections": collections,
+            "per_collection": per_collection,
+            "tables": tables,
+            "schema_tables": tables,
         },
         "tags": [ct, "csv-upload", "database"],
         "description": f"Knowledge fabric from CSV upload ({ct} profile): {', '.join(csv_names)}",
@@ -1469,6 +1530,62 @@ def _infer_logical_collections_from_columns(
     if {"caller_user_id", "caller_name", "user_id"} & lower:
         add("users", [c for c in cols if c.lower().startswith("caller") or c.lower().startswith("user")])
 
+    # Cost-of-care / CSNP-style extracts
+    if {"member_id", "member_name"} & lower or (
+        "member_id" in lower and {"risk_tier", "ytd_total_cost", "primary_condition"} & lower
+    ):
+        add(
+            "members",
+            [c for c in cols if c.lower().startswith("member") or c.lower() in {
+                "dob", "age", "gender", "state", "county", "plan_id", "risk_tier",
+                "primary_condition", "icd10", "eligibility_status", "enrollment_status",
+                "ytd_medical_cost", "ytd_rx_cost", "ytd_total_cost", "pmpm_cost",
+                "er_visits_12m", "inpatient_admits_12m", "care_manager_id",
+                "pcp_provider_id", "specialist_provider_id", "case_narrative", "agent_focus",
+            }],
+        )
+    if {"claim_id"} & lower or (
+        {"allowed_amount", "paid_amount"} & lower
+        and any("claim" in c for c in lower)
+    ):
+        add(
+            "claims",
+            [c for c in cols if "claim" in c.lower() or c.lower() in {
+                "member_id", "plan_id", "provider_id", "service_date", "claim_type",
+                "procedure_code", "diagnosis_code", "allowed_amount", "paid_amount",
+                "claim_status", "cost_driver",
+            }],
+        )
+    if {"plan_id", "plan_name", "coverage_type"} & lower:
+        add("plans", [c for c in cols if "plan" in c.lower() or c.lower() in {"coverage_type", "network_id", "pmpm"}])
+    if {"provider_id", "provider_name", "npi", "specialty"} & lower:
+        add("providers", [c for c in cols if "provider" in c.lower() or c.lower() in {"npi", "specialty", "network_id"}])
+    if {"diagnosis_id", "icd10", "diagnosis_name"} & lower:
+        add("diagnoses", [c for c in cols if "diagnos" in c.lower() or c.lower() in {"member_id", "icd10", "onset_date", "severity"}])
+    if {"rx_claim_id", "drug_name", "adherence_flag"} & lower:
+        add("medications", [c for c in cols if c.lower() in {
+            "rx_claim_id", "member_id", "drug_name", "ndc", "days_supply", "fill_date",
+            "paid_amount", "adherence_flag", "provider_id",
+        } or "drug" in c.lower() or "rx" in c.lower()])
+    if {"care_plan_id", "interventions", "goals"} & lower:
+        add("care_plans", [c for c in cols if "care_plan" in c.lower() or c.lower() in {
+            "member_id", "care_manager_id", "plan_name", "status", "start_date", "goals",
+            "interventions", "priority",
+        }])
+    if {"care_manager_id", "care_manager_name", "panel"} & lower:
+        add("care_managers", [c for c in cols if "care_manager" in c.lower() or c.lower() in {"panel", "phone"}])
+    if {"cost_driver_id", "driver_category", "annualized_impact"} & lower:
+        add("cost_drivers", [c for c in cols if "cost_driver" in c.lower() or c.lower() in {
+            "member_id", "driver_category", "annualized_impact", "recommendation", "priority",
+        }])
+    if {"sdoh_id", "transportation_barrier", "food_insecurity"} & lower:
+        add("sdoh", [c for c in cols if c.lower().startswith("sdoh") or c.lower() in {
+            "member_id", "transportation_barrier", "food_insecurity", "housing_instability",
+            "social_isolation", "notes",
+        }])
+    if {"care_event_id", "event_type", "event_date"} & lower:
+        add("care_events", [c for c in cols if "event" in c.lower() or c.lower() in {"member_id", "setting", "outcome"}])
+
     if not out and cols:
         add("records", cols[:40])
     return out
@@ -1511,8 +1628,36 @@ def _short_instance_label(collection: str, fields: Dict[str, str], fallback: str
         preferred = ["related_problem_id", "problem_id", "title", "name"]
     elif "change" in coll:
         preferred = ["related_change_id", "change_id", "change_type", "title"]
+    elif "member" in coll:
+        preferred = ["member_name", "member_id", "primary_condition", "risk_tier"]
+    elif "claim" in coll:
+        preferred = ["claim_id", "claim_type", "diagnosis_code", "paid_amount", "member_id"]
+    elif "plan" in coll and "care" not in coll:
+        preferred = ["plan_name", "plan_id", "coverage_type"]
+    elif "provider" in coll:
+        preferred = ["provider_name", "specialty", "provider_id", "npi"]
+    elif "diagnos" in coll:
+        preferred = ["diagnosis_name", "icd10", "diagnosis_id", "member_id"]
+    elif "medication" in coll or coll.startswith("rx"):
+        preferred = ["drug_name", "rx_claim_id", "adherence_flag", "member_id"]
+    elif "care_plan" in coll:
+        preferred = ["plan_name", "care_plan_id", "priority", "member_id"]
+    elif "care_manager" in coll:
+        preferred = ["care_manager_name", "panel", "care_manager_id"]
+    elif "cost_driver" in coll:
+        preferred = ["driver_category", "cost_driver_id", "annualized_impact", "member_id"]
+    elif coll == "sdoh" or "sdoh" in coll:
+        preferred = ["sdoh_id", "member_id", "transportation_barrier"]
+    elif "care_event" in coll or "event" in coll:
+        preferred = ["event_type", "care_event_id", "event_date", "member_id"]
     else:
         preferred = [
+            "member_name",
+            "claim_id",
+            "plan_name",
+            "provider_name",
+            "drug_name",
+            "diagnosis_name",
             "incident_number",
             "short_description",
             "name",
@@ -1673,6 +1818,17 @@ def _enrich_database_graph_with_samples(
             in {
                 "incidents",
                 "records",
+                "members",
+                "claims",
+                "plans",
+                "providers",
+                "diagnoses",
+                "medications",
+                "care_plans",
+                "care_managers",
+                "cost_drivers",
+                "sdoh",
+                "care_events",
                 "cmdb_cis",
                 "business_services",
                 "assignment_groups",
@@ -1684,7 +1840,7 @@ def _enrich_database_graph_with_samples(
             try:
                 raw = vector_service.get_source_documents(
                     fabric_id,
-                    limit=limit,
+                    limit=max(limit * 8, 80),
                     chunk_type="row",
                 )
                 docs = raw.get("documents") or []
@@ -1694,17 +1850,88 @@ def _enrich_database_graph_with_samples(
                 print(f"Fallback sample fetch failed for {coll_name}: {exc}")
                 continue
 
-        # Only materialize row instances under the primary fact collection once for CSV.
-        if csv_style and coll_name not in {"incidents", "records"} and docs:
-            # Still useful to skip duplicate full-row dumps under every schema node.
+        cost_of_care_collections = {
+            "members",
+            "claims",
+            "plans",
+            "providers",
+            "diagnoses",
+            "medications",
+            "care_plans",
+            "care_managers",
+            "cost_drivers",
+            "sdoh",
+            "care_events",
+        }
+
+        # Only materialize row instances under the primary fact collection once for
+        # denormalized single-table CSVs. Multi-collection Cost of Care packs keep
+        # samples under each schema node (Members, Claims, …).
+        if (
+            csv_style
+            and coll_name not in {"incidents", "records"}
+            and coll_name not in cost_of_care_collections
+            and docs
+        ):
             if coll_name not in {"compounds", "assays"}:
                 continue
+
+        # For multi-file CSV packs without source_collection filters, keep rows that
+        # look like they belong to this logical collection.
+        filtered_docs: List[Any] = []
+        filtered_metas: List[Any] = []
+        filtered_ids: List[Any] = []
+        for idx, content in enumerate(docs):
+            meta = metas[idx] if idx < len(metas) and isinstance(metas[idx], dict) else {}
+            src_coll = str(meta.get("source_collection") or "").strip().lower()
+            fields_probe = _parse_row_chunk_fields(str(content))
+            src_file = str(fields_probe.get("__source_csv") or "")
+            file_coll = _collection_name_from_csv_filename(src_file) if src_file else ""
+            if src_coll and src_coll != coll_name.lower() and src_coll not in {coll_name.lower().rstrip("s"), coll_name.lower() + "s"}:
+                continue
+            if file_coll and file_coll != coll_name:
+                continue
+            if not src_coll and not file_coll and coll_name in cost_of_care_collections:
+                # Heuristic: require the collection's natural id column.
+                id_hints = {
+                    "members": ("member_id", "member_name"),
+                    "claims": ("claim_id",),
+                    "plans": ("plan_id", "plan_name"),
+                    "providers": ("provider_id", "provider_name"),
+                    "diagnoses": ("diagnosis_id", "icd10"),
+                    "medications": ("rx_claim_id", "drug_name"),
+                    "care_plans": ("care_plan_id",),
+                    "care_managers": ("care_manager_id", "care_manager_name"),
+                    "cost_drivers": ("cost_driver_id", "driver_category"),
+                    "sdoh": ("sdoh_id",),
+                    "care_events": ("care_event_id", "event_type"),
+                }
+                hints = id_hints.get(coll_name, ())
+                if hints and not any(fields_probe.get(h) for h in hints):
+                    continue
+            filtered_docs.append(content)
+            filtered_metas.append(meta)
+            filtered_ids.append(ids[idx] if idx < len(ids) else f"{coll_name}_{idx}")
+            if len(filtered_docs) >= limit:
+                break
+        docs, metas, ids = filtered_docs, filtered_metas, filtered_ids
 
         for idx, content in enumerate(docs):
             fields = _parse_row_chunk_fields(str(content))
             row_key = (
                 fields.get("incident_number")
                 or fields.get("incident_id")
+                or fields.get("member_id")
+                or fields.get("claim_id")
+                or fields.get("plan_id")
+                or fields.get("provider_id")
+                or fields.get("diagnosis_id")
+                or fields.get("rx_claim_id")
+                or fields.get("care_plan_id")
+                or fields.get("care_manager_id")
+                or fields.get("cost_driver_id")
+                or fields.get("sdoh_id")
+                or fields.get("care_event_id")
                 or fields.get("_id")
                 or fields.get("inchikey")
                 or fields.get("compound_id")
@@ -1908,6 +2135,42 @@ def _build_structured_database_graph(fabric: Dict[str, Any]) -> Optional[Dict[st
         single = str(single).strip()
         if single:
             collections = [single]
+
+    # Multi-CSV uploads store filenames even when older fabrics lack per_collection.
+    if not collections and not per_collection:
+        files = [str(f) for f in (conn.get("files") or []) if str(f).strip()]
+        if len(files) >= 2:
+            rebuilt: List[Dict[str, Any]] = []
+            sample_rows = list(conn.get("sample_rows") or [])
+            for fname in files:
+                coll = _collection_name_from_csv_filename(fname)
+                cols: List[str] = []
+                for sr in sample_rows:
+                    if not isinstance(sr, dict):
+                        continue
+                    src = str(sr.get("__source_csv") or "")
+                    if src and _collection_name_from_csv_filename(src) != coll:
+                        continue
+                    cols = [str(k) for k in sr.keys() if not str(k).startswith("__")]
+                    if cols:
+                        break
+                if not cols:
+                    cols = [str(c) for c in (conn.get("columns") or []) if not str(c).startswith("__")]
+                rebuilt.append(
+                    {
+                        "name": coll,
+                        "documents_imported": 0,
+                        "columns": cols[:40],
+                        "source_file": fname,
+                    }
+                )
+            if rebuilt:
+                per_collection = rebuilt
+                collections = [e["name"] for e in rebuilt]
+                conn["collections"] = collections
+                conn["per_collection"] = per_collection
+                if not conn.get("type"):
+                    conn["type"] = "csv_upload"
 
     # CSV / denormalized DB extracts often have columns but no Mongo collection list.
     if not collections and not per_collection:
