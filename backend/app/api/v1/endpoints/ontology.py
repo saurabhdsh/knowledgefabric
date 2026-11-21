@@ -422,7 +422,7 @@ async def create_project_from_fabric(request: CreateProjectFromFabricRequest):
                 )
             )
             persistence.add_artifacts_to_project(proj.id, linked_artifacts)
-            discovery_job_id = job_service.enqueue(
+            discovery_job_id = job_service.enqueue_once(
                 "ontology_discovery",
                 request.fabric_id,
                 {

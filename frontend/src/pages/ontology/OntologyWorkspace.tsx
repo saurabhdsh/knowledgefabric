@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   ArrowLeftIcon,
@@ -22,6 +22,31 @@ import { ontologyApi, OntologyVersion, OntologyClass, OntologyRelationship, Onto
 import { platformApi } from '../../utils/platformApi';
 
 type Tab = 'entities' | 'relationships' | 'attributes' | 'rules' | 'canonical' | 'graph';
+
+function clampPercent(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+const DISCOVERY_STAGE_LABELS: Record<string, string> = {
+  artifact_load: 'Reading the source',
+  pdf_process: 'Reading documents',
+  xml_process: 'Reading structure',
+  semantic_chunk: 'Splitting sections',
+  concept_extract: 'Finding concepts',
+  ontology_classify: 'Classifying entities',
+  relation_inference: 'Binding relationships',
+  attribute_map: 'Mapping attributes',
+  ontology_assemble: 'Assembling the ontology',
+  ontology_validate: 'Validating',
+  persist: 'Saving the draft',
+};
+
+function discoveryStageLabel(stage?: string): string {
+  if (!stage) return '';
+  return DISCOVERY_STAGE_LABELS[stage] || stage.replace(/_/g, ' ');
+}
 
 /** Compact entity connection overview as node pills with hints. */
 function EntityConnectionsList({
@@ -282,6 +307,10 @@ const OntologyWorkspace: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('entities');
   const [selectedElement, setSelectedElement] = useState<OntologyClass | OntologyRelationship | OntologyAttribute | null>(null);
   const [polling, setPolling] = useState(false);
+  const [trackedJobId, setTrackedJobId] = useState<string | null>(null);
+  const [progressPercent, setProgressPercent] = useState(0);
+  const [progressStage, setProgressStage] = useState('');
+  const discoverLock = useRef(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState(false);
@@ -375,22 +404,91 @@ const OntologyWorkspace: React.FC = () => {
   }, [loadProject, loadArtifacts, loadVersions, loadRunsHistory]);
 
   useEffect(() => {
-    if (!runId || !projectId) return;
-    const t = setInterval(() => {
-      ontologyApi.getRun(projectId, runId).then(r => {
-        setRun(r);
-        if (r.status === 'completed' && r.result_version_id) {
-          setPolling(false);
-          setVersionId(r.result_version_id);
-          loadVersions();
-          loadVersion(r.result_version_id);
-          loadRunsHistory();
+    const job = new URLSearchParams(location.search).get('job');
+    if (!job) return;
+    setTrackedJobId(job);
+    setPolling(true);
+  }, [location.search]);
+
+  useEffect(() => {
+    const active = runsHistory.find((r) => r.status === 'queued' || r.status === 'running');
+    if (!active) return;
+    setRunId((current) => current || active.id);
+    setRun(active);
+    setPolling(true);
+    setProgressPercent((current) => Math.max(current, clampPercent(active.progress_percent)));
+    setProgressStage(discoveryStageLabel(active.current_stage));
+  }, [runsHistory]);
+
+  useEffect(() => {
+    if (!projectId || (!runId && !trackedJobId)) return undefined;
+    let stopped = false;
+    const tick = async () => {
+      if (stopped) return;
+      try {
+        if (trackedJobId) {
+          const job = await platformApi.getJob(trackedJobId);
+          const result = (job.result || {}) as { run_id?: string; version_id?: string };
+          if (result.run_id) setRunId((current) => current || result.run_id || null);
+          if (job.status === 'failed') {
+            const errMsg =
+              (job.error_payload as { message?: string } | null | undefined)?.message || 'Discovery failed';
+            setPlatformAction(errMsg);
+            setPolling(false);
+            setTrackedJobId(null);
+            loadRunsHistory();
+            return;
+          }
+          if (job.status !== 'ready' && job.status !== 'completed') {
+            setProgressPercent((current) => Math.max(current, clampPercent(job.progress_percent)));
+            setPolling(true);
+          }
+          if ((job.status === 'ready' || job.status === 'completed') && result.version_id) {
+            setProgressPercent(100);
+            setPolling(false);
+            setTrackedJobId(null);
+            loadVersions();
+            loadRunsHistory();
+            setVersionId(result.version_id);
+            loadVersion(result.version_id);
+            setPlatformAction('Schema discovery complete.');
+            return;
+          }
         }
-        if (r.status === 'failed') setPolling(false);
-      }).catch(() => setPolling(false));
-    }, 2000);
-    return () => clearInterval(t);
-  }, [runId, projectId, loadVersions, loadVersion, loadRunsHistory]);
+        if (runId) {
+          const currentRun = await ontologyApi.getRun(projectId, runId);
+          if (stopped) return;
+          setRun(currentRun);
+          setProgressPercent(clampPercent(currentRun.progress_percent));
+          setProgressStage(discoveryStageLabel(currentRun.current_stage));
+          setRunsHistory((rows) => [currentRun, ...rows.filter((row) => row.id !== currentRun.id)]);
+          if (currentRun.status === 'completed' && currentRun.result_version_id) {
+            setProgressPercent(100);
+            setPolling(false);
+            setTrackedJobId(null);
+            setVersionId(currentRun.result_version_id);
+            loadVersions();
+            loadVersion(currentRun.result_version_id);
+            loadRunsHistory();
+            return;
+          }
+          if (currentRun.status === 'failed') {
+            setPolling(false);
+            setTrackedJobId(null);
+            loadRunsHistory();
+          }
+        }
+      } catch {
+        // Keep the last percent on screen if a poll misses.
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 2000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [projectId, runId, trackedJobId, loadVersions, loadVersion, loadRunsHistory]);
 
   useEffect(() => {
     if (versionId && projectId) loadVersion(versionId);
@@ -433,11 +531,19 @@ const OntologyWorkspace: React.FC = () => {
 
   const handleDiscover = async () => {
     if (!projectId || selectedArtifactIds.length === 0) return;
-    const data = await ontologyApi.discover(projectId, selectedArtifactIds, true);
-    setRunId(data.run_id);
-    setRun({ id: data.run_id, project_id: projectId, status: data.status, progress_percent: 0, run_logs: [] });
-    setPolling(true);
-    loadRunsHistory();
+    if (discoverLock.current || polling) return;
+    discoverLock.current = true;
+    try {
+      const data = await ontologyApi.discover(projectId, selectedArtifactIds, true);
+      setProgressPercent(0);
+      setProgressStage('Starting');
+      setRunId(data.run_id);
+      setRun({ id: data.run_id, project_id: projectId, status: data.status, progress_percent: 0, run_logs: [] });
+      setPolling(true);
+      loadRunsHistory();
+    } finally {
+      discoverLock.current = false;
+    }
   };
 
   const handleApprove = (elementType: string, elementIds: string[]) => {
@@ -640,48 +746,17 @@ const OntologyWorkspace: React.FC = () => {
       );
       return;
     }
+    if (discoverLock.current || polling) return;
+    discoverLock.current = true;
     try {
       setPlatformLoading(true);
       setPlatformAction(null);
       const { job_id } = await platformApi.discoverOntology(fabricId, true, projectId);
-      setPlatformAction(
-        `Measured-profile schema discovery queued (${job_id}). Expect table entities (members, claims, …), not document concepts.`,
-      );
+      setProgressPercent(0);
+      setProgressStage('Starting');
+      setTrackedJobId(job_id);
       setPolling(true);
-      // Poll platform job until ready, then open the new schema version.
-      const poll = window.setInterval(async () => {
-        try {
-          const job = await platformApi.getJob(job_id);
-          loadRunsHistory();
-          if (job.status === 'ready' || job.status === 'completed') {
-            window.clearInterval(poll);
-            setPolling(false);
-            const resultVid = (job.result as { version_id?: string } | undefined)?.version_id;
-            loadVersions();
-            if (resultVid) {
-              setVersionId(resultVid);
-              loadVersion(resultVid);
-            }
-            setPlatformAction(
-              `Schema discovery complete${resultVid ? ` — ${resultVid}` : ''}. Select the latest draft if the catalog did not refresh.`,
-            );
-          } else if (job.status === 'failed') {
-            window.clearInterval(poll);
-            setPolling(false);
-            const errMsg =
-              (job.error_payload as { message?: string } | null | undefined)?.message ||
-              'unknown error';
-            setPlatformAction(`Schema discovery failed: ${errMsg}`);
-          }
-        } catch {
-          loadRunsHistory();
-          loadVersions();
-        }
-      }, 2500);
-      window.setTimeout(() => {
-        window.clearInterval(poll);
-        setPolling(false);
-      }, 120000);
+      setPlatformAction('Schema discovery is running from the measured table profile.');
       loadRunsHistory();
     } catch (err: unknown) {
       setPlatformAction(
@@ -690,6 +765,7 @@ const OntologyWorkspace: React.FC = () => {
           : 'Schema discovery failed. Open the fabric Knowledge Graph → Enterprise platform → Run ontology discovery.',
       );
     } finally {
+      discoverLock.current = false;
       setPlatformLoading(false);
     }
   };
@@ -858,12 +934,24 @@ const OntologyWorkspace: React.FC = () => {
               <button
                 type="button"
                 onClick={handleFabricDiscover}
-                disabled={!canRunFabricDiscovery || polling || !linkedFabricId || platformLoading}
+                disabled={!canRunFabricDiscovery || polling || !linkedFabricId || platformLoading || runsHistory.some((r) => r.status === 'queued' || r.status === 'running')}
                 className="mt-3 w-full inline-flex items-center justify-center px-3 py-2.5 rounded-xl bg-gradient-to-r from-[#5ec8f2] to-[#3ecf9b] text-[#061018] text-sm font-semibold hover:brightness-110 disabled:opacity-50 transition-all"
               >
                 <PlayIcon className="w-4 h-4 mr-2" />
-                {polling || platformLoading ? `Running… ${run?.progress_percent ?? 0}%` : 'Run schema discovery'}
+                {polling || platformLoading
+                  ? progressPercent > 0
+                    ? `Running… ${progressPercent}%${progressStage ? ` · ${progressStage}` : ''}`
+                    : 'Starting…'
+                  : 'Run schema discovery'}
               </button>
+              {(polling || platformLoading) && (
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-[#5ec8f2] to-[#3ecf9b] transition-[width] duration-500"
+                    style={{ width: `${Math.max(progressPercent, 6)}%` }}
+                  />
+                </div>
+              )}
               <p className="mt-2 text-xs text-gray-500">
                 Expect entities like members / claims / plans with measured FK confidence — not Record / Dataset.
               </p>
@@ -928,12 +1016,24 @@ const OntologyWorkspace: React.FC = () => {
               <button
                 type="button"
                 onClick={handleDiscover}
-                disabled={selectedArtifactIds.length === 0 || polling}
+                disabled={selectedArtifactIds.length === 0 || polling || runsHistory.some((r) => r.status === 'queued' || r.status === 'running')}
                 className="mt-3 w-full inline-flex items-center justify-center px-3 py-2 rounded-lg bg-teal-600 text-white text-sm font-medium hover:bg-teal-700 disabled:opacity-50"
               >
                 <PlayIcon className="w-4 h-4 mr-2" />
-                {polling ? `Running… ${run?.progress_percent ?? 0}%` : 'Run discovery'}
+                {polling
+                  ? progressPercent > 0
+                    ? `Running… ${progressPercent}%${progressStage ? ` · ${progressStage}` : ''}`
+                    : 'Starting…'
+                  : 'Run discovery'}
               </button>
+              {polling && (
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-[#5ec8f2] to-[#3ecf9b] transition-[width] duration-500"
+                    style={{ width: `${Math.max(progressPercent, 6)}%` }}
+                  />
+                </div>
+              )}
               {artifacts.length > 0 && (
                 <p className="mt-2 text-xs text-gray-500">{artifacts.length} file(s) available · {selectedArtifactIds.length} selected</p>
               )}
@@ -979,9 +1079,10 @@ const OntologyWorkspace: React.FC = () => {
                         {(r.completed_at as string).slice(0, 19).replace('T', ' ')}
                       </span>
                     )}
-                    {r.started_at && !r.completed_at && (
+                    {!r.completed_at && (r.status === 'queued' || r.status === 'running') && (
                       <span className="text-[#8b9cb0] ml-1.5 or-mono text-[11px]">
-                        Started {(r.started_at as string).slice(0, 19).replace('T', ' ')}
+                        {clampPercent(r.progress_percent)}%
+                        {r.current_stage ? ` · ${discoveryStageLabel(r.current_stage)}` : ''}
                       </span>
                     )}
                   </span>

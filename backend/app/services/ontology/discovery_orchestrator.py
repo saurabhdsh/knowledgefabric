@@ -57,6 +57,7 @@ class DiscoveryOrchestrator:
         use_llm: bool = True,
         max_artifacts_per_run: Optional[int] = None,
         max_chunks_for_llm: Optional[int] = None,
+        on_progress: Optional[Any] = None,
     ) -> Optional[str]:
         """
         Execute pipeline; persist version and update run. Returns version_id on success.
@@ -68,6 +69,11 @@ class DiscoveryOrchestrator:
                 progress_percent=percent,
                 log_entry={"stage": stage, "message": msg},
             )
+            if on_progress:
+                try:
+                    on_progress(percent, msg)
+                except Exception:
+                    logger.debug("Discovery progress hook failed", exc_info=True)
 
         self.persistence.update_run(run_id, status=DiscoveryRunStatus.RUNNING, started_at=datetime.utcnow())
         log(DiscoveryRunStage.ARTIFACT_LOAD.value, "Loading artifacts", 5.0)
@@ -286,6 +292,7 @@ class DiscoveryOrchestrator:
         project_id: str,
         schema_profile: Dict[str, Any],
         fabric_id: Optional[str] = None,
+        on_progress: Optional[Any] = None,
     ) -> Optional[str]:
         """Schema-first discovery for tabular/database fabrics (Phase 2 Layer 1)."""
         from app.services.ontology.schema_analyzer import schema_analyzer
@@ -299,6 +306,11 @@ class DiscoveryOrchestrator:
                 progress_percent=percent,
                 log_entry={"stage": stage, "message": msg},
             )
+            if on_progress:
+                try:
+                    on_progress(percent, msg)
+                except Exception:
+                    logger.debug("Discovery progress hook failed", exc_info=True)
 
         self.persistence.update_run(run_id, status=DiscoveryRunStatus.RUNNING, started_at=datetime.utcnow())
         log(DiscoveryRunStage.ARTIFACT_LOAD.value, "Analyzing schema profile", 10.0)

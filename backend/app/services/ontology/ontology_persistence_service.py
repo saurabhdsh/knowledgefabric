@@ -181,8 +181,16 @@ class OntologyPersistenceService:
         """List all discovery runs for a project (history), newest first."""
         runs = self._load_json(self.runs_file, [])
         project_runs = [r for r in runs if r.get("project_id") == project_id]
-        project_runs.sort(key=lambda x: (x.get("created_at") or x.get("completed_at") or ""), reverse=True)
-        return project_runs
+        seen: set = set()
+        unique: List[Dict[str, Any]] = []
+        for row in project_runs:
+            run_id = row.get("id")
+            if run_id in seen:
+                continue
+            seen.add(run_id)
+            unique.append(row)
+        unique.sort(key=lambda x: (x.get("created_at") or x.get("completed_at") or ""), reverse=True)
+        return unique
 
     def update_run(
         self,

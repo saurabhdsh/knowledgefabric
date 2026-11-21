@@ -70,7 +70,7 @@ async def trigger_ontology_discovery(
     # Keep fabric → project linkage consistent with the project being discovered into.
     fabric["ontology_project_id"] = resolved_project
     fabric_store.save(fabric)
-    job_id = job_service.enqueue(
+    job_id = job_service.enqueue_once(
         "ontology_discovery",
         fabric_id,
         {

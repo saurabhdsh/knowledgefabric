@@ -71,7 +71,8 @@ const OntologyDashboard: React.FC = () => {
         fabric ? `Ontology project created from Knowledge Fabric '${fabric.name}'.` : undefined
       );
       setProjects(prev => [...prev, proj]);
-      navigate(`/ontology/workspace/${proj.id}?source=fabric`);
+      const jobId = String(proj.fabric_reference?.discovery_job_id || '');
+      navigate(`/ontology/workspace/${proj.id}?source=fabric${jobId ? `&job=${encodeURIComponent(jobId)}` : ''}`);
     } catch (err) {
       console.error(err);
       window.alert(err instanceof Error ? err.message : 'Failed to create project from knowledge fabric');

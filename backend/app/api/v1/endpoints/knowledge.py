@@ -431,7 +431,7 @@ def _enqueue_post_fabric_jobs(fabric_id: str, fabric_data: Dict[str, Any]) -> No
         fabric_store.save(fabric_data)
         job_config["project_id"] = project_id
         job_config["project_name"] = project_name
-        job_service.enqueue("ontology_discovery", fabric_id, job_config)
+        job_service.enqueue_once("ontology_discovery", fabric_id, job_config)
     except Exception as exc:
         print(f"Post-fabric job enqueue skipped: {exc}")
 

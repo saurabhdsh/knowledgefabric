@@ -44,6 +44,50 @@ class JobService:
         logger.info("Enqueued job %s type=%s fabric=%s", job_id, job_type, fabric_id)
         return job_id
 
+    def find_active(
+        self,
+        job_type: str,
+        fabric_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Return a queued or running job for this fabric and project, if one exists."""
+        session = get_session_factory()()
+        try:
+            query = session.query(FabricJobRecord).filter(
+                FabricJobRecord.job_type == job_type,
+                FabricJobRecord.status.in_(("queued", "running")),
+            )
+            if fabric_id:
+                query = query.filter(FabricJobRecord.fabric_id == fabric_id)
+            jobs = query.order_by(FabricJobRecord.created_at.desc()).all()
+            for job in jobs:
+                cfg = job.config or {}
+                if project_id and str(cfg.get("project_id") or "") != str(project_id):
+                    continue
+                return self._to_dict(job)
+            return None
+        finally:
+            session.close()
+
+    def enqueue_once(
+        self,
+        job_type: str,
+        fabric_id: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Enqueue unless the same fabric and project already have this job in flight."""
+        cfg = config or {}
+        existing = self.find_active(job_type, fabric_id, cfg.get("project_id"))
+        if existing:
+            logger.info(
+                "Reusing in-flight job %s type=%s fabric=%s",
+                existing["id"],
+                job_type,
+                fabric_id,
+            )
+            return existing["id"]
+        return self.enqueue(job_type, fabric_id, cfg)
+
     def start_running(
         self,
         job_type: str,
@@ -109,10 +153,21 @@ class JobService:
             )
             if not job:
                 return None
-            job.status = "running"
-            job.started_at = datetime.utcnow()
+            # Only one worker may take a queued job. A second claim sees zero rows.
+            taken = (
+                session.query(FabricJobRecord)
+                .filter(FabricJobRecord.id == job.id, FabricJobRecord.status == "queued")
+                .update(
+                    {"status": "running", "started_at": datetime.utcnow()},
+                    synchronize_session=False,
+                )
+            )
             session.commit()
-            return self._to_dict(job)
+            if not taken:
+                return None
+            session.expire_all()
+            claimed = session.get(FabricJobRecord, job.id)
+            return self._to_dict(claimed) if claimed else None
         except Exception:
             session.rollback()
             raise

@@ -96,6 +96,10 @@ class JobWorker:
         run_id = ontology_db_repository.create_discovery_run(project_id, config)
         job_service.update(job["id"], progress_percent=20.0, result={"run_id": run_id})
 
+        def _on_progress(percent: float, _message: str = "") -> None:
+            shown = max(0.0, min(99.0, float(percent)))
+            job_service.update(job["id"], progress_percent=shown, result={"run_id": run_id})
+
         orchestrator = DiscoveryOrchestrator()
         if schema_profile:
             version_id = orchestrator.run_schema_discovery(
@@ -103,6 +107,7 @@ class JobWorker:
                 project_id=project_id,
                 schema_profile=schema_profile,
                 fabric_id=fabric_id,
+                on_progress=_on_progress,
             )
         else:
             from app.services.ontology.fabric_artifact_bridge import (
@@ -119,6 +124,7 @@ class JobWorker:
                 project_id=project_id,
                 artifact_ids=artifact_ids,
                 use_llm=config.get("use_llm", True),
+                on_progress=_on_progress,
             )
 
         if not version_id:
