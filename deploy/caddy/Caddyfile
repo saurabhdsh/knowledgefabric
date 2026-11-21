@@ -7,7 +7,5 @@
 		Referrer-Policy "strict-origin-when-cross-origin"
 	}
 
-	# Default stays on this host. Set WEAVE_UPSTREAM=20.127.186.132:8080
-	# when cuweave.com should forward to the Azure VM.
 	reverse_proxy {$WEAVE_UPSTREAM:web:80}
 }

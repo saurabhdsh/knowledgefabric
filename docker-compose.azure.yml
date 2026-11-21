@@ -1,7 +1,8 @@
 # Weave on the shared Azure VM (rapid-build-dev-server).
-# One public port. Postgres stays on the Docker network.
+# Caddy publishes 80 and 443 for cuweave.com. Postgres and the API stay private.
 # Do not use ports 22, 3000, 5173, or 8000 — those belong to SSH, SEAL, and SciNova.
 #
+# Point GoDaddy at 20.127.186.132 before the first start so Let's Encrypt can issue.
 #   cp env.azure.example .env
 #   # paste OPENAI_API_KEY into .env on the VM only
 #   sudo docker compose -f docker-compose.azure.yml up -d --build
@@ -75,10 +76,30 @@ services:
       args:
         REACT_APP_API_URL: ${REACT_APP_API_URL:-https://cuweave.com}
     restart: unless-stopped
-    ports:
-      - "${WEB_BIND_ADDRESS:-0.0.0.0}:${WEB_HOST_PORT:-8080}:80"
+    expose:
+      - "80"
     depends_on:
       backend:
+        condition: service_healthy
+    networks:
+      - weave
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      - WEAVE_DOMAIN=${WEAVE_DOMAIN:-cuweave.com}
+      - WEAVE_UPSTREAM=${WEAVE_UPSTREAM:-web:80}
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
         condition: service_healthy
     networks:
       - weave
@@ -90,6 +111,8 @@ volumes:
   backend_models:
   backend_data:
   backend_ontology:
+  caddy_data:
+  caddy_config:
 
 networks:
   weave:
