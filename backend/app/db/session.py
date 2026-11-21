@@ -86,6 +86,17 @@ def _ensure_schema_columns(engine) -> None:
             ("role", "VARCHAR(32) DEFAULT 'user'"),
             ("allowed_features", "TEXT"),
         ],
+        "retrieval_episodes": [
+            ("route", "VARCHAR(64)"),
+            ("ontology_version_id", "VARCHAR(128)"),
+            ("confidence", "FLOAT"),
+            ("context_envelope", "TEXT"),
+        ],
+        "enrichment_candidates": [
+            ("destination", "VARCHAR(32)"),
+            ("classification_reason", "TEXT"),
+            ("classification", "TEXT"),
+        ],
     }
     with engine.connect() as conn:
         for table, columns in additions.items():

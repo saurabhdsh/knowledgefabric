@@ -1,11 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   DocumentTextIcon,
   ServerIcon,
-  CpuChipIcon,
-  CheckCircleIcon,
-  SparklesIcon,
   BeakerIcon,
   GlobeAltIcon,
   TrashIcon,
@@ -13,7 +10,6 @@ import {
   ArrowDownTrayIcon,
   ArrowPathIcon,
   MagnifyingGlassIcon,
-  CubeIcon,
   PencilSquareIcon,
   CodeBracketSquareIcon,
 } from '@heroicons/react/24/outline';
@@ -39,6 +35,11 @@ interface KnowledgeFabric {
   weave_domain?: string;
   ontology_project_id?: string | null;
   approved_ontology_version_id?: string | null;
+  pipeline?: {
+    version?: number;
+    status?: string;
+    stages?: Array<{ name: string; status: string }>;
+  } | null;
 }
 
 const Fabrics: React.FC = () => {
@@ -49,6 +50,21 @@ const Fabrics: React.FC = () => {
   const [showEndpointsDialog, setShowEndpointsDialog] = useState(false);
   const [selectedFabricForEndpoints, setSelectedFabricForEndpoints] = useState<KnowledgeFabric | null>(null);
   const [fabricJobs, setFabricJobs] = useState<Record<string, PlatformJob[]>>({});
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'failed' | 'building' | 'indexed'>('all');
+  const [deleteCard, setDeleteCard] = useState<{
+    fabric: KnowledgeFabric;
+    phase: 'deleting' | 'deleted' | 'error';
+    message?: string;
+  } | null>(null);
+  const deletedIdsRef = useRef<Set<string>>(new Set());
+  const deletingIdRef = useRef<string | null>(null);
+
+  const applyFabricList = (list: KnowledgeFabric[]) => {
+    const hidden = deletedIdsRef.current;
+    const inflight = deletingIdRef.current;
+    setFabrics(list.filter((fabric) => !hidden.has(fabric.id) && fabric.id !== inflight));
+  };
 
   const fetchFabricsFromApi = async () => {
     const response = await apiRequest('api/v1/knowledge/');
@@ -78,7 +94,7 @@ const Fabrics: React.FC = () => {
 
         const list = await fetchFabricsFromApi();
         if (list) {
-          setFabrics(list);
+          applyFabricList(list);
           list.slice(0, 6).forEach((f) => loadFabricJobs(f.id));
         } else {
           setFabrics([]);
@@ -108,7 +124,7 @@ const Fabrics: React.FC = () => {
     try {
       setRefreshing(true);
       const list = await fetchFabricsFromApi();
-      if (list) setFabrics(list);
+      if (list) applyFabricList(list);
     } catch (error) {
       console.error('Error refreshing fabrics:', error);
     } finally {
@@ -131,34 +147,19 @@ const Fabrics: React.FC = () => {
     }
   };
 
-  const getModelStatusColor = (status?: string) => {
-    switch (status) {
-      case 'indexed':
-      case 'trained':
-        return 'border border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.14)] text-[#3ecf9b]';
-      case 'indexing':
-      case 'training':
-        return 'border border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.14)] text-[#5ec8f2]';
-      case 'failed':
-        return 'border border-[rgba(240,137,132,0.35)] bg-[rgba(240,137,132,0.14)] text-[#f08984]';
-      default:
-        return 'border border-[rgba(148,163,184,0.2)] bg-white/[0.03] text-[#8b9cb0]';
-    }
-  };
-
   const getSourceTypeIcon = (sourceType: string) => {
     switch (sourceType) {
       case 'pdf':
-        return <DocumentTextIcon className="h-5 w-5" />;
+        return <DocumentTextIcon className="h-4 w-4" />;
       case 'database':
-        return <ServerIcon className="h-5 w-5" />;
+        return <ServerIcon className="h-4 w-4" />;
       case 'codebase':
-        return <CodeBracketSquareIcon className="h-5 w-5" />;
+        return <CodeBracketSquareIcon className="h-4 w-4" />;
       case 'mixed':
       case 'composite':
-        return <BeakerIcon className="h-5 w-5" />;
+        return <BeakerIcon className="h-4 w-4" />;
       default:
-        return <GlobeAltIcon className="h-5 w-5" />;
+        return <GlobeAltIcon className="h-4 w-4" />;
     }
   };
 
@@ -189,20 +190,40 @@ const Fabrics: React.FC = () => {
     navigate(`/fabrics/${fabric.id}/knowledge-graph`);
   };
 
-  const handleDeleteFabric = async (fabricId: string) => {
-    if (window.confirm('Are you sure you want to delete this knowledge fabric?')) {
-      try {
-        // API call to delete fabric
-        const response = await authenticatedFetch(getApiUrl(`api/v1/knowledge/${fabricId}`), {
-          method: 'DELETE'
-        });
-        
-        if (response.ok) {
-          setFabrics(prev => prev.filter(f => f.id !== fabricId));
-        }
-      } catch (error) {
-        console.error('Error deleting fabric:', error);
+  useEffect(() => {
+    if (deleteCard?.phase !== 'deleted') return;
+    const timer = window.setTimeout(() => setDeleteCard(null), 1100);
+    return () => window.clearTimeout(timer);
+  }, [deleteCard]);
+
+  const handleDeleteFabric = async (fabric: KnowledgeFabric) => {
+    if (deletingIdRef.current) return;
+    deletingIdRef.current = fabric.id;
+    setDeleteCard({ fabric, phase: 'deleting' });
+    setFabrics((prev) => prev.filter((item) => item.id !== fabric.id));
+    try {
+      const response = await authenticatedFetch(getApiUrl(`api/v1/knowledge/${fabric.id}`), {
+        method: 'DELETE',
+      });
+      const payload = await response.json().catch(() => ({} as { success?: boolean; message?: string; detail?: unknown }));
+      const detail = typeof payload.detail === 'string' ? payload.detail : '';
+      const message = detail || payload.message || '';
+      const explicitFailure = payload.success === false || /failed to delete/i.test(message);
+      const removed = !explicitFailure && (response.ok || response.status === 404);
+      if (!removed) {
+        throw new Error(message || 'Could not delete this fabric');
       }
+      deletedIdsRef.current.add(fabric.id);
+      deletingIdRef.current = null;
+      setDeleteCard({ fabric, phase: 'deleted' });
+    } catch (error) {
+      deletingIdRef.current = null;
+      setFabrics((prev) => (prev.some((item) => item.id === fabric.id) ? prev : [fabric, ...prev]));
+      setDeleteCard({
+        fabric,
+        phase: 'error',
+        message: error instanceof Error ? error.message : 'Could not delete this fabric',
+      });
     }
   };
 
@@ -323,6 +344,34 @@ const Fabrics: React.FC = () => {
     }
   };
 
+  const visibleFabrics = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return fabrics.filter((fabric) => {
+      if (statusFilter === 'active' && fabric.status !== 'active') return false;
+      if (statusFilter === 'failed' && fabric.status !== 'failed' && fabric.status !== 'error') return false;
+      if (statusFilter === 'building' && fabric.status !== 'building' && fabric.status !== 'training') return false;
+      if (statusFilter === 'indexed' && fabric.model_status !== 'indexed' && fabric.model_status !== 'trained') return false;
+      if (!needle) return true;
+      const haystack = [
+        fabric.name,
+        fabric.description,
+        fabric.source_type,
+        fabric.id,
+        fabricKindLabel(fabric.weave_domain),
+        ...(fabric.tags || []),
+      ].join(' ').toLowerCase();
+      return haystack.includes(needle);
+    });
+  }, [fabrics, query, statusFilter]);
+
+  const catalogStats = [
+    { label: 'Fabrics', value: fabrics.length },
+    { label: 'Active', value: fabrics.filter((f) => f.status === 'active').length },
+    { label: 'Indexed', value: fabrics.filter((f) => f.model_status === 'trained' || f.model_status === 'indexed').length },
+    { label: 'Documents', value: fabrics.reduce((sum, f) => sum + (f.document_count || 0), 0) },
+    { label: 'Chunks', value: fabrics.reduce((sum, f) => sum + (f.total_chunks || 0), 0) },
+  ];
+
   if (initialLoading) {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -335,319 +384,303 @@ const Fabrics: React.FC = () => {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
-        <div className="absolute inset-0 bg-[linear-gradient(130deg,rgba(255,255,255,0.02),transparent_52%)]" />
-        <div className="absolute -top-32 left-1/4 h-72 w-72 rounded-full bg-[#5ec8f2]/10 blur-3xl" />
-        <div className="absolute top-1/3 -right-24 h-80 w-80 rounded-full bg-[#9b8bd4]/10 blur-3xl" />
-        <div className="absolute -bottom-28 left-1/3 h-72 w-72 rounded-full bg-[#3ecf9b]/10 blur-3xl" />
+    <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -top-16 left-[8%] h-72 w-72 rounded-full bg-[#5ec8f2]/25 blur-3xl" />
+        <div className="absolute top-40 right-[6%] h-80 w-80 rounded-full bg-[#9b8bd4]/25 blur-3xl" />
+        <div className="absolute top-[28rem] left-[28%] h-72 w-72 rounded-full bg-[#3ecf9b]/20 blur-3xl" />
+        <div className="absolute bottom-10 right-[22%] h-64 w-64 rounded-full bg-[#5ec8f2]/15 blur-3xl" />
       </div>
+      <div className="relative">
 
-      {/* Header */}
-      <div className="text-center mb-12">
-        <div className="flex items-center justify-center mb-4">
-          <div className="p-3 rounded-full bg-[#10141d]/80 backdrop-blur-xl border border-[rgba(148,163,184,0.11)] shadow-lg shadow-black/30">
-            <SparklesIcon className="h-8 w-8 text-[#5ec8f2]" />
-          </div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.2em] text-[#8b9cb0]">Catalog</p>
+          <h1 className="text-2xl font-semibold tracking-[-0.03em] text-[#e8edf4]">Knowledge fabrics</h1>
         </div>
-        <p className="mb-3 text-[10px] uppercase tracking-[0.2em] text-[#8b9cb0]">Knowledge Operations</p>
-        <h1 className="text-4xl font-semibold text-[#e8edf4] mb-4">
-          Available Knowledge Fabrics
-        </h1>
-        <p className="text-base text-[#cbd5e1] max-w-3xl mx-auto mb-6">
-          Manage and explore your created knowledge fabrics
-        </p>
         <button
           onClick={handleRefresh}
           disabled={refreshing}
-          className="inline-flex items-center rounded-xl border border-[rgba(148,163,184,0.11)] bg-white/[0.03] px-4 py-2 text-sm font-medium text-[#cbd5e1] backdrop-blur-xl transition-all hover:border-[rgba(148,163,184,0.2)] hover:bg-white/[0.05] hover:text-[#e8edf4] disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center rounded-full border border-[rgba(148,163,184,0.16)] bg-white/[0.04] px-3 py-1.5 text-[13px] font-medium text-[#cbd5e1] transition hover:bg-white/[0.08] hover:text-[#e8edf4] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <ArrowPathIcon className={`mr-2 h-5 w-5 ${refreshing ? 'animate-spin' : ''}`} />
-          {refreshing ? 'Refreshing...' : 'Refresh'}
+          <ArrowPathIcon className={`mr-1.5 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+          {refreshing ? 'Refreshing' : 'Refresh'}
         </button>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-1 gap-4 mb-8 sm:grid-cols-2 lg:grid-cols-5">
-        <div className="rounded-2xl border border-[rgba(148,163,184,0.11)] bg-[#10141d]/75 p-4 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-          <div className="flex items-center">
-            <div className="rounded-xl bg-[#5ec8f2]/15 p-2.5">
-              <SparklesIcon className="h-6 w-6 text-blue-600" />
-            </div>
-            <div className="ml-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">Total Fabrics</p>
-              <p className="text-xl font-semibold text-[#e8edf4]">{fabrics.length}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-[rgba(148,163,184,0.11)] bg-[#10141d]/75 p-4 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-          <div className="flex items-center">
-            <div className="rounded-xl bg-[#3ecf9b]/15 p-2.5">
-              <CheckCircleIcon className="h-6 w-6 text-green-600" />
-            </div>
-            <div className="ml-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">Active</p>
-              <p className="text-xl font-semibold text-[#e8edf4]">
-                {fabrics.filter(f => f.status === 'active').length}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-[rgba(148,163,184,0.11)] bg-[#10141d]/75 p-4 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-          <div className="flex items-center">
-            <div className="rounded-xl bg-[#9b8bd4]/15 p-2.5">
-              <CpuChipIcon className="h-6 w-6 text-purple-600" />
-            </div>
-            <div className="ml-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">Trained Models</p>
-              <p className="text-xl font-semibold text-[#e8edf4]">
-                {fabrics.filter(f => f.model_status === 'trained' || f.model_status === 'indexed').length}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-[rgba(148,163,184,0.11)] bg-[#10141d]/75 p-4 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-          <div className="flex items-center">
-            <div className="rounded-xl bg-[#e8b84a]/15 p-2.5">
-              <DocumentTextIcon className="h-6 w-6 text-orange-600" />
-            </div>
-            <div className="ml-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">Total Documents</p>
-              <p className="text-xl font-semibold text-[#e8edf4]">
-                {fabrics.reduce((sum, f) => sum + f.document_count, 0)}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-[rgba(148,163,184,0.11)] bg-[#10141d]/75 p-4 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-          <div className="flex items-center">
-            <div className="rounded-xl bg-[#5ec8f2]/15 p-2.5">
-              <CubeIcon className="h-6 w-6 text-teal-600" />
-            </div>
-            <div className="ml-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">Total Chunks</p>
-              <p className="text-xl font-semibold text-[#e8edf4]">
-                {fabrics.reduce((sum, f) => sum + (f.total_chunks || 0), 0)}
-              </p>
-            </div>
-          </div>
-        </div>
+      <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-2xl border border-white/15 bg-white/[0.05] px-4 py-2.5 text-[12px] text-[#8b9cb0] shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] backdrop-blur-2xl">
+        {catalogStats.map((stat) => (
+          <span key={stat.label} className="inline-flex items-baseline gap-1.5">
+            <span className="text-[15px] font-semibold tabular-nums text-[#e8edf4]">{stat.value.toLocaleString()}</span>
+            {stat.label}
+          </span>
+        ))}
       </div>
 
-      {/* Fabrics Grid */}
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-        {fabrics.map((fabric) => (
-          <div
-            key={fabric.id}
-            className="group rounded-2xl border border-[rgba(148,163,184,0.11)] bg-[#10141d]/75 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] transition-all duration-300 hover:border-[rgba(148,163,184,0.2)] hover:-translate-y-0.5"
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <label className="relative min-w-[14rem] flex-1">
+          <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#8b9cb0]" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search name, source, or tag"
+            className="w-full rounded-full border border-white/15 bg-white/[0.05] py-2 pl-9 pr-3 text-[13px] text-[#e8edf4] shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] outline-none backdrop-blur-2xl placeholder:text-[#8b9cb0] focus:border-[rgba(94,200,242,0.45)]"
+          />
+        </label>
+        {([
+          ['all', 'All'],
+          ['active', 'Active'],
+          ['failed', 'Failed'],
+          ['building', 'Building'],
+          ['indexed', 'Indexed'],
+        ] as const).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setStatusFilter(id)}
+            className={`rounded-full px-3 py-1.5 text-[12px] font-medium transition ${
+              statusFilter === id
+                ? 'bg-[#f5f5f7] text-[#111113]'
+                : 'border border-[rgba(148,163,184,0.16)] text-[#8b9cb0] hover:text-[#e8edf4]'
+            }`}
           >
-            <div className="p-5">
-              {/* Header */}
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex items-center space-x-3">
-                  <div className="rounded-lg bg-[#5ec8f2]/15 p-2">
-                    {getSourceTypeIcon(fabric.source_type)}
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-semibold text-[#e8edf4]">
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {visibleFabrics.map((fabric) => {
+          const pipelineStages = fabric.pipeline?.stages;
+          const stages = Array.isArray(pipelineStages) ? pipelineStages : [];
+          const tags = fabric.tags || [];
+          const indexLabel = fabric.model_status === 'trained' ? 'indexed' : fabric.model_status;
+          const indexTone = indexLabel === 'failed'
+            ? 'text-[#f08984]'
+            : indexLabel === 'indexed'
+              ? 'text-[#3ecf9b]'
+              : indexLabel === 'indexing' || indexLabel === 'training'
+                ? 'text-[#5ec8f2]'
+                : 'text-[#8b9cb0]';
+          const iconButton = 'flex h-7 w-7 items-center justify-center rounded-full border border-white/15 bg-white/[0.06] text-[#8b9cb0] shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] backdrop-blur-md transition hover:bg-white/[0.12] hover:text-[#e8edf4]';
+          return (
+            <article
+              key={fabric.id}
+              className="relative flex flex-col overflow-hidden rounded-2xl border border-white/15 bg-white/[0.06] p-3.5 shadow-[0_10px_40px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.22)] backdrop-blur-2xl transition duration-300 hover:border-white/30 hover:bg-white/[0.09]"
+            >
+              <div className="pointer-events-none absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
+              <div className="pointer-events-none absolute -right-6 -top-8 h-20 w-20 rounded-full bg-[#5ec8f2]/25 blur-2xl" />
+              <div className="flex items-start gap-2.5">
+                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#5ec8f2]/12 text-[#5ec8f2]">
+                  {getSourceTypeIcon(fabric.source_type)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <h3 className="truncate text-[15px] font-semibold tracking-[-0.02em] text-[#e8edf4]" title={fabric.name}>
                       {fabric.name}
                     </h3>
-                    <p className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">
-                      {fabric.source_type.toUpperCase()}
-                    </p>
-                    <p className="text-[11px] text-[#5ec8f2] mt-0.5">
-                      {fabricKindLabel(fabric.weave_domain)}
-                    </p>
-                    <span className="mt-1.5 inline-flex items-center rounded-full border border-[rgba(155,139,212,0.45)] bg-gradient-to-r from-[rgba(94,200,242,0.16)] to-[rgba(155,139,212,0.24)] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#d7cff5]">
-                      CKF ready
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${getStatusColor(fabric.status)}`}>
+                      {fabric.status}
                     </span>
                   </div>
+                  <p className="mt-0.5 truncate text-[11px] text-[#8b9cb0]">
+                    <span className="uppercase tracking-[0.12em]">{fabric.source_type}</span>
+                    <span className="mx-1.5 text-white/20">·</span>
+                    <span className="text-[#5ec8f2]">{fabricKindLabel(fabric.weave_domain)}</span>
+                    {indexLabel && (
+                      <>
+                        <span className="mx-1.5 text-white/20">·</span>
+                        <span className={indexTone}>{indexLabel}</span>
+                      </>
+                    )}
+                  </p>
                 </div>
-                <span className={`px-3 py-1 text-xs font-medium rounded-full ${getStatusColor(fabric.status)}`}>
-                  {fabric.status}
-                </span>
               </div>
 
-              {/* Description */}
+              <p className="mt-2 text-[12px] text-[#cbd5e1]" title={formatDate(fabric.created_at)}>
+                <span className="text-[#e8edf4]">{(fabric.document_count || 0).toLocaleString()}</span> docs
+                <span className="mx-1.5 text-white/20">·</span>
+                <span className="text-[#e8edf4]">{(fabric.total_chunks || 0).toLocaleString()}</span> chunks
+                <span className="mx-1.5 text-white/20">·</span>
+                {formatDate(fabric.created_at)}
+              </p>
+
               {fabric.description && (
-                <p className="text-[#cbd5e1] mb-4 line-clamp-2">
+                <p className="mt-1.5 line-clamp-1 text-[12px] text-[#8b9cb0]" title={fabric.description}>
                   {fabric.description}
                 </p>
               )}
 
-              {/* Tags */}
-              {fabric.tags.length > 0 && (
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {fabric.tags.slice(0, 3).map((tag, index) => (
-                    <span
-                      key={index}
-                      className="px-2 py-1 border border-[rgba(148,163,184,0.11)] bg-white/[0.04] text-[#cbd5e1] text-xs rounded-full"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                  {fabric.tags.length > 3 && (
-                    <span className="px-2 py-1 border border-[rgba(148,163,184,0.11)] bg-white/[0.04] text-[#cbd5e1] text-xs rounded-full">
-                      +{fabric.tags.length - 3} more
-                    </span>
-                  )}
-                </div>
-              )}
-
-              {/* Platform status */}
-              <div className="mb-4 flex flex-wrap gap-2">
-                {fabric.ontology_project_id && (
-                  <span className="rounded-full border border-[rgba(94,200,242,0.3)] bg-[rgba(94,200,242,0.1)] px-2 py-0.5 text-[10px] text-[#5ec8f2]">
-                    Ontology linked
+              <div className="mt-2 flex flex-wrap gap-1">
+                <span className="rounded-full border border-[rgba(155,139,212,0.4)] bg-[rgba(155,139,212,0.14)] px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-[#d7cff5]">
+                  CKF ready
+                </span>
+                {tags.slice(0, 3).map((tag) => (
+                  <span key={tag} className="rounded-full border border-[rgba(148,163,184,0.14)] px-1.5 py-0.5 text-[10px] text-[#cbd5e1]">
+                    {tag}
                   </span>
+                ))}
+                {tags.length > 3 && (
+                  <span className="rounded-full border border-[rgba(148,163,184,0.14)] px-1.5 py-0.5 text-[10px] text-[#8b9cb0]">
+                    +{tags.length - 3}
+                  </span>
+                )}
+                {fabric.ontology_project_id && (
+                  <span className="rounded-full border border-[rgba(94,200,242,0.3)] px-1.5 py-0.5 text-[10px] text-[#5ec8f2]">Ontology</span>
                 )}
                 {fabric.approved_ontology_version_id && (
-                  <span className="rounded-full border border-[rgba(62,207,155,0.3)] bg-[rgba(62,207,155,0.1)] px-2 py-0.5 text-[10px] text-[#3ecf9b]">
-                    Graph approved
-                  </span>
+                  <span className="rounded-full border border-[rgba(62,207,155,0.3)] px-1.5 py-0.5 text-[10px] text-[#3ecf9b]">Graph approved</span>
                 )}
                 {(fabricJobs[fabric.id] || []).slice(0, 1).map((job) => (
-                  <span
-                    key={job.id}
-                    className={`rounded-full border px-2 py-0.5 text-[10px] ${jobStatusColor(job.status)}`}
-                  >
+                  <span key={job.id} className={`rounded-full border px-1.5 py-0.5 text-[10px] ${jobStatusColor(job.status)}`}>
                     {jobTypeLabel(job.job_type)}: {job.status}
                   </span>
                 ))}
               </div>
 
-              {/* Stats */}
-              <div className="grid grid-cols-3 gap-3 mb-4 rounded-xl border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-3">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.16em] text-[#8b9cb0]">Documents</p>
-                  <p className="text-lg font-semibold text-[#e8edf4]">
-                    {fabric.document_count.toLocaleString()}
-                  </p>
+              {stages.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {stages.map((stage) => (
+                    <span
+                      key={`${fabric.id}-${stage.name}`}
+                      title={stage.status}
+                      className={`rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
+                        stage.status === 'completed'
+                          ? 'text-[#3ecf9b]'
+                          : stage.status === 'failed'
+                            ? 'text-[#f08984]'
+                            : 'text-[#8b9cb0]'
+                      }`}
+                    >
+                      {stage.name}
+                    </span>
+                  ))}
                 </div>
-                <div>
-                  <p className="text-xs uppercase tracking-[0.16em] text-[#8b9cb0]">Chunks</p>
-                  <p className="text-lg font-semibold text-[#e8edf4]">
-                    {fabric.total_chunks?.toLocaleString() || '0'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs uppercase tracking-[0.16em] text-[#8b9cb0]">Created</p>
-                  <p className="text-sm font-medium text-[#e8edf4]">
-                    {formatDate(fabric.created_at)}
-                  </p>
-                </div>
-              </div>
+              )}
 
-              {/* Status */}
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-xs uppercase tracking-[0.16em] text-[#8b9cb0]">Index Status</span>
-                {fabric.model_status && (
-                  <span className={`px-3 py-1 text-xs font-medium rounded-full ${getModelStatusColor(fabric.model_status)}`}>
-                    {fabric.model_status === 'trained' ? 'indexed' : fabric.model_status}
-                  </span>
+              <div className="mt-3 flex items-center gap-1 border-t border-white/[0.06] pt-2.5">
+                <button type="button" onClick={() => handleViewFabric(fabric)} className={iconButton} title="View details">
+                  <EyeIcon className="h-3.5 w-3.5" />
+                </button>
+                {fabric.source_type !== 'codebase' && (
+                  <button type="button" onClick={() => handleExportFabric(fabric.id, fabric.source_type)} className={iconButton} title="Export">
+                    <ArrowDownTrayIcon className="h-3.5 w-3.5" />
+                  </button>
                 )}
-              </div>
-
-              {/* Action Buttons - all controls stay inside widget */}
-              <div className="space-y-2 rounded-xl border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-3">
-                <div className="grid grid-cols-5 gap-2">
-                  <button
-                    onClick={() => handleViewFabric(fabric)}
-                    className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(94,200,242,0.35)] hover:text-[#5ec8f2]"
-                    title="View Details"
-                  >
-                    <EyeIcon className="h-4 w-4" />
+                {fabric.source_type === 'codebase' && (
+                  <button type="button" onClick={() => handleReanalyzeCodebase(fabric.id)} className={iconButton} title="Re-analyze codebase">
+                    <ArrowPathIcon className="h-3.5 w-3.5" />
                   </button>
-                  {fabric.source_type !== 'codebase' && (
-                    <button
-                      onClick={() => handleExportFabric(fabric.id, fabric.source_type)}
-                      className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(62,207,155,0.35)] hover:text-[#3ecf9b]"
-                      title="Export"
-                    >
-                      <ArrowDownTrayIcon className="h-4 w-4" />
-                    </button>
-                  )}
-                  {fabric.source_type === 'codebase' && (
-                    <button
-                      onClick={() => handleReanalyzeCodebase(fabric.id)}
-                      className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(94,200,242,0.35)] hover:text-[#5ec8f2]"
-                      title="Re-analyze codebase"
-                    >
-                      <ArrowPathIcon className="h-4 w-4" />
-                    </button>
-                  )}
-                  <button
-                    onClick={() => handleValidateFabric(fabric.id, fabric.name)}
-                    className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(155,139,212,0.35)] hover:text-[#9b8bd4]"
-                    title="Validate Knowledge"
-                  >
-                    <MagnifyingGlassIcon className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => handleRenameFabric(fabric)}
-                    className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(94,200,242,0.35)] hover:text-[#5ec8f2]"
-                    title="Rename"
-                  >
-                    <PencilSquareIcon className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => handleDeleteFabric(fabric.id)}
-                    className="flex items-center justify-center rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] p-2 text-[#8b9cb0] transition-colors hover:border-[rgba(240,137,132,0.35)] hover:text-[#f08984]"
-                    title="Delete"
-                  >
-                    <TrashIcon className="h-4 w-4" />
-                  </button>
-                </div>
-
+                )}
+                <button type="button" onClick={() => handleValidateFabric(fabric.id, fabric.name)} className={iconButton} title="Validate knowledge">
+                  <MagnifyingGlassIcon className="h-3.5 w-3.5" />
+                </button>
+                <button type="button" onClick={() => handleRenameFabric(fabric)} className={iconButton} title="Rename">
+                  <PencilSquareIcon className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteFabric(fabric)}
+                  disabled={deleteCard?.phase === 'deleting'}
+                  className={`${iconButton} hover:text-[#f08984] disabled:opacity-40`}
+                  title="Delete"
+                >
+                  <TrashIcon className="h-3.5 w-3.5" />
+                </button>
                 {fabric.source_type === 'codebase' && (
                   <button
+                    type="button"
                     onClick={() => handleExportFabric(fabric.id, fabric.source_type)}
-                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-[rgba(62,207,155,0.4)] bg-[rgba(62,207,155,0.12)] py-2 px-4 text-sm font-medium text-[#9af0ca] transition-colors hover:bg-[rgba(62,207,155,0.2)]"
+                    className="rounded-full border border-[rgba(62,207,155,0.35)] px-2 py-1 text-[10px] font-medium text-[#9af0ca]"
+                    title="Download migration JSON"
                   >
-                    <ArrowDownTrayIcon className="h-4 w-4" />
-                    Download migration JSON
+                    JSON
                   </button>
                 )}
-
-                <button
-                  onClick={() => navigate(`/fabrics/${fabric.id}/knowledge-graph`)}
-                  className="w-full rounded-lg border border-[rgba(148,163,184,0.11)] bg-white/[0.03] py-2 px-4 text-sm font-medium text-[#cbd5e1] transition-colors hover:border-[rgba(148,163,184,0.2)] hover:bg-white/[0.05] hover:text-[#e8edf4]"
-                >
-                  View Knowledge Graph
-                </button>
-                <button
-                  onClick={() => handleUseFabric(fabric)}
-                  className="w-full rounded-lg border border-[rgba(94,200,242,0.35)] bg-gradient-to-r from-[#5ec8f2]/30 to-[#9b8bd4]/30 py-2 px-4 text-sm font-medium text-[#e8edf4] transition-all duration-200 hover:from-[#5ec8f2]/40 hover:to-[#9b8bd4]/40"
-                >
-                  Use Fabric
-                </button>
+                <div className="ml-auto flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/fabrics/${fabric.id}/knowledge-graph`)}
+                    className="rounded-full border border-white/15 bg-white/[0.06] px-2.5 py-1 text-[11px] font-medium text-[#cbd5e1] shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] backdrop-blur-md transition hover:bg-white/[0.12] hover:text-[#e8edf4]"
+                  >
+                    Graph
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleUseFabric(fabric)}
+                    className="rounded-full bg-[#f5f5f7] px-2.5 py-1 text-[11px] font-medium text-[#111113] transition hover:bg-white"
+                  >
+                    Use
+                  </button>
+                </div>
               </div>
-            </div>
-          </div>
-        ))}
+            </article>
+          );
+        })}
       </div>
 
-      {/* Empty State */}
       {fabrics.length === 0 && (
-        <div className="text-center py-12">
-          <div className="mx-auto w-24 h-24 rounded-full border border-[rgba(148,163,184,0.11)] bg-white/[0.03] flex items-center justify-center mb-6">
-            <SparklesIcon className="h-12 w-12 text-[#5ec8f2]" />
-          </div>
-          <h3 className="text-lg font-medium text-[#e8edf4] mb-2">No Knowledge Fabrics Yet</h3>
-          <p className="text-[#cbd5e1] mb-6">
-            Create your first knowledge fabric by uploading documents or connecting to databases.
+        <div className="py-16 text-center">
+          <h3 className="text-lg font-medium text-[#e8edf4]">No knowledge fabrics yet</h3>
+          <p className="mx-auto mt-2 max-w-md text-sm text-[#8b9cb0]">
+            Create one from a document, database, CSV, ServiceNow source, or codebase.
           </p>
-          <button className="rounded-lg border border-[rgba(94,200,242,0.35)] bg-gradient-to-r from-[#5ec8f2]/30 to-[#9b8bd4]/30 px-6 py-3 font-medium text-[#e8edf4] hover:from-[#5ec8f2]/40 hover:to-[#9b8bd4]/40 transition-colors">
-            Create Knowledge Fabric
+          <button
+            type="button"
+            onClick={() => navigate('/knowledge')}
+            className="mt-5 rounded-full bg-[#f5f5f7] px-4 py-2 text-[13px] font-medium text-[#111113]"
+          >
+            Create a fabric
           </button>
         </div>
       )}
 
+      {fabrics.length > 0 && visibleFabrics.length === 0 && (
+        <p className="py-10 text-center text-sm text-[#8b9cb0]">No fabrics match this search.</p>
+      )}
+
       {/* Dialogs */}
+      {deleteCard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 backdrop-blur-md">
+          <div className="kf-card-in relative w-full max-w-sm overflow-hidden rounded-[28px] border border-white/20 bg-white/[0.08] px-6 py-7 text-center shadow-[0_30px_90px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.28)] backdrop-blur-2xl">
+            <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/80 to-transparent" />
+            <div className="pointer-events-none absolute -top-16 left-1/2 h-36 w-36 -translate-x-1/2 rounded-full bg-[#5ec8f2]/30 blur-3xl" />
+            <div className="relative">
+              {deleteCard.phase === 'deleting' && (
+                <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-[#f5f5f7]" />
+              )}
+              {deleteCard.phase === 'deleted' && (
+                <div className="mx-auto mb-4 flex h-8 w-8 items-center justify-center rounded-full border border-[rgba(62,207,155,0.4)] bg-[rgba(62,207,155,0.16)] text-[#3ecf9b]">
+                  <TrashIcon className="h-4 w-4" />
+                </div>
+              )}
+              <p className="text-[11px] uppercase tracking-[0.22em] text-[#8b9cb0]">
+                {deleteCard.phase === 'deleting' ? 'Deleting' : deleteCard.phase === 'deleted' ? 'Deleted' : 'Could not delete'}
+              </p>
+              <h2 className="mt-2 truncate text-[20px] font-semibold tracking-[-0.03em] text-[#e8edf4]">
+                {deleteCard.fabric.name}
+              </h2>
+              <p className="mt-2 text-[13px] leading-relaxed text-[#cbd5e1]">
+                {deleteCard.phase === 'deleting'
+                  ? 'Removing this fabric from the catalog, along with its index and stored documents.'
+                  : deleteCard.phase === 'deleted'
+                    ? 'This fabric has been removed.'
+                    : deleteCard.message}
+              </p>
+              {deleteCard.phase === 'error' && (
+                <button
+                  type="button"
+                  onClick={() => setDeleteCard(null)}
+                  className="mt-5 rounded-full bg-[#f5f5f7] px-4 py-2 text-[13px] font-medium text-[#111113] transition hover:bg-white"
+                >
+                  Close
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedFabricForEndpoints && (
         <FabricEndpointsDialog
           isOpen={showEndpointsDialog}
@@ -659,6 +692,7 @@ const Fabrics: React.FC = () => {
           fabricName={selectedFabricForEndpoints.name}
         />
       )}
+      </div>
     </div>
   );
 };

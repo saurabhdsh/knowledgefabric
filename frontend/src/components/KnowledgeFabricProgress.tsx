@@ -4,7 +4,6 @@ import {
   CpuChipIcon,
   DocumentTextIcon,
   ServerIcon,
-  CheckCircleIcon,
   SparklesIcon,
   BeakerIcon,
   GlobeAltIcon,
@@ -149,12 +148,10 @@ function buildPharmaSteps(): ProgressStep[] {
   ];
 }
 
-const STEP_DURATIONS_GENERIC_MS = [1500, 1200, 2000, 1500, 1500, 1000];
-const STEP_DURATIONS_PHARMA_MS = [1400, 1600, 1400, 1800, 1900, 1500, 1100];
-
 interface KnowledgeFabricProgressProps {
   isVisible: boolean;
   onComplete: (fabricId: string) => void;
+  onDismiss?: (fabricId: string) => void;
   onError: (error: string) => void;
   uploadedFiles: string[];
   weaveDomain?: WeaveDomain;
@@ -162,10 +159,40 @@ interface KnowledgeFabricProgressProps {
   guardrails?: FabricGuardrails;
 }
 
+type CreationRun = {
+  key: string;
+  phase: 'running' | 'done' | 'error';
+  statusText: string;
+  progress: number;
+  fabricId: string;
+  error: string;
+  listeners: Set<() => void>;
+};
+
+let creationRun: CreationRun | null = null;
+let armNextAttempt = true;
+
+function publishRun(patch: Partial<CreationRun>) {
+  if (!creationRun) return;
+  Object.assign(creationRun, patch);
+  creationRun.listeners.forEach((listener) => listener());
+}
+
+function apiErrorMessage(result: { detail?: unknown; message?: unknown; success?: boolean }, fallback: string): string {
+  const detail = result?.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (detail && typeof detail === 'object' && typeof (detail as { message?: unknown }).message === 'string') {
+    const message = (detail as { message: string }).message.trim();
+    if (message) return message;
+  }
+  if (typeof result?.message === 'string' && result.message.trim() && result.success === false) return result.message;
+  return fallback;
+}
+
 const KnowledgeFabricProgress: React.FC<KnowledgeFabricProgressProps> = ({
   isVisible,
   onComplete,
-  onError,
+  onDismiss,
   uploadedFiles,
   weaveDomain = 'general',
   connectorProfile,
@@ -173,68 +200,53 @@ const KnowledgeFabricProgress: React.FC<KnowledgeFabricProgressProps> = ({
 }) => {
   const [fabricId, setFabricId] = useState<string>('');
   const [overallProgress, setOverallProgress] = useState(0);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [statusText, setStatusText] = useState('Preparing');
+  const filesKey = uploadedFiles.join('\n');
 
   const definition = useMemo(() => {
     const pharma = isPharmaManufacturing(weaveDomain);
     const steps = pharma ? buildPharmaSteps() : buildGenericSteps();
-    const durations = pharma ? STEP_DURATIONS_PHARMA_MS : STEP_DURATIONS_GENERIC_MS;
-    return { steps, durations };
+    return { steps };
   }, [weaveDomain]);
 
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>(() => definition.steps);
 
-  useEffect(() => {
-    if (!isVisible) return;
-    setFabricId('');
-    setIsProcessing(false);
-    setOverallProgress(0);
-    const fresh = isPharmaManufacturing(weaveDomain) ? buildPharmaSteps() : buildGenericSteps();
-    setProgressSteps(fresh.map((s) => ({ ...s, status: 'pending' as const, progress: 0 })));
-  }, [isVisible, weaveDomain]);
+  const applyRun = useCallback((run: CreationRun) => {
+    setStatusText(run.statusText);
+    setOverallProgress(run.progress);
+    setFabricId(run.fabricId);
+    if (run.phase === 'done') {
+      setProgressSteps((steps) => steps.map((step) => ({ ...step, status: 'completed', progress: 100 })));
+    }
+    if (run.phase === 'error') {
+      setProgressSteps((steps) => steps.map((step, index) => (
+        index === 0
+          ? { ...step, status: 'error', description: run.error || 'The fabric could not be created.' }
+          : { ...step, status: 'pending' }
+      )));
+    }
+  }, []);
 
-  const simulateProgress = useCallback(
-    async (stepIndex: number, targetProgress: number, duration: number, stepTotal: number) => {
-      const startTime = Date.now();
-      return new Promise<void>((resolve) => {
-        const updateProgress = () => {
-          const elapsed = Date.now() - startTime;
-          const progress = Math.min((elapsed / duration) * targetProgress, targetProgress);
+  const startKnowledgeFabricCreation = useCallback(async () => {
+    const { steps } = definition;
+    const phrases = steps.map((step) => step.title);
+    let phraseIndex = 0;
+    publishRun({ statusText: phrases[0] || 'Preparing', progress: 8, error: '', fabricId: '' });
+    setProgressSteps(steps.map((step, index) => ({
+      ...step,
+      status: index === 0 ? 'processing' : 'pending',
+      progress: index === 0 ? 12 : 0,
+    })));
 
-          setProgressSteps((prev) =>
-            prev.map((step, index) => (index === stepIndex ? { ...step, progress } : step))
-          );
-
-          setOverallProgress(((stepIndex + progress / 100) / stepTotal) * 100);
-
-          if (progress < targetProgress) {
-            requestAnimationFrame(updateProgress);
-          } else {
-            resolve();
-          }
-        };
-
-        updateProgress();
+    const ticker = window.setInterval(() => {
+      phraseIndex = (phraseIndex + 1) % Math.max(phrases.length, 1);
+      publishRun({
+        statusText: phrases[phraseIndex] || 'Preparing',
+        progress: Math.min(92, (creationRun?.progress || 8) + 7),
       });
-    },
-    []
-  );
+    }, 1400);
 
-  const updateStep = async (stepIndex: number, status: ProgressStep['status']) => {
-    setProgressSteps((prev) =>
-      prev.map((step, index) => (index === stepIndex ? { ...step, status } : step))
-    );
-  };
-
-  const startKnowledgeFabricCreation = async () => {
-    const { steps, durations } = definition;
-    const n = steps.length;
     try {
-      setIsProcessing(true);
-      setProgressSteps(steps.map((step) => ({ ...step, status: 'pending' as const, progress: 0 })));
-      setOverallProgress(0);
-      setFabricId('');
-
       const body: Record<string, unknown> = {
         files: uploadedFiles,
         source_type: 'pdf',
@@ -249,104 +261,92 @@ const KnowledgeFabricProgress: React.FC<KnowledgeFabricProgressProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to create knowledge fabric');
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result?.success === false) {
+        throw new Error(apiErrorMessage(result, 'Failed to create knowledge fabric'));
       }
 
-      const result = await response.json();
-      const newFabricId = result.data?.source_id || `fabric_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      setFabricId(newFabricId);
-
-      for (let i = 0; i < n; i += 1) {
-        const ms = durations[i] ?? 1200;
-        await updateStep(i, 'processing');
-        await simulateProgress(i, 100, ms, n);
-        await updateStep(i, 'completed');
+      const newFabricId = String(
+        result?.data?.source_id || result?.data?.fabric_id || result?.source_id || ''
+      ).trim();
+      const buildStatus = String(result?.data?.status || 'active');
+      if (!newFabricId) {
+        throw new Error('The fabric was created but no KF ID was returned.');
+      }
+      if (buildStatus === 'failed') {
+        throw new Error(String(result?.data?.error || 'The fabric build failed.'));
       }
 
-      setIsProcessing(false);
-      setTimeout(() => {
-        onComplete(newFabricId);
-      }, 2000);
+      window.clearInterval(ticker);
+      publishRun({
+        phase: 'done',
+        fabricId: newFabricId,
+        statusText: 'Completed',
+        progress: 100,
+        error: '',
+      });
     } catch (error) {
+      window.clearInterval(ticker);
+      const message = error instanceof Error ? error.message : 'Failed to create knowledge fabric';
       console.error('Knowledge fabric creation error:', error);
-      setIsProcessing(false);
-      onError(error instanceof Error ? error.message : 'Failed to create knowledge fabric');
+      publishRun({ phase: 'error', error: message, statusText: 'Could not finish', fabricId: '', progress: 100 });
     }
-  };
+  }, [connectorProfile, definition, guardrails, uploadedFiles, weaveDomain]);
 
   const startRef = React.useRef(startKnowledgeFabricCreation);
   startRef.current = startKnowledgeFabricCreation;
 
   useEffect(() => {
-    if (isVisible && !isProcessing && !fabricId) {
-      startRef.current();
+    if (!isVisible) {
+      if (creationRun?.phase !== 'running') armNextAttempt = true;
+      return;
     }
-  }, [isVisible, isProcessing, fabricId]);
+    const key = filesKey;
+    const listener = () => {
+      if (creationRun && creationRun.key === key) applyRun(creationRun);
+    };
+    if (
+      creationRun
+      && creationRun.key === key
+      && (creationRun.phase === 'running' || (creationRun.phase === 'done' && !armNextAttempt))
+    ) {
+      creationRun.listeners.add(listener);
+      listener();
+      return () => {
+        creationRun?.listeners.delete(listener);
+      };
+    }
+    armNextAttempt = false;
+    creationRun = {
+      key,
+      phase: 'running',
+      statusText: 'Preparing',
+      progress: 0,
+      fabricId: '',
+      error: '',
+      listeners: new Set([listener]),
+    };
+    setFabricId('');
+    setOverallProgress(0);
+    setStatusText('Preparing');
+    startRef.current();
+    return () => {
+      creationRun?.listeners.delete(listener);
+    };
+  }, [applyRun, filesKey, isVisible]);
 
   if (!isVisible) return null;
-
-  const pharmaOutputs =
-    isPharmaManufacturing(weaveDomain) && fabricId
-      ? [
-          'Indexed scientific artifacts with provenance',
-          'Extracted entities & preliminary relationships',
-          'Evidence mapping and staged graph projection',
-          'Domain metadata for batch / experiment / product context',
-        ]
-      : null;
 
   return (
     <FabricCreationProgressModal
       isVisible={isVisible}
-      title={isPharmaManufacturing(weaveDomain) ? 'Creating Pharma Knowledge Fabric' : 'Creating Knowledge Fabric'}
-      subtitle={`Processing ${uploadedFiles.length} file(s)${
-        isPharmaManufacturing(weaveDomain) ? ' with scientific extraction and graph staging' : ' with a fluid semantic pipeline'
-      }`}
+      title="Creating Knowledge Fabric"
       overallProgress={overallProgress}
-      steps={progressSteps.map((step) => ({ ...step, icon: step.icon }))}
-      footer={
-        <>
-          {pharmaOutputs && (
-            <div className="mt-6 p-4 rounded-xl border border-[rgba(155,139,212,0.28)] bg-[rgba(155,139,212,0.08)]">
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#c4b5fd] mb-2">Fabric outputs</p>
-              <ul className="text-sm text-[#cbd5e1] space-y-1.5">
-                {pharmaOutputs.map((line) => (
-                  <li key={line} className="flex gap-2">
-                    <span className="text-[#9b8bd4]">•</span>
-                    <span>{line}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {fabricId && (
-            <div className="mt-6 p-4 bg-emerald-500/10 border border-emerald-400/30 rounded-xl">
-              <div className="flex items-center space-x-2">
-                <CheckCircleIcon className="h-5 w-5 text-emerald-300" />
-                <span className="text-sm font-medium text-emerald-200">Knowledge Fabric Created Successfully!</span>
-              </div>
-              <p className="text-xs text-emerald-300/90 mt-1">Fabric ID: {fabricId}</p>
-              <p className="text-xs text-emerald-300/90 mt-1">
-                View the graph from Available Fabrics, then continue with Ontology Discovery and Enrichment on the same Weave journey.
-              </p>
-            </div>
-          )}
-
-          {isProcessing && !fabricId && (
-            <div className="mt-6 p-4 bg-cyan-500/10 border border-cyan-400/30 rounded-xl">
-              <div className="flex items-center space-x-2">
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-cyan-300" />
-                <span className="text-sm font-medium text-cyan-100">Processing your knowledge fabric...</span>
-              </div>
-              <p className="text-xs text-cyan-200/85 mt-1">Starting ingestion and indexing.</p>
-            </div>
-          )}
-        </>
-      }
+      steps={progressSteps}
+      statusText={statusText}
+      fabricId={fabricId || undefined}
+      onOpen={onComplete}
+      onDismiss={onDismiss}
     />
   );
 };

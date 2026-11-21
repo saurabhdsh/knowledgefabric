@@ -68,7 +68,7 @@ interface FabricGuardrails {
 }
 
 interface DatabaseKnowledgeFabricProps {
-  onComplete: (fabricId: string) => void;
+  onComplete: (fabricId: string, open?: boolean) => void;
   onCancel: () => void;
   weaveDomain?: string;
   connectorProfile?: string | null;
@@ -119,8 +119,6 @@ function buildDbProgressSteps(inputMode: 'live' | 'csv', trainModel: boolean): F
     },
   ];
 }
-
-const DB_PROGRESS_STEP_DURATIONS_MS = [1300, 1200, 1700, 1400];
 
 const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
   onComplete,
@@ -173,6 +171,7 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
   const [csvFiles, setCsvFiles] = useState<File[]>([]);
   const [csvDatasetLabel, setCsvDatasetLabel] = useState('');
   const [showCreationProgress, setShowCreationProgress] = useState(false);
+  const [createdFabricId, setCreatedFabricId] = useState('');
   const [creationProgressSteps, setCreationProgressSteps] = useState<FabricProgressStep[]>([]);
   const [creationOverallProgress, setCreationOverallProgress] = useState(0);
 
@@ -441,60 +440,48 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
     setConnectionStatus('testing');
 
     const progressSteps = buildDbProgressSteps(inputMode, trainModel);
-    const totalSteps = progressSteps.length;
     setCreationProgressSteps(progressSteps);
     setCreationOverallProgress(0);
+    setCreatedFabricId('');
     setShowCreationProgress(true);
-
-    const updateProgressStepStatus = (stepIndex: number, status: FabricProgressStep['status']) => {
-      setCreationProgressSteps((prev) =>
-        prev.map((step, index) => (index === stepIndex ? { ...step, status } : step))
-      );
-    };
-
-    const animateStep = (stepIndex: number, duration: number, target = 100) =>
-      new Promise<void>((resolve) => {
-        const started = performance.now();
-        const tick = (time: number) => {
-          const elapsed = time - started;
-          const pct = Math.min((elapsed / duration) * target, target);
-          setCreationProgressSteps((prev) =>
-            prev.map((step, index) => (index === stepIndex ? { ...step, progress: pct } : step))
-          );
-          setCreationOverallProgress(((stepIndex + pct / 100) / totalSteps) * 100);
-          if (pct < target) {
-            requestAnimationFrame(tick);
-            return;
-          }
-          resolve();
-        };
-        requestAnimationFrame(tick);
-      });
 
     const runCreationProgressAndComplete = async (
       createFabricRequest: () => Promise<
         string | { fabricId: string; rowsImported?: number; rowsInSource?: number }
       >
     ) => {
-      try {
-        const creationPromise = createFabricRequest();
+      const phrases = progressSteps.map((step) => step.title);
+      let phraseIndex = 0;
+      setCreationProgressSteps((prev) =>
+        prev.map((step, index) => ({
+          ...step,
+          status: index === 0 ? 'processing' : 'pending',
+          progress: index === 0 ? 12 : 0,
+        }))
+      );
+      setCreationOverallProgress(8);
+      const ticker = window.setInterval(() => {
+        phraseIndex = (phraseIndex + 1) % Math.max(phrases.length, 1);
+        const title = phrases[phraseIndex];
+        setCreationProgressSteps((prev) =>
+          prev.map((step) => ({
+            ...step,
+            status: step.title === title ? 'processing' : 'pending',
+          }))
+        );
+        setCreationOverallProgress((current) => (current >= 92 ? 92 : current + 7));
+      }, 1400);
 
-        for (let i = 0; i < totalSteps - 1; i += 1) {
-          updateProgressStepStatus(i, 'processing');
-          await animateStep(i, DB_PROGRESS_STEP_DURATIONS_MS[i] ?? 1200, 100);
-          updateProgressStepStatus(i, 'completed');
+      try {
+        const created = await createFabricRequest();
+        const fabricId = String(
+          typeof created === 'string' ? created : created?.fabricId || ''
+        ).trim();
+        if (!fabricId) {
+          throw new Error('The fabric was created but no KF ID was returned.');
         }
 
-        const finalStep = totalSteps - 1;
-        updateProgressStepStatus(finalStep, 'processing');
-        await animateStep(finalStep, 1400, 85);
-
-        const created = await creationPromise;
-        const fabricId = typeof created === 'string' ? created : created.fabricId;
-        await animateStep(finalStep, 300, 100);
-        updateProgressStepStatus(finalStep, 'completed');
-        setCreationOverallProgress(100);
-
+        window.clearInterval(ticker);
         const rowNote =
           typeof created !== 'string' && created.rowsImported != null
             ? created.rowsInSource != null && created.rowsInSource !== created.rowsImported
@@ -502,17 +489,24 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
               : ` Imported ${Number(created.rowsImported).toLocaleString()} rows.`
             : '';
         setConnectionStatus('success');
-        setConnectionMessage(`Knowledge fabric created successfully! Fabric ID: ${fabricId}.${rowNote}`);
-        setTimeout(() => {
-          setShowCreationProgress(false);
-          onComplete(fabricId);
-        }, 900);
-      } catch (err) {
-        setShowCreationProgress(false);
-        setConnectionStatus('error');
-        setConnectionMessage(
-          err instanceof Error ? err.message : 'Failed to create knowledge fabric'
+        setConnectionMessage(`Knowledge fabric created. KF ID ${fabricId}.${rowNote}`);
+        setCreationOverallProgress(100);
+        setCreationProgressSteps((prev) =>
+          prev.map((step) => ({ ...step, status: 'completed', progress: 100 }))
         );
+        setCreatedFabricId(fabricId);
+      } catch (err) {
+        window.clearInterval(ticker);
+        const message = err instanceof Error ? err.message : 'Failed to create knowledge fabric';
+        setCreationProgressSteps((prev) =>
+          prev.map((step, index) => (
+            index === 0
+              ? { ...step, status: 'error', title: 'Could not finish', description: message }
+              : { ...step, status: 'pending' }
+          ))
+        );
+        setConnectionStatus('error');
+        setConnectionMessage(message);
       } finally {
         setIsConnecting(false);
       }
@@ -550,10 +544,15 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
             )
           );
         }
+        const data = result?.data || {};
+        const fabricId = data.source_id || data.fabric_id || data.id;
+        if (!fabricId) {
+          throw new Error('The fabric was created but no KF ID was returned.');
+        }
         return {
-          fabricId: result.data.source_id,
-          rowsImported: result.data.rows_imported,
-          rowsInSource: result.data.rows_in_source,
+          fabricId,
+          rowsImported: data.rows_imported,
+          rowsInSource: data.rows_in_source,
         };
       });
       return;
@@ -1090,13 +1089,11 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
       <FabricCreationProgressModal
         isVisible={showCreationProgress}
         title="Creating Knowledge Fabric"
-        subtitle={
-          inputMode === 'csv'
-            ? `Processing ${csvFiles.length} CSV file(s) with ${connectionType} profile`
-            : `Ingesting records from your ${connectionType} connection`
-        }
         overallProgress={creationOverallProgress}
         steps={creationProgressSteps}
+        fabricId={createdFabricId || undefined}
+        onOpen={(id) => onComplete(id, true)}
+        onDismiss={(id) => onComplete(id, false)}
       />
     </div>
   );

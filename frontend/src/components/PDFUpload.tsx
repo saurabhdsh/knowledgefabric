@@ -167,28 +167,29 @@ const PDFUpload: React.FC<PDFUploadProps> = ({ onUploadComplete, onCancel }) => 
         </p>
       </div>
 
-      {/* Drop Zone */}
-      <div
-        {...getRootProps()}
-        className={`border-2 border-dashed rounded-xl p-8 text-center transition-all duration-200 ${
-          isDragActive
-            ? 'border-indigo-500 bg-indigo-50'
-            : 'border-gray-300 hover:border-gray-400'
-        }`}
-      >
-        <input {...getInputProps()} />
-        <CloudArrowUpIcon className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-        {isDragActive ? (
-          <p className="text-lg font-medium text-indigo-600">Drop the PDF files here...</p>
-        ) : (
-          <div>
-            <p className="text-lg font-medium text-gray-900 mb-2">
-              Drag & drop PDF files here
-            </p>
-            <p className="text-gray-500">or click to browse files</p>
-          </div>
-        )}
-      </div>
+      {uploadFiles.length === 0 && (
+        <div
+          {...getRootProps()}
+          className={`border-2 border-dashed rounded-xl p-8 text-center transition-all duration-200 ${
+            isDragActive
+              ? 'border-indigo-500 bg-indigo-50'
+              : 'border-gray-300 hover:border-gray-400'
+          }`}
+        >
+          <input {...getInputProps()} />
+          <CloudArrowUpIcon className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+          {isDragActive ? (
+            <p className="text-lg font-medium text-indigo-600">Drop the PDF files here...</p>
+          ) : (
+            <div>
+              <p className="text-lg font-medium text-gray-900 mb-2">
+                Drag & drop PDF files here
+              </p>
+              <p className="text-gray-500">or click to browse files</p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* File List */}
       {uploadFiles.length > 0 && (
@@ -261,25 +262,33 @@ const PDFUpload: React.FC<PDFUploadProps> = ({ onUploadComplete, onCancel }) => 
         </div>
       )}
 
-      {/* Action Buttons */}
-      <div className="flex justify-end space-x-4">
+      <div className="flex items-center justify-end gap-3">
+        {uploadFiles.length > 0 && (
+          <div
+            {...getRootProps()}
+            className="mr-auto cursor-pointer text-[13px] text-[#8b9cb0] transition hover:text-[#e8edf4]"
+          >
+            <input {...getInputProps()} />
+            Add another
+          </div>
+        )}
         <button
+          type="button"
           onClick={onCancel}
-          className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+          className="rounded-full px-4 py-2 text-[13px] text-[#8b9cb0] transition hover:text-[#e8edf4]"
         >
           Cancel
         </button>
-        <button
-          onClick={handleUploadFiles}
-          disabled={uploadFiles.length === 0 || isUploading}
-          className={`px-6 py-2 rounded-lg font-medium transition-colors ${
-            uploadFiles.length === 0 || isUploading
-              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-              : 'bg-indigo-600 text-white hover:bg-indigo-700'
-          }`}
-        >
-          {isUploading ? 'Uploading...' : 'Upload Files'}
-        </button>
+        {uploadFiles.length > 0 && (
+          <button
+            type="button"
+            onClick={handleUploadFiles}
+            disabled={isUploading}
+            className="rounded-full bg-[#f5f5f7] px-5 py-2 text-[13px] font-medium text-[#111113] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isUploading ? 'Creating…' : 'Create fabric'}
+          </button>
+        )}
       </div>
     </div>
   );

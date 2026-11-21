@@ -191,18 +191,53 @@ class FabricStore:
         self._cache = fabrics
 
     def delete(self, fabric_id: str) -> bool:
+        """Remove a fabric the caller can see.
+
+        The catalog row is deleted before the JSON backup is rewritten. A row
+        that exists only in ``fabrics.json`` is removed there too, so a later
+        list cannot bring it back.
+        """
         owner_id = get_current_user_id()
+        removed = False
         with db_session() as session:
             rec = session.get(FabricRecord, fabric_id)
-            if not rec:
-                return False
-            if owner_id and rec.owner_id and rec.owner_id != owner_id:
-                return False
-            if owner_id and rec.owner_id is None:
-                return False
-            session.delete(rec)
-        self._write_json_backup()
+            if rec:
+                if owner_id and rec.owner_id and rec.owner_id != owner_id:
+                    return False
+                if owner_id and rec.owner_id is None:
+                    return False
+                session.delete(rec)
+                removed = True
         self._cache = [f for f in self._cache if f.get("id") != fabric_id]
+        if removed:
+            try:
+                self._write_json_backup()
+            except Exception:
+                logger.warning("Fabric %s deleted but JSON backup failed", fabric_id, exc_info=True)
+            return True
+        return self._remove_from_json(fabric_id, owner_id)
+
+    def _remove_from_json(self, fabric_id: str, owner_id: Optional[str]) -> bool:
+        fabrics = self._load_json_fabrics()
+        kept: List[Dict[str, Any]] = []
+        removed = False
+        for fab in fabrics:
+            if fab.get("id") != fabric_id:
+                kept.append(fab)
+                continue
+            row_owner = fab.get("owner_id")
+            if owner_id and row_owner and row_owner != owner_id:
+                kept.append(fab)
+                continue
+            if owner_id and not row_owner:
+                kept.append(fab)
+                continue
+            removed = True
+        if not removed:
+            return False
+        os.makedirs(settings.DATA_DIR, exist_ok=True)
+        with open(FABRICS_JSON, "w", encoding="utf-8") as f:
+            json.dump(kept, f, indent=2, default=str)
         return True
 
     def link_ontology(self, fabric_id: str, project_id: str, version_id: Optional[str] = None) -> bool:

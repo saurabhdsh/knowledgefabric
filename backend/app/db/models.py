@@ -224,6 +224,10 @@ class RetrievalEpisodeRecord(Base):
     relevant_chunks: Mapped[int] = mapped_column(Integer, default=0)
     processing_time: Mapped[str | None] = mapped_column(String(32), nullable=True)
     feedback_flag: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    route: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ontology_version_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    context_envelope: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
@@ -254,5 +258,8 @@ class EnrichmentCandidateRecord(Base):
     proposed_fact: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
     vector_chunk_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    destination: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    classification_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    classification: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

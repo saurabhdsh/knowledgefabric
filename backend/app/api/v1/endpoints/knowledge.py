@@ -324,13 +324,24 @@ def _source_counts_from_fetched(
 
 
 def _delete_fabric_fully(fabric_id: str) -> bool:
-    """Remove the fabric record, its vectors, its table store and its manifest."""
+    """Remove the catalog record first, then vectors, the table store and the manifest.
+
+    The catalog row goes first so a refresh cannot show the fabric again while
+    index cleanup is still running.
+    """
+    removed = bool(fabric_store.delete(fabric_id))
     try:
         vector_service.delete_source_documents(fabric_id)
     except Exception as exc:
         print(f"Vector cleanup for {fabric_id}: {exc}")
     delete_fabric_artifacts(fabric_id)
-    return bool(fabric_store.delete(fabric_id))
+    return removed
+
+
+def _finish_delete(fabric_id: str) -> Dict[str, Any]:
+    if _delete_fabric_fully(fabric_id):
+        return {"success": True, "message": "Knowledge fabric deleted"}
+    raise HTTPException(status_code=404, detail="Knowledge fabric not found")
 
 
 def _remember_query(
@@ -343,10 +354,28 @@ def _remember_query(
     analytics_intent: Optional[str] = None,
     relevant_chunks: int = 0,
     processing_time: Optional[str] = None,
+    context_envelope: Optional[Dict[str, Any]] = None,
+    route: Optional[str] = None,
+    ontology_version_id: Optional[str] = None,
+    confidence: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Attach session + episode ids. Failure must not block the answer."""
+    from app.services.context.envelope import begin_envelope
+
+    envelope = context_envelope
+    if envelope is None:
+        try:
+            memory_context = agent_memory_service.build_query_context(
+                fabric_id, request.get("session_id")
+            )
+        except Exception as memory_exc:
+            print(f"Session memory context skipped for {fabric_id}: {memory_exc}")
+            memory_context = ""
+        envelope = begin_envelope(memory_context, "", ontology_version_id)
+        envelope["route"] = route or analytics_intent
+        envelope["confidence"] = confidence
     try:
-        return agent_memory_service.record_exchange(
+        recorded = agent_memory_service.record_exchange(
             fabric_id=fabric_id,
             query=query,
             answer=answer,
@@ -355,10 +384,16 @@ def _remember_query(
             analytics_intent=analytics_intent,
             relevant_chunks=relevant_chunks,
             processing_time=processing_time,
+            route=route or envelope.get("route"),
+            ontology_version_id=ontology_version_id or envelope.get("ontology_version_id"),
+            confidence=confidence if confidence is not None else envelope.get("confidence"),
+            context_envelope=envelope,
         )
     except Exception as exc:
         print(f"Session memory record skipped for {fabric_id}: {exc}")
-        return {}
+        recorded = {}
+    recorded["context_envelope"] = envelope
+    return recorded
 
 
 def _enqueue_post_fabric_jobs(fabric_id: str, fabric_data: Dict[str, Any]) -> None:
@@ -2722,11 +2757,11 @@ async def update_fabric_guardrails(fabric_id: str, request: UpdateGuardrailsRequ
 async def delete_knowledge_source(source_id: str):
     """Delete a knowledge source and its Release 2.0 artifacts."""
     try:
-        if _delete_fabric_fully(source_id):
-            return {"message": "Knowledge source deleted successfully"}
-        return {"message": "Knowledge source not found"}
+        return _finish_delete(source_id)
+    except HTTPException:
+        raise
     except Exception as e:
-        return {"message": f"Failed to delete knowledge source: {str(e)}"}
+        raise HTTPException(status_code=500, detail=f"Failed to delete knowledge fabric: {e}")
 
 @router.post("/create-pdf-fabric", response_model=APIResponse)
 async def create_pdf_knowledge_fabric(request: CreatePDFFabricRequest):
@@ -3424,11 +3459,11 @@ async def clear_progress(progress_id: str):
 async def delete_knowledge_fabric(fabric_id: str):
     """Delete a knowledge fabric and its Release 2.0 artifacts."""
     try:
-        if _delete_fabric_fully(fabric_id):
-            return {"message": "Knowledge source deleted successfully"}
-        return {"message": "Knowledge fabric not found"}
+        return _finish_delete(fabric_id)
+    except HTTPException:
+        raise
     except Exception as e:
-        return {"message": f"Failed to delete knowledge fabric: {str(e)}"}
+        raise HTTPException(status_code=500, detail=f"Failed to delete knowledge fabric: {e}")
 
 @router.get("/{source_id}/documents")
 async def get_source_documents(source_id: str):
@@ -4454,55 +4489,35 @@ async def create_servicenow_incident_fabric():
             {"relationship_type": "governed_by_sla", "from_entity": "incident", "from_id": "INC0010003", "to_entity": "sla", "to_id": "SLA001"},
         ]
 
-        rows: List[Dict[str, Any]] = []
-        for row in incidents:
-            rows.append({"record_type": "servicenow_incident", **row})
-        for row in users:
-            rows.append({"record_type": "servicenow_user", **row})
-        for row in assignment_groups:
-            rows.append({"record_type": "servicenow_assignment_group", **row})
-        for row in cmdb_cis:
-            rows.append({"record_type": "servicenow_cmdb_ci", **row})
-        for row in services:
-            rows.append({"record_type": "servicenow_service", **row})
-        for row in problems:
-            rows.append({"record_type": "servicenow_problem", **row})
-        for row in changes:
-            rows.append({"record_type": "servicenow_change_request", **row})
-        for row in slas:
-            rows.append({"record_type": "servicenow_sla", **row})
-        for row in relationships:
-            rows.append({"record_type": "servicenow_relationship", **row})
-
-        documents = document_service.process_database_data(rows, "servicenow_incident_operations")
-        for doc in documents:
-            meta = doc.get("metadata", {}) or {}
-            if isinstance(meta.get("columns"), list):
-                meta["columns"] = ",".join(str(col) for col in meta["columns"])
-            doc["metadata"] = meta
-
-        vector_service.add_documents(documents, fabric_id)
-
-        fabric_data = {
+        tables = {
+            "incidents": incidents,
+            "users": users,
+            "assignment_groups": assignment_groups,
+            "cmdb_cis": cmdb_cis,
+            "services": services,
+            "problems": problems,
+            "changes": changes,
+            "slas": slas,
+            "relationships": relationships,
+        }
+        record = {
             "id": fabric_id,
             "name": fabric_name,
             "source_type": "servicenow",
-            "description": "ServiceNow-centric incident operations fabric with incidents, users, assignment groups, CI, services, problems, changes, SLA, and relationship graph.",
+            "description": "ServiceNow incident operations fabric profiled through the Release 2.0 pipeline.",
             "tags": ["servicenow", "incident", "itsm", "cmdb", "problem-management", "change-management", "sla", "reference-architecture"],
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "document_count": len(rows),
-            "status": "active",
-            "model_status": "trained",
-            "last_training": None,
-            "total_chunks": len(documents),
-            "connection_info": {
-                "type": "synthetic_servicenow_incident_flow",
-                "domains": ["incident", "caller", "assignment_group", "cmdb_ci", "service", "problem", "change", "sla", "relationships"],
-                "rows_imported": len(rows),
-            },
+            "connection_info": {"type": "synthetic_servicenow_incident_flow"},
         }
-        persist_fabric(fabric_data)
+        from app.services.fabric_pipeline.pipelines import run_tabular_pipeline
+
+        fabric_data = await run_in_threadpool(
+            run_tabular_pipeline,
+            fabric_id=fabric_id,
+            tables=tables,
+            record=record,
+            source_row_counts={name: len(rows) for name, rows in tables.items()},
+            inputs={"kind": "servicenow_incident"},
+        )
 
         return APIResponse(
             success=True,
@@ -4510,9 +4525,11 @@ async def create_servicenow_incident_fabric():
             data={
                 "source_id": fabric_id,
                 "fabric_name": fabric_name,
-                "rows_imported": len(rows),
-                "total_chunks": len(documents),
-                "domains": fabric_data["connection_info"]["domains"],
+                "rows_imported": fabric_data.get("row_count"),
+                "total_chunks": fabric_data.get("total_chunks"),
+                "table_count": fabric_data.get("table_count"),
+                "status": fabric_data.get("status"),
+                "model_status": fabric_data.get("model_status"),
             },
             error=None,
         )
@@ -4612,6 +4629,20 @@ async def retrieve_knowledge_chunks(fabric_id: str, request: dict):
         }
         for i, r in enumerate(retrieval.get("chunks") or [])
     ]
+    from app.services.context.envelope import begin_envelope, finish_envelope
+
+    try:
+        memory_context = agent_memory_service.build_query_context(
+            fabric_id, request.get("session_id")
+        ) if request.get("session_id") else ""
+    except Exception:
+        memory_context = ""
+    ontology_context = retrieval_orchestrator.build_query_context(fabric_id, retrieval) or ""
+    context_envelope = finish_envelope(
+        begin_envelope(memory_context, ontology_context, retrieval.get("ontology_version_id")),
+        route="retrieval",
+        chunks=retrieval.get("chunks") or [],
+    )
 
     return APIResponse(
         success=True,
@@ -4627,6 +4658,7 @@ async def retrieve_knowledge_chunks(fabric_id: str, request: dict):
             "entities": retrieval.get("entities"),
             "ontology_version_id": retrieval.get("ontology_version_id"),
             "retrieval_trace": retrieval.get("retrieval_trace"),
+            "context_envelope": context_envelope,
         },
         error=None,
     )
@@ -4700,6 +4732,7 @@ async def query_knowledge_base(
                 print(f"Session memory context skipped for {fabric_id}: {memory_exc}")
                 memory_context = ""
             ontology_context = ""
+            retrieval = None
             try:
                 retrieval = retrieval_orchestrator.retrieve(
                     fabric_id, query, top_k=int(request.get("top_k") or 8), retrieve_all=False
@@ -4723,6 +4756,7 @@ async def query_knowledge_base(
                 top_k=top_k_i,
                 memory_context=memory_context,
                 ontology_context=ontology_context,
+                ontology_version_id=(retrieval.get("ontology_version_id") if retrieval else None),
             )
             processing_time = f"{time.time() - processing_start:.1f}s"
             answer = result.get("answer") or ""
@@ -4760,6 +4794,10 @@ async def query_knowledge_base(
                         analytics_intent=(result.get("analytics") or {}).get("intent") or result.get("route"),
                         relevant_chunks=int(result.get("relevant_chunks") or 0),
                         processing_time=processing_time,
+                        context_envelope=result.get("context_envelope"),
+                        route=result.get("route"),
+                        ontology_version_id=(result.get("context_envelope") or {}).get("ontology_version_id"),
+                        confidence=result.get("confidence"),
                     ),
                 },
                 error=None,
@@ -4932,6 +4970,8 @@ async def query_knowledge_base(
         context_chunks = []
         search_results = []
         retrieval_meta: Dict[str, Any] = {}
+        legacy_ontology_context = ""
+        memory_context = ""
         retrieval_opts = _resolve_query_retrieval(request, fabric)
         query_top_k = retrieval_opts["top_k"]
         query_retrieve_all = retrieval_opts["retrieve_all"]
@@ -4994,6 +5034,7 @@ async def query_knowledge_base(
                     retrieve_all=query_retrieve_all,
                 )
                 ontology_ctx = retrieval_orchestrator.build_query_context(fabric_id, retrieval)
+                legacy_ontology_context = ontology_ctx or ""
                 if ontology_ctx:
                     context_chunks.append(f"Ontology & graph context:\n{ontology_ctx}")
                 search_results = retrieval.get("chunks") or []
@@ -5210,7 +5251,26 @@ async def query_knowledge_base(
         
         # Calculate actual processing time
         processing_time = f"{time.time() - processing_start:.1f}s"
-        
+        from app.services.context.envelope import begin_envelope, finish_envelope
+
+        passage_chunks = [row for row in search_results if isinstance(row, dict)]
+        if not passage_chunks:
+            passage_chunks = [
+                {"id": f"legacy-{index + 1}", "content": chunk}
+                for index, chunk in enumerate(context_chunks)
+            ]
+        legacy_version = None
+        try:
+            legacy_version = (fabric or {}).get("approved_ontology_version_id")
+        except Exception:
+            legacy_version = None
+        legacy_envelope = finish_envelope(
+            begin_envelope(memory_context, legacy_ontology_context, legacy_version),
+            route="retrieval",
+            confidence=actual_confidence,
+            chunks=passage_chunks,
+        )
+
         return APIResponse(
             success=True,
             message="Knowledge base query completed",
@@ -5237,6 +5297,10 @@ async def query_knowledge_base(
                     llm_provider=llm_provider,
                     relevant_chunks=len(context_chunks),
                     processing_time=processing_time,
+                    context_envelope=legacy_envelope,
+                    route="retrieval",
+                    ontology_version_id=legacy_version,
+                    confidence=actual_confidence,
                 ),
                 "retrieval": retrieval_meta or {
                     "retrieved_chunks": len(context_chunks),
@@ -5443,38 +5507,28 @@ async def create_servicenow_knowledge_fabric(
                 "description": "Knowledge fabric created from ServiceNow incident data",
                 "tags": tags_sn,
                 "weave_domain": resolved_weave,
-                "created_at": datetime.now().isoformat(),
-                "updated_at": datetime.now().isoformat(),
-                "status": "active",
-                "model_status": "not_trained",
-                "last_training": None,
-                "document_count": len(processed_data),
-                "total_chunks": len(vector_documents),
-                "file_count": len(files),
-                "processed_data": processed_data,
+                "connection_info": {"type": "servicenow_file"},
                 "knowledge_model": incident_model,
+                "file_count": len(files),
             }
             if resolved_profile:
                 fabric_data["connector_profile"] = resolved_profile
             if normalized_guardrails:
                 fabric_data["guardrails"] = normalized_guardrails
-            model_docs = document_service.process_database_data(
-                [
-                    {
-                        "knowledge_model": incident_model["label"],
-                        "domain": incident_model["domain"],
-                        "entities": ", ".join([e["type"] for e in incident_model["entities"]]),
-                        "relationships": ", ".join(
-                            [f'{rel["from"]} {rel["relationship"]} {rel["to"]}' for rel in incident_model["relationships"]]
-                        ),
-                        "incident_attributes": ", ".join(incident_model["incident_attributes"]),
-                    }
-                ],
-                "servicenow_incident_knowledge_model",
+            tables = {}
+            for item in processed_data:
+                stem = os.path.splitext(str(item.get("filename") or "incidents"))[0]
+                tables[stem or "incidents"] = item.get("data") or []
+            from app.services.fabric_pipeline.pipelines import run_tabular_pipeline
+
+            fabric_data = await run_in_threadpool(
+                run_tabular_pipeline,
+                fabric_id=fabric_id,
+                tables=tables,
+                record=fabric_data,
+                source_row_counts={name: len(rows) for name, rows in tables.items()},
+                inputs={"kind": "servicenow_file"},
             )
-            vector_documents.extend(model_docs)
-            if vector_documents:
-                vector_service.add_documents(vector_documents, fabric_id)
             
         elif effective_source_type == "servicenow_connection":
             # Handle direct connection
@@ -5524,33 +5578,25 @@ async def create_servicenow_knowledge_fabric(
                 "description": "Knowledge fabric created from ServiceNow incident-centric connection data",
                 "tags": tags_conn,
                 "weave_domain": resolved_weave,
-                "created_at": datetime.now().isoformat(),
-                "updated_at": datetime.now().isoformat(),
-                "status": "active",
-                "model_status": "not_trained",
-                "last_training": None,
-                "document_count": limit,
-                "total_chunks": limit,
+                "connection_info": {"type": "servicenow_connection", "table": table_name},
                 "connection_data": conn_data,
-                "record_count": len(synthetic_incident_records),
                 "knowledge_model": incident_model,
-                "incident_records_preview": synthetic_incident_records[:20],
             }
             if resolved_profile:
                 fabric_data["connector_profile"] = resolved_profile
             if normalized_guardrails:
                 fabric_data["guardrails"] = normalized_guardrails
-            connection_summary_docs = document_service.process_database_data(
-                [conn_data, {"knowledge_model": incident_model, "incident_records_preview": synthetic_incident_records[:20]}],
-                table_name,
+            from app.services.fabric_pipeline.pipelines import run_tabular_pipeline
+
+            fabric_data = await run_in_threadpool(
+                run_tabular_pipeline,
+                fabric_id=fabric_id,
+                tables={table_name: synthetic_incident_records},
+                record=fabric_data,
+                source_row_counts={table_name: len(synthetic_incident_records)},
+                notes=["ServiceNow connection currently loads the staged incident sample, then profiles it."],
+                inputs={"kind": "servicenow_connection", "table": table_name},
             )
-            for doc in connection_summary_docs:
-                meta = doc.get("metadata", {}) or {}
-                if isinstance(meta.get("columns"), list):
-                    meta["columns"] = ",".join(str(col) for col in meta["columns"])
-                doc["metadata"] = meta
-            if connection_summary_docs:
-                vector_service.add_documents(connection_summary_docs, fabric_id)
         
         else:
             return APIResponse(

@@ -110,6 +110,7 @@ def run_codebase_pipeline(
     fabric.update(
         {
             "status": "active",
+            "model_status": "indexed",
             "source_type": "codebase",
             "document_count": len(docs),
             "total_chunks": len(chunk_ids) or len(docs),
@@ -136,6 +137,13 @@ def run_codebase_pipeline(
         }
     )
     fabric_store.save(fabric)
+    try:
+        from app.services.enterprise.ops import on_publish
+
+        on_publish(fabric, change="publish")
+        fabric_store.save(fabric)
+    except Exception:
+        logger.debug("Codebase publish stamp failed for %s", fabric_id, exc_info=True)
     report(100.0, "Codebase fabric ready", {"stage": "done", "fabric_id": fabric_id})
     return {
         "fabric_id": fabric_id,

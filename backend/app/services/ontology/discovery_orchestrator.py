@@ -285,6 +285,7 @@ class DiscoveryOrchestrator:
         run_id: str,
         project_id: str,
         schema_profile: Dict[str, Any],
+        fabric_id: Optional[str] = None,
     ) -> Optional[str]:
         """Schema-first discovery for tabular/database fabrics (Phase 2 Layer 1)."""
         from app.services.ontology.schema_analyzer import schema_analyzer
@@ -360,6 +361,27 @@ class DiscoveryOrchestrator:
         except Exception:
             domain_rules = []
 
+        if fabric_id:
+            try:
+                from app.services.context.promote import approved_rules_for_discovery
+                from app.services.platform.fabric_store import fabric_store
+
+                fabric = fabric_store.get(fabric_id) or {}
+                approved_id = fabric.get("approved_ontology_version_id")
+                approved = ontology_db_repository.get_version(approved_id) if approved_id else None
+                domain_rules.extend(approved_rules_for_discovery(approved))
+            except Exception:
+                logger.warning("Could not carry approved ontology rules for %s", fabric_id, exc_info=True)
+        seen_rules = set()
+        unique_rules: List[Dict[str, Any]] = []
+        for rule in domain_rules:
+            key = str(rule.get("expression") or "").strip().lower()
+            if not key or key in seen_rules:
+                continue
+            seen_rules.add(key)
+            unique_rules.append(rule)
+        domain_rules = unique_rules
+
         log(DiscoveryRunStage.ONTOLOGY_ASSEMBLE.value, "Assembling ontology", 75.0)
         assembled = self.assembler.assemble(
             project_id=project_id,
@@ -370,6 +392,28 @@ class DiscoveryOrchestrator:
             business_rules=domain_rules,
             evidence_pool=evidence_pool,
         )
+        if fabric_id:
+            try:
+                from app.services.platform.fabric_store import fabric_store
+
+                fabric = fabric_store.get(fabric_id) or {}
+                approved_id = fabric.get("approved_ontology_version_id")
+                approved = ontology_db_repository.get_version(approved_id) if approved_id else None
+                alias_by_name = {}
+                if approved:
+                    for attribute in approved.attributes or []:
+                        key = "".join(ch for ch in (attribute.normalized_name or attribute.attribute_name or "").lower() if ch.isalnum())
+                        if attribute.aliases:
+                            alias_by_name[key] = list(attribute.aliases)
+                for attribute in assembled.get("attributes") or []:
+                    key = "".join(
+                        ch for ch in str(attribute.get("normalized_name") or attribute.get("attribute_name") or "").lower()
+                        if ch.isalnum()
+                    )
+                    if alias_by_name.get(key):
+                        attribute["aliases"] = alias_by_name[key]
+            except Exception:
+                logger.warning("Could not carry attribute aliases for %s", fabric_id, exc_info=True)
 
         log(DiscoveryRunStage.ONTOLOGY_VALIDATE.value, "Validating", 85.0)
         is_valid, messages, stats = self.validator.validate(

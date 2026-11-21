@@ -23,6 +23,10 @@ class FeedbackRequest(BaseModel):
     rating: str = Field(..., description="up or down")
     outcome: Optional[str] = None
     correction_text: Optional[str] = None
+    scope: Optional[str] = Field(
+        default=None,
+        description="Optional destination: memory, ontology_alias, ontology_constraint, session, discard",
+    )
 
 
 def _require_fabric(fabric_id: str) -> None:
@@ -58,6 +62,7 @@ async def submit_agent_feedback(body: FeedbackRequest):
             session_id=body.session_id,
             outcome=body.outcome,
             correction_text=body.correction_text,
+            scope=body.scope,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -77,7 +82,17 @@ async def approve_enrichment(candidate_id: str):
         data = agent_memory_service.approve_candidate(candidate_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return APIResponse(success=True, message="Correction written into the fabric", data=data)
+    return APIResponse(success=True, message="Correction applied", data=data)
+
+
+@router.post("/fabrics/{fabric_id}/memory/{candidate_id}/retire", response_model=APIResponse)
+async def retire_memory(fabric_id: str, candidate_id: str):
+    _require_fabric(fabric_id)
+    try:
+        data = agent_memory_service.retire_memory_fact(fabric_id, candidate_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return APIResponse(success=True, message="Memory override retired", data=data)
 
 
 @router.post("/enrichment/{candidate_id}/reject", response_model=APIResponse)
@@ -87,6 +102,29 @@ async def reject_enrichment(candidate_id: str):
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return APIResponse(success=True, message="Correction rejected", data=data)
+
+
+@router.get("/fabrics/{fabric_id}/context", response_model=APIResponse)
+async def fabric_context_studio(fabric_id: str, limit: int = 30):
+    """Episodes, correction queue, memory overrides, and coverage gaps for Context Analysis."""
+    _require_fabric(fabric_id)
+    from app.services.context.studio import build_studio
+
+    return APIResponse(
+        success=True,
+        message="Context studio",
+        data=build_studio(fabric_id, limit=limit),
+    )
+
+
+@router.post("/fabrics/{fabric_id}/memory/{candidate_id}/promote", response_model=APIResponse)
+async def promote_memory(fabric_id: str, candidate_id: str):
+    _require_fabric(fabric_id)
+    try:
+        data = agent_memory_service.promote_memory_fact(fabric_id, candidate_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return APIResponse(success=True, message="Override proposed to the ontology draft", data=data)
 
 
 @router.get("/fabrics/{fabric_id}/impact", response_model=APIResponse)

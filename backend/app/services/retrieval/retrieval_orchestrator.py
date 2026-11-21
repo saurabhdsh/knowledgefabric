@@ -207,7 +207,13 @@ class RetrievalOrchestrator:
             return None
         class_names = [c.name for c in version.classes[:12]]
         rel_names = [r.relationship_name for r in version.relationships[:8]]
-        return f"Entities: {', '.join(class_names)}. Relationships: {', '.join(rel_names)}."
+        summary = f"Entities: {', '.join(class_names)}. Relationships: {', '.join(rel_names)}."
+        from app.services.context.promote import approved_contract_lines
+
+        contract = approved_contract_lines(version)
+        if contract:
+            summary = summary + " " + " ".join(contract)
+        return summary
 
 
 retrieval_orchestrator = RetrievalOrchestrator()

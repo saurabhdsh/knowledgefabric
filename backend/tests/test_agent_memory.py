@@ -61,11 +61,12 @@ def test_negative_feedback_queues_then_rewrites_fabric(monkeypatch):
         correction_text="status means adjudication_status",
     )
     assert feedback["status"] == "queued"
+    assert feedback["destination"] == "memory"
     applied = agent_memory_service.approve_candidate(feedback["enrichment_candidate_id"])
     assert applied["status"] == "applied"
-    assert applied["vector_chunk_id"] == "chunk_memory_1"
+    assert applied["vector_chunk_id"] is None
     assert saved["memory_facts"][0]["fact"] == "status means adjudication_status"
-    assert saved["total_chunks"] == 4
+    assert saved["total_chunks"] == 3
 
     context = agent_memory_service.build_query_context("fabric_memory_test", None)
     # build_query_context reads fabric_store.get, which is still the fake returning empty facts.

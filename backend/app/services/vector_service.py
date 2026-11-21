@@ -183,11 +183,31 @@ class VectorService:
     def _is_active(self, collection: Any) -> bool:
         return collection is not None and collection.name == self.active_collection_name
 
+    def _vectors_current(self, collection: Any) -> bool:
+        """True when ``collection`` holds vectors from the active embedding model.
+
+        Per-fabric collections (``kf_f_*``) are current when they were created
+        with this model. The shared legacy collection is not.
+        """
+        if collection is None:
+            return False
+        if collection.name == self.active_collection_name:
+            return True
+        try:
+            meta = dict(getattr(collection, "metadata", None) or {})
+        except Exception:
+            meta = {}
+        model = meta.get("embedding_model")
+        return bool(model) and model == self.embedder.id
+
     def source_embedding_info(self, source_id: str) -> Dict[str, Any]:
         """Which model a fabric's stored vectors came from, and whether it needs re-indexing."""
         collection = self._collection_for_source(source_id)
-        if self._is_active(collection):
-            return {**self.embedding_info(), "needs_reindex": False}
+        if self._vectors_current(collection):
+            info = dict(self.embedding_info())
+            info["collection"] = getattr(collection, "name", info.get("collection"))
+            info["needs_reindex"] = False
+            return info
         if collection is not None and collection.name == LEGACY_COLLECTION:
             return {
                 "id": "legacy-process-hash-64",
@@ -337,19 +357,39 @@ class VectorService:
         return source_id
 
     def _delete_everywhere(self, source_id: str) -> None:
-        collections = [self.documents_collection]
-        if settings.ISOLATE_FABRIC_INDEX and source_id:
-            from app.services.enterprise.ops import isolated_collection_name
+        """Drop a fabric's index without scanning collections that do not hold it.
 
-            isolated = self._collection(isolated_collection_name(source_id))
-            if isolated is not None:
-                collections.append(isolated)
-        legacy = self.legacy_collection
-        if legacy is not None:
-            collections.append(legacy)
-        for collection in collections:
-            collection.delete(where={"source_id": source_id})
-        self._source_collection.pop(source_id, None)
+        An isolated per-fabric collection is removed outright. Shared collections
+        are filtered by source id, and a failure in one collection does not skip
+        the others.
+        """
+        if not source_id:
+            return
+        with self._lock:
+            if settings.ISOLATE_FABRIC_INDEX:
+                from app.services.enterprise.ops import isolated_collection_name
+
+                name = isolated_collection_name(source_id)
+                self._collections.pop(name, None)
+                try:
+                    self.client.delete_collection(name)
+                except Exception:
+                    logger.debug("Isolated collection %s already gone", name, exc_info=True)
+            for collection in (self.documents_collection, self.legacy_collection):
+                if collection is None:
+                    continue
+                try:
+                    found = collection.get(where={"source_id": source_id}, limit=1, include=[])
+                    if found.get("ids"):
+                        collection.delete(where={"source_id": source_id})
+                except Exception:
+                    logger.warning(
+                        "Chunk delete failed in %s for %s",
+                        getattr(collection, "name", "?"),
+                        source_id,
+                        exc_info=True,
+                    )
+            self._source_collection.pop(source_id, None)
 
     def delete_source_documents(self, source_id: str) -> bool:
         """Delete all chunks for a fabric (active and legacy collections)."""
@@ -668,7 +708,7 @@ class VectorService:
         """
         want_all = top_k is None or int(top_k) <= 0
         collection = self._collection_for_source(source_id) if source_id else self.documents_collection
-        vector_ok = self._is_active(collection)
+        vector_ok = self._vectors_current(collection)
         ranker = f"vector:{self.embedder.id}"
 
         query_embedding: Optional[List[float]] = None

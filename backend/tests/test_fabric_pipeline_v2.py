@@ -657,6 +657,26 @@ def test_index_failure_leaves_no_half_built_fabric(pipeline_env, dataset, monkey
     assert not table_store.exists(fid)
 
 
+def test_isolated_collection_search_uses_embeddings(pipeline_env, monkeypatch):
+    """Per-fabric indexes are still embedding indexes. Search must not fall back to BM25."""
+    monkeypatch.setattr(settings, "ISOLATE_FABRIC_INDEX", True)
+    from app.services.vector_service import vector_service
+
+    fid = f"fabric_iso_{uuid.uuid4().hex[:8]}"
+    pipeline_env.append(fid)
+    vector_service.add_documents(
+        [
+            {"content": "Hospice members are excluded from the outreach program.", "source_name": "t", "file_name": "t.pdf"},
+            {"content": "The COPD annual benchmark amount is 48750.", "source_name": "t", "file_name": "t.pdf"},
+        ],
+        fid,
+    )
+    hits = vector_service.search_similar_chunks("who is left out of the outreach program", fid, top_k=2)
+    assert hits and str(hits[0]["ranker"]).startswith("vector:")
+    info = vector_service.source_embedding_info(fid)
+    assert info["needs_reindex"] is False
+
+
 def test_document_pipeline_end_to_end(pipeline_env, tmp_path):
     from app.services.fabric_pipeline.pipelines import run_document_pipeline
     from app.services.fabric_pipeline.query import answer_query

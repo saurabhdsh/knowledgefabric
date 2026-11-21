@@ -95,6 +95,9 @@ class OntologyDbRepository:
         for a in version.attributes:
             if a.status != OntologyElementStatus.REJECTED:
                 a.status = OntologyElementStatus.APPROVED
+        for c in version.constraints:
+            if c.status != OntologyElementStatus.REJECTED:
+                c.status = OntologyElementStatus.APPROVED
 
         version.is_draft = False
         version.approved_by = approved_by

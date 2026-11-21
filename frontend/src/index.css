@@ -324,4 +324,100 @@ code {
   border: 1px solid var(--or-line);
   background:
     linear-gradient(105deg, rgba(94, 200, 242, 0.06), transparent 40%, rgba(62, 207, 155, 0.06));
-} 
+}
+
+/* Context Analysis — the operating view of one fabric's context layer */
+.ctx-studio {
+  --ctx-line: rgba(148, 163, 184, 0.16);
+  --ctx-ink: #e8edf4;
+  --ctx-muted: #8b9cb0;
+  font-family: Outfit, 'Plus Jakarta Sans', system-ui, sans-serif;
+}
+
+.ctx-studio .ctx-shell {
+  position: relative;
+  overflow: hidden;
+  border-radius: 1.5rem;
+  border: 1px solid var(--ctx-line);
+  background:
+    radial-gradient(900px 280px at 0% -10%, rgba(94, 200, 242, 0.16), transparent 50%),
+    radial-gradient(700px 240px at 100% 0%, rgba(155, 139, 212, 0.14), transparent 46%),
+    rgba(16, 20, 29, 0.82);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.ctx-studio .ctx-tab {
+  border-radius: 999px;
+  border: 1px solid transparent;
+  padding: 0.45rem 0.9rem;
+  color: var(--ctx-muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.ctx-studio .ctx-tab.is-active {
+  color: #e8edf4;
+  border-color: rgba(94, 200, 242, 0.45);
+  background: linear-gradient(120deg, rgba(94, 200, 242, 0.2), rgba(62, 207, 155, 0.1));
+}
+
+.ctx-studio .ctx-card {
+  border-radius: 1.1rem;
+  border: 1px solid var(--ctx-line);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 1rem 1.05rem;
+}
+
+.ctx-studio .ctx-kind {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  border: 1px solid var(--ctx-line);
+  padding: 0.15rem 0.45rem;
+}
+
+.ctx-studio .ctx-kind.ontology { color: #5ec8f2; border-color: rgba(94, 200, 242, 0.4); }
+.ctx-studio .ctx-kind.table { color: #3ecf9b; border-color: rgba(62, 207, 155, 0.4); }
+.ctx-studio .ctx-kind.passage { color: #d7cff5; border-color: rgba(155, 139, 212, 0.45); }
+.ctx-studio .ctx-kind.graph { color: #f0c674; border-color: rgba(240, 198, 116, 0.4); }
+.ctx-studio .ctx-kind.session { color: #8b9cb0; }
+.ctx-studio .ctx-kind.memory { color: #f08984; border-color: rgba(240, 137, 132, 0.45); }
+
+@keyframes kf-status-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+.kf-status-line {
+  animation: kf-status-in 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes kf-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.97);
+    filter: blur(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+.kf-card-in {
+  animation: kf-card-in 0.95s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+ 

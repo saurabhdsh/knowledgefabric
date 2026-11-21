@@ -92,7 +92,7 @@ def import_migration_package(
         "source_type": "codebase",
         "description": "Imported from Weave migration JSON",
         "status": "active",
-        "model_status": "not_trained",
+        "model_status": "indexed",
         "document_count": len(docs),
         "total_chunks": len(chunk_ids) or len(docs),
         "tags": ["codebase", "imported", "migration"],

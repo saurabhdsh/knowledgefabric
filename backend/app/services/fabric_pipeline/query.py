@@ -186,8 +186,15 @@ def answer_query(
     top_k: Optional[int] = None,
     memory_context: str = "",
     ontology_context: str = "",
+    ontology_version_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Answer one question. ``llm`` is ``None`` when no provider is available."""
+    from app.services.context.envelope import begin_envelope, finish_envelope, render_memory, render_ontology
+
+    env = begin_envelope(memory_context, ontology_context, ontology_version_id)
+    memory_context = render_memory(env)
+    ontology_context = render_ontology(env)
+    sql_answer_text = ""
     fabric_id = str(fabric["id"])
     fabric_name = str(fabric.get("name") or fabric_id)
     profile = tabular_profile(fabric)
@@ -206,6 +213,25 @@ def answer_query(
         "retrieval": {},
         "notes": [],
     }
+
+    def _seal(evidence_chunks: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        table_text = ""
+        if out.get("route") in {"sql", "rules"}:
+            table_text = str(out.get("answer") or "")
+        elif sql_answer_text:
+            table_text = sql_answer_text
+        out["context_envelope"] = finish_envelope(
+            env,
+            route=out.get("route"),
+            confidence=out.get("confidence"),
+            confidence_basis=out.get("confidence_basis"),
+            measurement=(out.get("retrieval") or {}).get("measurement"),
+            sql=out.get("sql"),
+            table_text=table_text,
+            entities=out.get("entities"),
+            chunks=evidence_chunks or [],
+        )
+        return out
 
     entity_text = ""
     if profile:
@@ -246,7 +272,7 @@ def answer_query(
                         + "; the statement and result are included."
                     ),
                 })
-                return out
+                return _seal()
             if sql_result and sql_result.get("error"):
                 out["notes"].append(f"A SQL answer was attempted and failed: {sql_result['error']}")
         else:
@@ -266,7 +292,7 @@ def answer_query(
                     "relevant_chunks": rules["row_total"],
                     "confidence_basis": f"Computed by the rule engine over all {rules['row_total']:,} rows of '{rules['table']}'.",
                 })
-                return out
+                return _seal()
 
     # ---- Mixed: SQL + retrieval ----
     sql_block = ""
@@ -275,6 +301,7 @@ def answer_query(
         sql_result = _run_sql(fabric, profile, query, llm, entity_text)
         if sql_result and sql_result.get("answer"):
             sql_payload = sql_result
+            sql_answer_text = str(sql_result["answer"])
             sql_block = (
                 "SQL RESULT (exact, from the table store):\n"
                 f"SQL: {sql_result.get('sql')}\n"
@@ -399,12 +426,12 @@ def answer_query(
             lines.append("Nothing in the fabric matched the question.")
         out["answer"] = "\n".join(lines)
         out["route"] = "evidence-only" if out["route"] != "hybrid" else "hybrid"
-        return out
+        return _seal(chunks)
 
     if not chunks and not entity_text and not sql_payload and not link_text:
         out["answer"] = "Nothing in this fabric matched the question, so there is no evidence to answer it from."
         out["route"] = "no-evidence"
-        return out
+        return _seal()
 
     memory_block = f"\n{memory_context}\n" if memory_context else ""
     hybrid_note = ""
@@ -433,7 +460,7 @@ def answer_query(
         int(settings.QUERY_MAX_COMPLETION_TOKENS),
         0.2,
     )
-    return out
+    return _seal(chunks)
 
 
 def vector_chunks_ok(top_score: float, chunks: List[Dict[str, Any]]) -> bool:

@@ -1,494 +1,425 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { MagnifyingGlassIcon, SparklesIcon, DocumentTextIcon, ChartBarIcon } from '@heroicons/react/24/outline';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ArrowPathIcon,
+  CheckIcon,
+  MagnifyingGlassIcon,
+  SparklesIcon,
+  XMarkIcon,
+} from '@heroicons/react/24/outline';
 import { apiRequest } from '../utils/api';
 
-interface KnowledgeFabric {
+type TabId = 'in-use' | 'queue' | 'overrides' | 'coverage';
+
+interface FabricOption {
   id: string;
   name: string;
+  status?: string;
+}
+
+interface EnvelopeLine {
+  kind: string;
+  text: string;
+  source_id?: string | null;
+  confidence?: number | null;
+}
+
+interface Episode {
+  id: string;
+  query: string;
+  answer: string;
+  route?: string | null;
+  ontology_version_id?: string | null;
+  confidence?: number | null;
+  created_at?: string | null;
+  context_envelope?: {
+    route?: string | null;
+    ontology_version_id?: string | null;
+    confidence?: number | null;
+    lines?: EnvelopeLine[];
+  } | null;
+}
+
+interface Candidate {
+  id: string;
+  query?: string;
+  proposed_fact: string;
   status: string;
-  document_count: number;
-  total_chunks?: number;
-  model_status?: string;
+  destination?: string;
+  classification_reason?: string | null;
+  episode_id?: string | null;
 }
 
-interface GraphEntity {
-  label: string;
-  count?: number;
-  frequency?: number;
+interface MemoryFact {
+  candidate_id?: string;
+  fact: string;
+  query?: string;
+  applied_at?: string;
 }
 
-interface GraphRelationship {
-  relation: string;
-  count?: number;
-  frequency?: number;
+interface CoverageGap {
+  query: string;
+  count: number;
+  gap: 'no_ontology' | 'no_evidence';
+  route?: string | null;
+  confidence?: number | null;
 }
 
-interface AnalysisResults {
-  fabricId: string;
-  fabricName: string;
-  analysisType: string;
-  timestamp: string;
-  metrics: {
-    contextualScore: number;
-    semanticScore: number;
-    coherenceScore: number;
-    completenessScore: number;
-    overallScore: number;
-  };
-  insights: string[];
-  recommendations: string[];
-  topConcepts: { concept: string; relevance: number; frequency: number }[];
-  topRelationships: { relation: string; frequency: number; strength: number }[];
+interface Studio {
+  fabric_id: string;
+  fabric_name: string;
+  ontology_project_id?: string | null;
+  approved_ontology_version_id?: string | null;
+  episodes: Episode[];
+  queue: Candidate[];
+  overrides: MemoryFact[];
+  coverage: CoverageGap[];
+  counts: { episodes: number; queued: number; overrides: number; gaps: number };
+}
+
+const TABS: { id: TabId; label: string; hint: string }[] = [
+  { id: 'in-use', label: 'In use', hint: 'What the last answers were allowed to use' },
+  { id: 'queue', label: 'Queue', hint: 'Corrections waiting for a destination' },
+  { id: 'overrides', label: 'Overrides', hint: 'Memory that stands in for the source' },
+  { id: 'coverage', label: 'Coverage', hint: 'Questions the contract or the evidence could not carry' },
+];
+
+const destinationLabel: Record<string, string> = {
+  memory: 'Fabric memory',
+  ontology_alias: 'Ontology alias',
+  ontology_constraint: 'Ontology rule',
+  session: 'This session',
+  discard: 'Discard',
+};
+
+function confidenceLabel(value?: number | null): string {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
+  return `${Math.round(Number(value) * 100)}%`;
 }
 
 const ContextAnalysis: React.FC = () => {
-  const [selectedFabric, setSelectedFabric] = useState<string>('');
-  const [analysisType, setAnalysisType] = useState<string>('contextual');
-  const [analysisResults, setAnalysisResults] = useState<AnalysisResults | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [fabrics, setFabrics] = useState<KnowledgeFabric[]>([]);
+  const [fabrics, setFabrics] = useState<FabricOption[]>([]);
+  const [fabricId, setFabricId] = useState('');
+  const [studio, setStudio] = useState<Studio | null>(null);
+  const [tab, setTab] = useState<TabId>('in-use');
+  const [openEpisode, setOpenEpisode] = useState<string | null>(null);
   const [loadingFabrics, setLoadingFabrics] = useState(true);
-  const [statusBanner, setStatusBanner] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
-
-  const selectedFabricDetails = useMemo(
-    () => fabrics.find((f) => f.id === selectedFabric),
-    [fabrics, selectedFabric]
-  );
-
-  const analysisTypes = [
-    { id: 'contextual', name: 'Contextual Relevance', description: 'Analyze how well content relates to queries' },
-    { id: 'semantic', name: 'Semantic Similarity', description: 'Measure semantic relationships between concepts' },
-    { id: 'coherence', name: 'Content Coherence', description: 'Evaluate logical flow and consistency' },
-    { id: 'completeness', name: 'Information Completeness', description: 'Assess coverage and comprehensiveness' },
-  ];
+  const [loadingStudio, setLoadingStudio] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [banner, setBanner] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
   useEffect(() => {
-    const fetchFabrics = async () => {
+    const load = async () => {
       setLoadingFabrics(true);
       try {
         const response = await apiRequest('api/v1/knowledge/');
-        const data = await response.json();
-        if (data.success && Array.isArray(data.data)) {
-          setFabrics(data.data);
-          if (selectedFabric && !data.data.some((f: KnowledgeFabric) => f.id === selectedFabric)) {
-            setSelectedFabric('');
-            setStatusBanner({
-              type: 'error',
-              message: 'Previously selected fabric is no longer available. Please select another fabric.',
-            });
-          }
-        } else {
-          setStatusBanner({
-            type: 'error',
-            message: data.message || 'Unable to fetch available fabrics.',
-          });
-        }
-      } catch (error) {
-        setStatusBanner({
-          type: 'error',
-          message: 'Unable to load available fabrics. Please verify backend is running.',
-        });
+        const payload = await response.json();
+        const rows = Array.isArray(payload.data) ? payload.data : [];
+        setFabrics(rows.map((row: FabricOption) => ({ id: row.id, name: row.name, status: row.status })));
+        setFabricId((current) => current || rows[0]?.id || '');
+      } catch {
+        setBanner({ type: 'error', message: 'Unable to load fabrics. Confirm the API is running.' });
       } finally {
         setLoadingFabrics(false);
       }
     };
+    load();
+  }, []);
 
-    fetchFabrics();
-  }, [selectedFabric]);
-
-  const toFiniteNumber = (value: unknown, fallback = 0): number => {
-    const parsed = typeof value === 'number' ? value : Number(value);
-    return Number.isFinite(parsed) ? parsed : fallback;
-  };
-
-  const clamp01 = (value: number, fallback = 0.5): number => {
-    if (!Number.isFinite(value)) return fallback;
-    return Math.max(0, Math.min(1, value));
-  };
-
-  const toScore = (value: unknown, divisor = 10): number => {
-    const numeric = toFiniteNumber(value, 0);
-    if (divisor <= 0) return 0.5;
-    return clamp01(numeric / divisor, 0.5);
-  };
-
-  const handleRunAnalysis = async () => {
-    if (!selectedFabric || !analysisType) {
-      setStatusBanner({ type: 'info', message: 'Select a fabric and analysis type first.' });
-      return;
-    }
-
-    setIsLoading(true);
-    setStatusBanner(null);
-
+  const loadStudio = useCallback(async (id: string) => {
+    if (!id) return;
+    setLoadingStudio(true);
     try {
-      const response = await apiRequest(`api/v1/knowledge/${selectedFabric}/knowledge-graph?include_llm=true`);
+      const response = await apiRequest(`api/v1/agent/fabrics/${encodeURIComponent(id)}/context`);
       const payload = await response.json();
-      if (!payload.success || !payload.data) {
-        throw new Error(payload.error || payload.message || 'Failed to analyze selected fabric.');
-      }
-
-      const analytics = payload.data.analytics || {};
-      const topEntities: GraphEntity[] = analytics.top_entities || [];
-      const topRelationships: GraphRelationship[] = analytics.top_relationships || [];
-      const llmInsight = payload.data.llm_insight || {};
-
-      const nodeCount = toFiniteNumber(analytics.node_count, 0);
-      const edgeCount = toFiniteNumber(analytics.edge_count, 0);
-      const isolatedNodes = toFiniteNumber(analytics.isolated_nodes, 0);
-      const density = toFiniteNumber(analytics.graph_density, 0);
-      const avgDegree = toFiniteNumber(analytics.avg_degree, 0);
-
-      const conceptSeries = topEntities.map((entity) => ({
-        concept: entity.label || 'Unknown Concept',
-        frequency: toFiniteNumber(entity.count ?? entity.frequency, 0),
-      }));
-      const relationSeries = topRelationships.map((rel) => ({
-        relation: rel.relation || 'related_to',
-        frequency: toFiniteNumber(rel.count ?? rel.frequency, 0),
-      }));
-      const topConceptMax = Math.max(1, ...conceptSeries.map((c) => c.frequency));
-      const topRelationMax = Math.max(1, ...relationSeries.map((r) => r.frequency));
-
-      const semanticScore = toScore(avgDegree);
-      const coherenceScore = toScore(density);
-      const completenessScore = nodeCount > 0 ? clamp01((nodeCount - isolatedNodes) / nodeCount, 0.5) : 0.5;
-      const contextualSignal = conceptSeries.length > 0 ? conceptSeries[0].frequency / Math.max(8, nodeCount) : 0;
-      const contextualScore = clamp01(Math.max(0.55, Math.min(0.95, contextualSignal)), 0.55);
-      const overallScore = clamp01((semanticScore + coherenceScore + completenessScore + contextualScore) / 4, 0.5);
-
-      const nextResults: AnalysisResults = {
-        fabricId: selectedFabric,
-        fabricName: selectedFabricDetails?.name || payload.data.fabric_details?.name || selectedFabric,
-        analysisType,
-        timestamp: new Date().toISOString(),
-        metrics: {
-          contextualScore,
-          semanticScore,
-          coherenceScore,
-          completenessScore,
-          overallScore,
-        },
-        insights: [
-          ...(llmInsight.summary ? [llmInsight.summary] : []),
-          `Knowledge graph has ${nodeCount} entities and ${edgeCount} relationships.`,
-          `Detected ${isolatedNodes} isolated entities requiring linkage review.`,
-          `Average graph degree is ${avgDegree.toFixed(2)} with density ${density.toFixed(2)}.`,
-        ],
-        recommendations: llmInsight.recommendations || [
-          'Review isolated entities and add missing relationship mappings.',
-          'Improve extraction prompts to increase entity-relationship recall.',
-          'Enrich source documents with more cross-domain terminology.',
-        ],
-        topConcepts: conceptSeries.map((entity) => ({
-          concept: entity.concept,
-          relevance: clamp01(Math.max(0.45, Math.min(0.98, entity.frequency / Math.max(5, topConceptMax))), 0.45),
-          frequency: entity.frequency,
-        })),
-        topRelationships: relationSeries.map((rel) => ({
-          relation: rel.relation,
-          frequency: rel.frequency,
-          strength: clamp01(Math.max(0.4, Math.min(0.98, rel.frequency / Math.max(4, topRelationMax))), 0.4),
-        })),
-      };
-
-      setAnalysisResults(nextResults);
-      setStatusBanner({ type: 'success', message: 'Context analysis completed using live fabric graph + OpenAI insight.' });
+      if (!payload.success) throw new Error(payload.message || 'Context studio failed');
+      setStudio(payload.data as Studio);
+      setBanner(null);
     } catch (error) {
-      setStatusBanner({
+      setStudio(null);
+      setBanner({
         type: 'error',
-        message: error instanceof Error ? error.message : 'Failed to run context analysis.',
+        message: error instanceof Error ? error.message : 'Unable to load the context layer.',
       });
     } finally {
-      setIsLoading(false);
+      setLoadingStudio(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (fabricId) loadStudio(fabricId);
+  }, [fabricId, loadStudio]);
+
+  const counts = studio?.counts;
+
+  const act = async (path: string, success: string) => {
+    setBusyId(path);
+    try {
+      const response = await apiRequest(path, { method: 'POST' });
+      const payload = await response.json();
+      if (!response.ok || payload.success === false) {
+        throw new Error(payload.detail || payload.message || 'Request failed');
+      }
+      setBanner({ type: 'success', message: success });
+      await loadStudio(fabricId);
+    } catch (error) {
+      setBanner({ type: 'error', message: error instanceof Error ? error.message : 'Request failed' });
+    } finally {
+      setBusyId(null);
     }
   };
 
+  const selectedName = useMemo(
+    () => fabrics.find((fabric) => fabric.id === fabricId)?.name || studio?.fabric_name || 'Select a fabric',
+    [fabrics, fabricId, studio]
+  );
+
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 text-[#cbd5e1] [&_.bg-white]:bg-[#10141d]/75 [&_.bg-gray-50]:bg-white/[0.03] [&_.bg-gray-100]:bg-white/[0.05] [&_.text-gray-900]:text-[#e8edf4] [&_.text-gray-800]:text-[#cbd5e1] [&_.text-gray-700]:text-[#cbd5e1] [&_.text-gray-600]:text-[#8b9cb0] [&_.text-gray-500]:text-[#8b9cb0] [&_.text-gray-400]:text-[#8b9cb0] [&_.text-gray-300]:text-[#8b9cb0] [&_.border-gray-200]:border-[rgba(148,163,184,0.11)] [&_.border-gray-300]:border-[rgba(148,163,184,0.2)] [&_input]:bg-[#10141d]/70 [&_input]:text-[#e8edf4] [&_input]:border-[rgba(148,163,184,0.2)] [&_input]:placeholder:text-[#8b9cb0] [&_textarea]:bg-[#10141d]/70 [&_textarea]:text-[#e8edf4] [&_textarea]:border-[rgba(148,163,184,0.2)] [&_textarea]:placeholder:text-[#8b9cb0] [&_select]:bg-[#10141d]/70 [&_select]:text-[#e8edf4] [&_select]:border-[rgba(148,163,184,0.2)]">
-      <div className="mb-8">
-        <div className="flex items-center space-x-3 mb-4">
-          <div className="w-12 h-12 bg-gradient-to-r from-orange-500 to-orange-600 rounded-xl flex items-center justify-center">
-            <MagnifyingGlassIcon className="w-7 h-7 text-white" />
-          </div>
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Context Analysis</h1>
-            <p className="text-gray-600">Analyze the contextual relevance and semantic relationships in your knowledge fabrics</p>
-          </div>
+    <div className="ctx-studio mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-xs uppercase tracking-[0.22em] text-[#5ec8f2]">Context layer</p>
+          <h1 className="mt-1 text-3xl font-semibold text-[#e8edf4]">Context Analysis</h1>
+          <p className="mt-2 max-w-2xl text-sm text-[#8b9cb0]">
+            The packet each answer used, the corrections waiting to become memory or ontology, and the questions the fabric still cannot carry.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            value={fabricId}
+            onChange={(event) => setFabricId(event.target.value)}
+            disabled={loadingFabrics}
+            className="min-w-[16rem] rounded-xl border border-[rgba(148,163,184,0.2)] bg-[#10141d]/80 px-3 py-2 text-sm text-[#e8edf4]"
+          >
+            {fabrics.length === 0 && <option value="">No fabrics</option>}
+            {fabrics.map((fabric) => (
+              <option key={fabric.id} value={fabric.id}>{fabric.name}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => loadStudio(fabricId)}
+            className="rounded-xl border border-[rgba(94,200,242,0.35)] p-2 text-[#5ec8f2] hover:bg-[rgba(94,200,242,0.1)]"
+            title="Refresh"
+          >
+            <ArrowPathIcon className={`h-5 w-5 ${loadingStudio ? 'animate-spin' : ''}`} />
+          </button>
         </div>
       </div>
-      {statusBanner && (
+
+      {banner && (
         <div
-          className={`mb-6 rounded-xl border px-4 py-3 text-sm ${
-            statusBanner.type === 'success'
-              ? 'border-emerald-400/35 bg-emerald-500/10 text-emerald-200'
-              : statusBanner.type === 'error'
-                ? 'border-rose-400/35 bg-rose-500/10 text-rose-200'
-                : 'border-cyan-400/35 bg-cyan-500/10 text-cyan-100'
+          className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
+            banner.type === 'error'
+              ? 'border-[rgba(240,137,132,0.4)] text-[#f08984]'
+              : banner.type === 'success'
+                ? 'border-[rgba(62,207,155,0.4)] text-[#3ecf9b]'
+                : 'border-[rgba(94,200,242,0.35)] text-[#5ec8f2]'
           }`}
         >
-          {statusBanner.message}
+          {banner.message}
         </div>
       )}
 
-      <div className="space-y-8">
-        {/* Analysis Configuration - Horizontal */}
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
-            <SparklesIcon className="w-5 h-5 mr-2 text-orange-500" />
-            Analysis Configuration
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-            <div className="md:col-span-5">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Select Knowledge Fabric
-              </label>
-              <select
-                value={selectedFabric}
-                onChange={(e) => setSelectedFabric(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-                disabled={loadingFabrics}
-              >
-                <option value="">
-                  {loadingFabrics ? 'Loading fabrics...' : 'Choose a fabric...'}
-                </option>
-                {fabrics.map((fabric) => (
-                  <option key={fabric.id} value={fabric.id}>
-                    {fabric.name} ({fabric.document_count} docs, {fabric.total_chunks || 0} chunks) - {fabric.model_status || 'unknown'}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="md:col-span-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Analysis Type
-              </label>
-              <select
-                value={analysisType}
-                onChange={(e) => setAnalysisType(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-              >
-                {analysisTypes.map((type) => (
-                  <option key={type.id} value={type.id}>
-                    {type.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="md:col-span-3">
-              <button
-                onClick={handleRunAnalysis}
-                disabled={!selectedFabric || !analysisType || isLoading}
-                className="w-full bg-gradient-to-r from-orange-500 to-orange-600 text-white px-6 py-2.5 rounded-lg font-medium hover:from-orange-600 hover:to-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center"
-              >
-                {isLoading ? (
-                  <>
-                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                    Analyzing...
-                  </>
-                ) : (
-                  <>
-                    <ChartBarIcon className="w-5 h-5 mr-2" />
-                    Run Analysis
-                  </>
-                )}
-              </button>
-            </div>
+      <div className="ctx-shell p-5 sm:p-6">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-lg font-semibold text-[#e8edf4]">{selectedName}</p>
+            <p className="mt-1 text-xs text-[#8b9cb0]">
+              {studio?.approved_ontology_version_id
+                ? `Approved ontology ${studio.approved_ontology_version_id}`
+                : 'No approved ontology on this fabric yet'}
+            </p>
           </div>
-          <p className="text-xs text-gray-500 mt-2">
-            {analysisTypes.find(t => t.id === analysisType)?.description}
-          </p>
-          {selectedFabricDetails && (
-            <div className="mt-3 rounded-lg border border-[rgba(148,163,184,0.2)] bg-white/[0.03] p-3 text-xs text-[#9fb0c5]">
-              Using fabric: <span className="text-[#e8edf4] font-medium">{selectedFabricDetails.name}</span>
-            </div>
-          )}
+          <div className="grid grid-cols-4 gap-2 text-center">
+            {[
+              ['Turns', counts?.episodes ?? 0],
+              ['Queue', counts?.queued ?? 0],
+              ['Overrides', counts?.overrides ?? 0],
+              ['Gaps', counts?.gaps ?? 0],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="min-w-[4.5rem] rounded-xl border border-[rgba(148,163,184,0.14)] px-3 py-2">
+                <p className="text-lg font-semibold text-[#e8edf4]">{value}</p>
+                <p className="text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">{label}</p>
+              </div>
+            ))}
+          </div>
         </div>
 
-        {/* Analysis Results - Below */}
-        <div>
-          {!analysisResults ? (
-            <div className="bg-white rounded-xl shadow-lg p-6">
-              <div className="text-center text-gray-500 py-12">
-                <MagnifyingGlassIcon className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-                <h3 className="text-lg font-medium mb-2">No Analysis Results</h3>
-                <p>Configure and run an analysis to see detailed insights about your knowledge fabric.</p>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {/* Overall Score */}
-              <div className="bg-white rounded-xl shadow-lg p-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Overall Analysis Score</h3>
-                <div className="flex items-center space-x-4">
-                  <div className="text-4xl font-bold text-orange-600">
-                    {(analysisResults.metrics.overallScore * 100).toFixed(0)}%
-                  </div>
-                  <div className="flex-1">
-                    <div className="w-full bg-gray-200 rounded-full h-3">
-                      <div 
-                        className="bg-gradient-to-r from-orange-500 to-orange-600 h-3 rounded-full transition-all duration-500"
-                        style={{ width: `${analysisResults.metrics.overallScore * 100}%` }}
-                      ></div>
+        <div className="mb-5 flex flex-wrap gap-2">
+          {TABS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`ctx-tab ${tab === item.id ? 'is-active' : ''}`}
+              onClick={() => setTab(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <p className="mb-4 text-sm text-[#8b9cb0]">{TABS.find((item) => item.id === tab)?.hint}</p>
+
+        {loadingStudio && <p className="text-sm text-[#8b9cb0]">Reading the context layer…</p>}
+
+        {!loadingStudio && tab === 'in-use' && (
+          <div className="space-y-3">
+            {(studio?.episodes || []).length === 0 && (
+              <Empty icon={MagnifyingGlassIcon} title="No turns yet" body="Ask this fabric a question. The envelope for that answer will appear here." />
+            )}
+            {(studio?.episodes || []).map((episode) => {
+              const lines = episode.context_envelope?.lines || [];
+              const open = openEpisode === episode.id;
+              return (
+                <article key={episode.id} className="ctx-card">
+                  <button type="button" className="w-full text-left" onClick={() => setOpenEpisode(open ? null : episode.id)}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="ctx-kind ontology">{episode.context_envelope?.route || episode.route || 'turn'}</span>
+                      <span className="text-xs text-[#8b9cb0]">{confidenceLabel(episode.confidence ?? episode.context_envelope?.confidence)}</span>
+                      <span className="text-xs text-[#8b9cb0]">{lines.length} lines</span>
                     </div>
-                    <p className="text-sm text-gray-600 mt-2">
-                      {analysisResults.fabricName} - {analysisResults.analysisType}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Detailed Metrics */}
-              <div className="bg-white rounded-xl shadow-lg p-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Detailed Metrics</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  {Object.entries(analysisResults.metrics).map(([key, value]) => {
-                    if (key === 'overallScore') return null;
-                    return (
-                      <div key={key} className="border border-gray-200 rounded-lg p-4">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm font-medium text-gray-700 capitalize">
-                            {key.replace('Score', ' Score')}
-                          </span>
-                          <span className="text-sm font-bold text-gray-900">
-                            {(value as number * 100).toFixed(0)}%
-                          </span>
-                        </div>
-                        <div className="w-full bg-gray-200 rounded-full h-2">
-                          <div 
-                            className="bg-orange-500 h-2 rounded-full transition-all duration-500"
-                            style={{ width: `${(value as number) * 100}%` }}
-                          ></div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Relationship Strength Scatter Plot */}
-              <div className="bg-white rounded-xl shadow-lg p-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Relationship Strength Scatter Plot</h3>
-                {analysisResults.topRelationships.length === 0 ? (
-                  <p className="text-sm text-gray-500">No relationships available for plotting.</p>
-                ) : (
-                  <div className="space-y-4">
-                    <div className="relative h-64 rounded-xl border border-gray-200 bg-gradient-to-b from-[#0f172a]/5 to-transparent overflow-hidden">
-                      <div className="absolute inset-0 opacity-60" style={{
-                        backgroundImage:
-                          'linear-gradient(to right, rgba(148,163,184,0.25) 1px, transparent 1px), linear-gradient(to top, rgba(148,163,184,0.25) 1px, transparent 1px)',
-                        backgroundSize: '32px 32px',
-                      }} />
-                      <div className="absolute left-3 top-2 text-[10px] text-gray-500 uppercase tracking-[0.14em]">Strength</div>
-                      <div className="absolute right-3 bottom-2 text-[10px] text-gray-500 uppercase tracking-[0.14em]">Frequency</div>
-                      {analysisResults.topRelationships.slice(0, 8).map((item, index) => {
-                        const x = Math.max(8, Math.min(92, item.strength * 100));
-                        const y = Math.max(8, Math.min(92, (item.frequency / Math.max(1, analysisResults.topRelationships[0]?.frequency || 1)) * 100));
-                        const size = 10 + (item.strength * 18);
-                        return (
-                          <div
-                            key={`${item.relation}-${index}`}
-                            className="absolute -translate-x-1/2 -translate-y-1/2 group cursor-pointer"
-                            style={{ left: `${x}%`, bottom: `${y}%` }}
-                            title={`${item.relation} • strength ${Math.round(item.strength * 100)}% • frequency ${item.frequency}`}
-                          >
-                            <div
-                              className="rounded-full bg-gradient-to-r from-cyan-500 to-indigo-500 shadow-[0_0_18px_rgba(56,189,248,0.35)] transition-transform duration-200 group-hover:scale-110"
-                              style={{ width: `${size}px`, height: `${size}px` }}
-                            />
-                            <div className="absolute left-1/2 -translate-x-1/2 mt-1 min-w-max text-[10px] font-medium text-gray-700 opacity-0 group-hover:opacity-100 transition-opacity">
-                              {item.relation}
-                            </div>
+                    <h3 className="mt-2 text-base font-medium text-[#e8edf4]">{episode.query}</h3>
+                    <p className="mt-1 line-clamp-2 text-sm text-[#cbd5e1]">{episode.answer}</p>
+                  </button>
+                  {open && (
+                    <div className="mt-4 space-y-2 border-t border-[rgba(148,163,184,0.12)] pt-3">
+                      {lines.length === 0 && <p className="text-sm text-[#8b9cb0]">This turn was recorded before envelopes were stored.</p>}
+                      {lines.map((line, index) => (
+                        <div key={`${episode.id}-${index}`} className="flex gap-3 rounded-lg bg-black/20 px-3 py-2">
+                          <span className={`ctx-kind ${line.kind}`}>{line.kind}</span>
+                          <div className="min-w-0">
+                            <p className="text-sm text-[#e8edf4]">{line.text}</p>
+                            <p className="mt-1 font-mono text-[11px] text-[#8b9cb0]">
+                              {line.source_id || 'no source'}{line.confidence != null ? ` · ${confidenceLabel(line.confidence)}` : ''}
+                            </p>
                           </div>
-                        );
-                      })}
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {analysisResults.topRelationships.slice(0, 6).map((item, index) => (
-                        <div key={`${item.relation}-legend-${index}`} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2">
-                          <span className="text-xs text-gray-700 truncate pr-2">{item.relation}</span>
-                          <span className="text-xs font-semibold text-indigo-600">{Math.round(item.strength * 100)}%</span>
                         </div>
                       ))}
                     </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
+
+        {!loadingStudio && tab === 'queue' && (
+          <div className="space-y-3">
+            {(studio?.queue || []).length === 0 && (
+              <Empty icon={SparklesIcon} title="Queue is clear" body="A correction from an answer lands here until you accept it as memory or as an ontology draft." />
+            )}
+            {(studio?.queue || []).map((candidate) => (
+              <article key={candidate.id} className="ctx-card">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="ctx-kind memory">{destinationLabel[candidate.destination || 'memory'] || candidate.destination}</span>
+                  {candidate.episode_id && <span className="font-mono text-[11px] text-[#8b9cb0]">{candidate.episode_id}</span>}
+                </div>
+                <p className="mt-2 text-sm text-[#e8edf4]">{candidate.proposed_fact}</p>
+                {candidate.query && <p className="mt-1 text-xs text-[#8b9cb0]">From: {candidate.query}</p>}
+                {candidate.classification_reason && <p className="mt-2 text-xs text-[#5ec8f2]">{candidate.classification_reason}</p>}
+                <div className="mt-3 flex gap-2">
+                  <button
+                    type="button"
+                    disabled={busyId !== null}
+                    onClick={() => act(`api/v1/agent/enrichment/${candidate.id}/approve`, 'Correction applied. A rule or alias waits on the ontology draft until that version is approved.')}
+                    className="inline-flex items-center gap-1 rounded-lg border border-[rgba(62,207,155,0.4)] px-3 py-1.5 text-xs text-[#3ecf9b]"
+                  >
+                    <CheckIcon className="h-3.5 w-3.5" /> Accept
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busyId !== null}
+                    onClick={() => act(`api/v1/agent/enrichment/${candidate.id}/reject`, 'Correction rejected.')}
+                    className="inline-flex items-center gap-1 rounded-lg border border-[rgba(240,137,132,0.4)] px-3 py-1.5 text-xs text-[#f08984]"
+                  >
+                    <XMarkIcon className="h-3.5 w-3.5" /> Reject
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+
+        {!loadingStudio && tab === 'overrides' && (
+          <div className="space-y-3">
+            {(studio?.overrides || []).length === 0 && (
+              <Empty icon={SparklesIcon} title="No active overrides" body="Approved value corrections show here. They change the next answer and leave the source table alone." />
+            )}
+            {(studio?.overrides || []).map((fact) => (
+              <article key={fact.candidate_id || fact.fact} className="ctx-card">
+                <span className="ctx-kind memory">Override</span>
+                <p className="mt-2 text-sm text-[#e8edf4]">{fact.fact}</p>
+                {fact.query && <p className="mt-1 text-xs text-[#8b9cb0]">Asked as: {fact.query}</p>}
+                {fact.candidate_id && (
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      disabled={busyId !== null}
+                      onClick={() => act(
+                        `api/v1/agent/fabrics/${encodeURIComponent(fabricId)}/memory/${encodeURIComponent(fact.candidate_id || '')}/promote`,
+                        'Proposed to the ontology draft. The override still applies until that version is approved.'
+                      )}
+                      className="rounded-lg border border-[rgba(94,200,242,0.4)] px-3 py-1.5 text-xs text-[#5ec8f2]"
+                    >
+                      Promote to ontology
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busyId !== null}
+                      onClick={() => act(
+                        `api/v1/agent/fabrics/${encodeURIComponent(fabricId)}/memory/${encodeURIComponent(fact.candidate_id || '')}/retire`,
+                        'Override retired. Later answers use the source again.'
+                      )}
+                      className="rounded-lg border border-[rgba(148,163,184,0.3)] px-3 py-1.5 text-xs text-[#8b9cb0]"
+                    >
+                      Retire
+                    </button>
                   </div>
                 )}
-              </div>
+              </article>
+            ))}
+          </div>
+        )}
 
-              {/* Insights and Recommendations */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-white rounded-xl shadow-lg p-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                    <DocumentTextIcon className="w-5 h-5 mr-2 text-orange-500" />
-                    Key Insights
-                  </h3>
-                  <ul className="space-y-2">
-                    {analysisResults.insights.map((insight: string, index: number) => (
-                      <li key={index} className="flex items-start">
-                        <div className="w-2 h-2 bg-orange-500 rounded-full mt-2 mr-3 flex-shrink-0"></div>
-                        <span className="text-sm text-gray-700">{insight}</span>
-                      </li>
-                    ))}
-                  </ul>
+        {!loadingStudio && tab === 'coverage' && (
+          <div className="space-y-3">
+            {(studio?.coverage || []).length === 0 && (
+              <Empty icon={MagnifyingGlassIcon} title="No gaps in this window" body="Every stored turn had an ontology line and evidence from the table, a passage, or the graph." />
+            )}
+            {(studio?.coverage || []).map((gap) => (
+              <article key={gap.query} className="ctx-card">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`ctx-kind ${gap.gap === 'no_ontology' ? 'ontology' : 'passage'}`}>
+                    {gap.gap === 'no_ontology' ? 'No ontology name' : 'Named, no evidence'}
+                  </span>
+                  <span className="text-xs text-[#8b9cb0]">{gap.count} {gap.count === 1 ? 'ask' : 'asks'}</span>
+                  {gap.route && <span className="text-xs text-[#8b9cb0]">{gap.route}</span>}
+                  <span className="text-xs text-[#8b9cb0]">{confidenceLabel(gap.confidence)}</span>
                 </div>
-
-                <div className="bg-white rounded-xl shadow-lg p-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                    <SparklesIcon className="w-5 h-5 mr-2 text-orange-500" />
-                    Recommendations
-                  </h3>
-                  <ul className="space-y-2">
-                    {analysisResults.recommendations.map((rec: string, index: number) => (
-                      <li key={index} className="flex items-start">
-                        <div className="w-2 h-2 bg-blue-500 rounded-full mt-2 mr-3 flex-shrink-0"></div>
-                        <span className="text-sm text-gray-700">{rec}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-
-              {/* Top Concepts - Signature Cards */}
-              <div className="bg-white rounded-xl shadow-lg p-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Top Concepts Signature View</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {analysisResults.topConcepts.slice(0, 6).map((concept: any, index: number) => {
-                    const score = Math.round(concept.relevance * 100);
-                    return (
-                      <div
-                        key={index}
-                        className="relative overflow-hidden rounded-xl border border-[rgba(148,163,184,0.2)] p-4 bg-[linear-gradient(145deg,rgba(15,23,42,0.8),rgba(30,41,59,0.45))] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-                      >
-                        <div className="absolute right-3 top-3 text-[10px] px-2 py-1 rounded-full border border-[rgba(251,146,60,0.35)] bg-orange-500/15 text-orange-300 font-semibold tracking-[0.08em]">
-                          C{index + 1}
-                        </div>
-                        <div className="pr-16">
-                          <div className="font-semibold text-[#e8edf4]">{concept.concept}</div>
-                          <div className="mt-1 text-xs text-[#8b9cb0]">Frequency: {concept.frequency} mentions</div>
-                        </div>
-                        <div className="mt-4">
-                          <div className="flex items-center justify-between text-xs text-[#8b9cb0] mb-1">
-                            <span>Impact Signature</span>
-                            <span className="font-semibold text-orange-300">{score}%</span>
-                          </div>
-                          <div className="h-2.5 rounded-full bg-[#0f1728] border border-[rgba(148,163,184,0.16)] overflow-hidden">
-                            <div
-                              className="h-2.5 rounded-full bg-gradient-to-r from-orange-400 via-amber-400 to-pink-400 shadow-[0_0_16px_rgba(251,146,60,0.45)]"
-                              style={{ width: `${score}%` }}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+                <h3 className="mt-2 text-base text-[#e8edf4]">{gap.query}</h3>
+                <p className="mt-1 text-sm text-[#8b9cb0]">
+                  {gap.gap === 'no_ontology'
+                    ? 'The envelope had evidence, and the approved ontology did not name the subject.'
+                    : 'The ontology named the subject, and the fabric returned no table row, passage, or graph fact.'}
+                </p>
+              </article>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
 };
 
-export default ContextAnalysis; 
+function Empty({ icon: Icon, title, body }: { icon: React.ComponentType<{ className?: string }>; title: string; body: string }) {
+  return (
+    <div className="ctx-card flex items-start gap-3">
+      <Icon className="mt-0.5 h-5 w-5 text-[#5ec8f2]" />
+      <div>
+        <p className="font-medium text-[#e8edf4]">{title}</p>
+        <p className="mt-1 text-sm text-[#8b9cb0]">{body}</p>
+      </div>
+    </div>
+  );
+}
+
+export default ContextAnalysis;

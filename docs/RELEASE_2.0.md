@@ -124,9 +124,8 @@ versioning with approval, and LLM provider routing.
 
 ## 3. Implementation status
 
-**Phase 0–5 are implemented locally (November 2026).** Nothing from this work
-has been committed or pushed yet. EC2 still needs an image rebuild and a
-re-index after deploy.
+**Phases 0–5 are implemented and pushed (November 2026, `0221ce4` and follow-ups).**
+EC2 still needs an image rebuild and a re-index after deploy.
 
 ### Phase 0 — done
 
@@ -214,13 +213,15 @@ re-index after deploy.
 
 ### Not migrated / still 1.x behaviour
 
-- Codebase fabric creation and ServiceNow-specific create endpoints (they do
-  get real embeddings when indexed).
+- A live ServiceNow instance API is not called. File upload, the incident
+  reference set, and the connection sample all run through the staged tabular
+  pipeline (profile, table store, measured keys, `indexed`).
+- Codebase analysis indexes real embeddings, marks `model_status=indexed`, and
+  stamps lineage on completion. It does not build a SQL table store, because a
+  repository is not a relational source.
 - Legacy database fabrics created before 2.0 have no table store until re-created.
   Their existing vectors stay in the shared collection until re-indexed; new
   writes use the per-fabric collection.
-- Frontend labels updated for `building` / `failed` / `indexed` and stored
-  upload names; deeper pipeline-stage UI is still light.
 
 ### EC2 upgrade steps
 

@@ -102,6 +102,7 @@ class JobWorker:
                 run_id=run_id,
                 project_id=project_id,
                 schema_profile=schema_profile,
+                fabric_id=fabric_id,
             )
         else:
             from app.services.ontology.fabric_artifact_bridge import (
@@ -262,6 +263,7 @@ class JobWorker:
             fabric = fabric_store.get(fabric_id)
             if fabric:
                 fabric["status"] = "failed"
+                fabric["model_status"] = "failed"
                 fabric["error"] = str(exc)
                 fabric_store.save(fabric)
             job_service.update(

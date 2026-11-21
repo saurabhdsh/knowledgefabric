@@ -119,6 +119,7 @@ class OntologyAttribute(BaseModel):
     data_type_guess: Optional[str] = None
     required_flag_guess: bool = False
     description: Optional[str] = None
+    aliases: List[str] = Field(default_factory=list)
     evidence: List[OntologyEvidence] = Field(default_factory=list)
     confidence_score: float = Field(ge=0.0, le=1.0, default=0.0)
     status: OntologyElementStatus = OntologyElementStatus.DRAFT
