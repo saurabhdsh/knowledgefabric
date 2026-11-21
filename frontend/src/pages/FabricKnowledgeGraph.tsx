@@ -1224,8 +1224,8 @@ const FabricKnowledgeGraph: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-white border border-gray-200 rounded-xl p-2 relative overflow-hidden">
-            <svg ref={svgRef} className="w-full h-[68vh] min-h-[520px] max-h-[760px]" />
+          <div className="relative overflow-hidden rounded-[28px] border border-white/15 bg-[#070b12] p-2 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
+            <svg ref={svgRef} className="w-full h-[72vh] min-h-[560px] max-h-[820px]" />
 
             <div className="absolute top-3 left-3 rounded-xl p-3 border border-cyan-300/20 bg-gradient-to-br from-slate-950/95 via-slate-900/92 to-cyan-950/90 backdrop-blur-xl shadow-lg shadow-cyan-950/35 w-[250px]">
               <h3 className="text-xs font-semibold text-white mb-1">Fabric Details</h3>
@@ -1255,109 +1255,6 @@ const FabricKnowledgeGraph: React.FC = () => {
               <span className="inline-flex items-center gap-1"><span className="h-0.5 w-5 bg-fuchsia-400" /> related_to</span>
             </div>
 
-            <div className="absolute top-24 right-3 rounded-xl p-3 border border-fuchsia-300/20 bg-gradient-to-br from-slate-950/95 via-indigo-950/92 to-fuchsia-950/90 backdrop-blur-xl shadow-lg shadow-indigo-950/35 w-[270px] max-h-[230px] overflow-auto">
-              <h3 className="text-xs font-semibold text-white mb-1">Top Entities</h3>
-              <div className="space-y-1">
-                {(analytics?.top_entities || []).map((entity) => (
-                  <div key={entity.label} className="flex justify-between text-xs text-slate-100/95">
-                    <span className="truncate pr-2">{entity.label}</span>
-                    <span className="font-semibold text-fuchsia-200">{entity.weight}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="absolute bottom-3 left-3 rounded-xl p-3 border border-emerald-300/20 bg-gradient-to-br from-slate-950/95 via-emerald-950/92 to-cyan-950/90 backdrop-blur-xl shadow-lg shadow-emerald-950/35 w-[320px] max-h-[280px] overflow-auto">
-              <h3 className="text-xs font-semibold text-white mb-1">Inspector</h3>
-              {selectedNode ? (
-                <>
-                  <p className="text-xs text-slate-100/90">Label: <span className="font-semibold text-cyan-200">{selectedNode.label}</span></p>
-                  <p className="text-xs text-slate-100/90">Type: <span className="font-semibold text-emerald-200">{selectedNode.type}</span></p>
-                  {selectedNode.group && (
-                    <p className="text-xs text-slate-100/90">Group: <span className="font-semibold text-amber-200">{selectedNode.group}</span></p>
-                  )}
-                  <p className="text-xs text-slate-100/90">Connections: <span className="font-semibold text-fuchsia-200">{selectedNodeStats?.degree ?? 0}</span></p>
-                  {selectedNode.properties && Object.keys(selectedNode.properties).length > 0 && (
-                    <div className="mt-2 border-t border-white/10 pt-2 space-y-1">
-                      <p className="text-[10px] uppercase tracking-wider text-slate-400">Properties</p>
-                      {Object.entries(selectedNode.properties).map(([key, value]) => {
-                        if (key === 'fields' && value && typeof value === 'object') {
-                          return (
-                            <div key={key} className="space-y-0.5">
-                              <p className="text-[10px] text-slate-400">fields</p>
-                              {Object.entries(value as Record<string, unknown>).slice(0, 8).map(([fk, fv]) => (
-                                <p key={fk} className="text-[11px] text-slate-100/90 pl-2">
-                                  <span className="text-slate-400">{fk}:</span> {String(fv)}
-                                </p>
-                              ))}
-                            </div>
-                          );
-                        }
-                        const shown = Array.isArray(value) ? value.join(', ') : typeof value === 'object' ? JSON.stringify(value) : String(value);
-                        return (
-                          <p key={key} className="text-[11px] text-slate-100/90 break-words">
-                            <span className="text-slate-400">{key}:</span> {shown.slice(0, 160)}
-                          </p>
-                        );
-                      })}
-                    </div>
-                  )}
-                </>
-              ) : selectedEdge ? (
-                <>
-                  <p className="text-xs text-slate-100/90">Relation: <span className="font-semibold text-cyan-200">{selectedEdge.relation}</span></p>
-                  <p className="text-xs text-slate-100/90">
-                    From → To:{' '}
-                    <span className="font-semibold text-emerald-200">
-                      {typeof selectedEdge.source === 'string' ? selectedEdge.source : selectedEdge.source.id}
-                      {' → '}
-                      {typeof selectedEdge.target === 'string' ? selectedEdge.target : selectedEdge.target.id}
-                    </span>
-                  </p>
-                  {selectedEdge.properties && Object.keys(selectedEdge.properties).length > 0 && (
-                    <div className="mt-2 border-t border-white/10 pt-2 space-y-1">
-                      <p className="text-[10px] uppercase tracking-wider text-slate-400">Evidence</p>
-                      {selectedEdge.properties.confidence != null && (
-                        <p className="text-[11px] text-emerald-200">
-                          confidence:{' '}
-                          <span className="font-semibold">
-                            {Number(selectedEdge.properties.confidence).toFixed(3)}
-                          </span>
-                        </p>
-                      )}
-                      {selectedEdge.properties.evidence != null && selectedEdge.properties.evidence !== '' && (
-                        <p className="text-[11px] text-slate-100/90 break-words">
-                          <span className="text-slate-400">evidence:</span>{' '}
-                          {String(selectedEdge.properties.evidence).slice(0, 220)}
-                        </p>
-                      )}
-                      {Object.entries(selectedEdge.properties).map(([key, value]) => {
-                        if (value == null || value === '' || key === 'confidence' || key === 'evidence') return null;
-                        const shown = Array.isArray(value) ? value.map((v) => (typeof v === 'object' ? JSON.stringify(v) : String(v))).join('; ') : typeof value === 'object' ? JSON.stringify(value) : String(value);
-                        return (
-                          <p key={key} className="text-[11px] text-slate-100/90 break-words">
-                            <span className="text-slate-400">{key}:</span> {shown.slice(0, 220)}
-                          </p>
-                        );
-                      })}
-                    </div>
-                  )}
-                </>
-              ) : (
-                <p className="text-xs text-slate-100/80">Click a node or edge to inspect properties and evidence.</p>
-              )}
-            </div>
-
-            <div className="absolute bottom-3 right-3 rounded-xl p-3 border border-cyan-400/30 bg-gradient-to-br from-slate-900/95 via-indigo-900/95 to-slate-900/95 shadow-lg shadow-indigo-900/20 w-[340px] max-h-[230px] overflow-auto">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-xs font-semibold text-white">LLM Insight</h3>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-200 border border-cyan-400/30">Brief</span>
-              </div>
-              <div className="text-slate-100 antialiased selection:bg-cyan-500/20">
-                {renderLlmGraphInsight(llmInsight?.summary || 'No insight available.')}
-              </div>
-            </div>
-
             {visibleGraph.nodes.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <div className="rounded-lg border border-[rgba(148,163,184,0.22)] bg-[#0b0f16]/90 px-4 py-2 text-sm text-[#9fb0c5]">
@@ -1366,6 +1263,137 @@ const FabricKnowledgeGraph: React.FC = () => {
               </div>
             )}
           </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-12">
+            <section className="relative overflow-hidden rounded-[24px] border border-white/15 bg-white/[0.07] p-4 shadow-[0_16px_50px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.22)] backdrop-blur-2xl lg:col-span-5">
+              <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[10px] uppercase tracking-[0.22em] text-[#8b9cb0]">Brief</p>
+                <span className="rounded-full border border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.12)] px-2 py-0.5 text-[10px] text-[#9adfff]">Live</span>
+              </div>
+              <h3 className="mt-1 text-[15px] font-semibold tracking-[-0.02em] text-[#e8edf4]">Key Insights</h3>
+              <div className="mt-3 max-h-[320px] overflow-auto text-[13px] leading-relaxed text-[#d5deea]">
+                {renderLlmGraphInsight(llmInsight?.summary || 'No insight available yet.')}
+              </div>
+            </section>
+
+            <section className="relative overflow-hidden rounded-[24px] border border-white/15 bg-white/[0.07] p-4 shadow-[0_16px_50px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.22)] backdrop-blur-2xl lg:col-span-3">
+              <div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
+              <p className="text-[10px] uppercase tracking-[0.22em] text-[#8b9cb0]">Weight</p>
+              <h3 className="mt-1 text-[15px] font-semibold tracking-[-0.02em] text-[#e8edf4]">Top Entities</h3>
+              <div className="mt-3 max-h-[320px] space-y-1.5 overflow-auto">
+                {(analytics?.top_entities || []).length === 0 && (
+                  <p className="text-[12px] text-[#8b9cb0]">Entities appear after the graph is published.</p>
+                )}
+                {(analytics?.top_entities || []).map((entity) => (
+                  <div key={entity.label} className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1.5">
+                    <span className="truncate text-[12px] text-[#e8edf4]">{entity.label}</span>
+                    <span className="shrink-0 text-[12px] font-semibold tabular-nums text-[#d7cff5]">{entity.weight}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="relative overflow-hidden rounded-[24px] border border-white/15 bg-white/[0.07] p-4 shadow-[0_16px_50px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.22)] backdrop-blur-2xl lg:col-span-4">
+              <div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
+              <p className="text-[10px] uppercase tracking-[0.22em] text-[#8b9cb0]">Selection</p>
+              <h3 className="mt-1 text-[15px] font-semibold tracking-[-0.02em] text-[#e8edf4]">Inspector</h3>
+              <div className="mt-3 max-h-[320px] overflow-auto text-[12px] leading-relaxed text-[#d5deea]">
+                {selectedNode ? (
+                  <>
+                    <p>Label: <span className="font-semibold text-[#9adfff]">{selectedNode.label}</span></p>
+                    <p>Type: <span className="font-semibold text-[#9af0ca]">{selectedNode.type}</span></p>
+                    {selectedNode.group && (
+                      <p>Group: <span className="font-semibold text-[#f3d48a]">{selectedNode.group}</span></p>
+                    )}
+                    <p>Connections: <span className="font-semibold text-[#d7cff5]">{selectedNodeStats?.degree ?? 0}</span></p>
+                    {selectedNode.properties && Object.keys(selectedNode.properties).length > 0 && (
+                      <div className="mt-2 space-y-1 border-t border-white/10 pt-2">
+                        <p className="text-[10px] uppercase tracking-[0.16em] text-[#8b9cb0]">Properties</p>
+                        {Object.entries(selectedNode.properties).map(([key, value]) => {
+                          if (key === 'fields' && value && typeof value === 'object') {
+                            return (
+                              <div key={key} className="space-y-0.5">
+                                <p className="text-[10px] text-[#8b9cb0]">fields</p>
+                                {Object.entries(value as Record<string, unknown>).slice(0, 8).map(([fk, fv]) => (
+                                  <p key={fk} className="pl-2"><span className="text-[#8b9cb0]">{fk}:</span> {String(fv)}</p>
+                                ))}
+                              </div>
+                            );
+                          }
+                          const shown = Array.isArray(value) ? value.join(', ') : typeof value === 'object' ? JSON.stringify(value) : String(value);
+                          return (
+                            <p key={key} className="break-words"><span className="text-[#8b9cb0]">{key}:</span> {shown.slice(0, 160)}</p>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
+                ) : selectedEdge ? (
+                  <>
+                    <p>Relation: <span className="font-semibold text-[#9adfff]">{selectedEdge.relation}</span></p>
+                    <p>
+                      From → To:{' '}
+                      <span className="font-semibold text-[#9af0ca]">
+                        {typeof selectedEdge.source === 'string' ? selectedEdge.source : selectedEdge.source.id}
+                        {' → '}
+                        {typeof selectedEdge.target === 'string' ? selectedEdge.target : selectedEdge.target.id}
+                      </span>
+                    </p>
+                    {selectedEdge.properties && Object.keys(selectedEdge.properties).length > 0 && (
+                      <div className="mt-2 space-y-1 border-t border-white/10 pt-2">
+                        <p className="text-[10px] uppercase tracking-[0.16em] text-[#8b9cb0]">Evidence</p>
+                        {selectedEdge.properties.confidence != null && (
+                          <p className="text-[#9af0ca]">
+                            confidence: <span className="font-semibold">{Number(selectedEdge.properties.confidence).toFixed(3)}</span>
+                          </p>
+                        )}
+                        {selectedEdge.properties.evidence != null && selectedEdge.properties.evidence !== '' && (
+                          <p className="break-words"><span className="text-[#8b9cb0]">evidence:</span> {String(selectedEdge.properties.evidence).slice(0, 220)}</p>
+                        )}
+                        {Object.entries(selectedEdge.properties).map(([key, value]) => {
+                          if (value == null || value === '' || key === 'confidence' || key === 'evidence') return null;
+                          const shown = Array.isArray(value) ? value.map((v) => (typeof v === 'object' ? JSON.stringify(v) : String(v))).join('; ') : typeof value === 'object' ? JSON.stringify(value) : String(value);
+                          return (
+                            <p key={key} className="break-words"><span className="text-[#8b9cb0]">{key}:</span> {shown.slice(0, 220)}</p>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-[#8b9cb0]">Click a node or an edge on the canvas. Its properties and evidence show up here.</p>
+                )}
+              </div>
+            </section>
+          </div>
+
+          <section className="relative mt-4 overflow-hidden rounded-[28px] border border-white/15 bg-white/[0.06] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.2)] backdrop-blur-2xl">
+            <div className="pointer-events-none absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
+            <p className="text-[10px] uppercase tracking-[0.22em] text-[#8b9cb0]">Release 2.0</p>
+            <h3 className="mt-1 text-[18px] font-semibold tracking-[-0.03em] text-[#e8edf4]">How this graph is built</h3>
+            <p className="mt-2 max-w-3xl text-[13px] leading-relaxed text-[#cbd5e1]">
+              Release 2.0 stopped drawing the graph from word co-occurrence. Every fabric now runs the same six stages, and every edge you see is a measured fact with a source, a target, evidence, and a confidence.
+            </p>
+            <ol className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {[
+                ['01 Profile', 'Types, null rates, key candidates, and foreign keys are measured from the data. A foreign key is kept when the values actually overlap, not because two column names look alike.'],
+                ['02 Parse', 'Documents are read by layout. Headings, tables, and real page numbers are kept. Scanned pages go through OCR. Chunks remember the section path so a citation can point back to the page.'],
+                ['03 Model', 'The ontology is built from the full profile, not a thin sample. Each relationship records its source, target, evidence snippet, cardinality, and the columns that bind it. Domain rules live in packs, not in one-off endpoint code.'],
+                ['04 Index', 'Rows stay in a queryable table store. Only text and entity summaries are embedded, with the model name stamped on the fabric. Each fabric gets its own vector index, so one fabric cannot leak into another.'],
+                ['05 Validate', 'The build fails unless search uses that embedding index. Counts are answered from the table store. The graph is not published if the measurements do not hold.'],
+                ['06 Publish', 'The class graph and a sample of real instances are saved together. Foreign-key edges connect those instances. A later question can expand a node into facts — values and confidence — rather than a list of type names.'],
+              ].map(([title, copy]) => (
+                <li key={title} className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+                  <p className="text-[12px] font-semibold tracking-[-0.01em] text-[#e8edf4]">{title}</p>
+                  <p className="mt-1 text-[12px] leading-relaxed text-[#9fb0c5]">{copy}</p>
+                </li>
+              ))}
+            </ol>
+            <p className="mt-4 max-w-3xl text-[13px] leading-relaxed text-[#cbd5e1]">
+              A composite fabric joins those graphs instead of pasting them side by side. A person named in a document is linked to the matching row, and the sources share one ontology. Questions are routed: counts go to the table store, narrative questions go to the documents, and mixed questions use both. Retrieval is keyword plus vector search, reranked into a token budget, and the confidence on an answer comes from those measurements.
+            </p>
+          </section>
         </>
       )}
     </div>
