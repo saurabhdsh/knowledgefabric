@@ -12,13 +12,15 @@ import {
   type PharmaGraphLens,
 } from '../utils/pharmaGraphLens';
 
-type GraphNodeType = 'fabric' | 'entity';
+type GraphNodeType = 'fabric' | 'collection' | 'entity' | 'class' | 'code' | 'workspace';
 
 interface GraphNode extends d3.SimulationNodeDatum {
   id: string;
   label: string;
   type: GraphNodeType;
   weight: number;
+  group?: string;
+  properties?: Record<string, unknown>;
 }
 
 interface GraphEdge extends d3.SimulationLinkDatum<GraphNode> {
@@ -26,6 +28,15 @@ interface GraphEdge extends d3.SimulationLinkDatum<GraphNode> {
   target: string | GraphNode;
   relation: string;
   weight: number;
+  properties?: Record<string, unknown>;
+}
+
+interface GraphViewOption {
+  id: string;
+  label: string;
+  graph_type?: string;
+  node_count?: number;
+  edge_count?: number;
 }
 
 interface GraphAnalytics {
@@ -87,30 +98,76 @@ interface LLMInsight {
   summary: string;
 }
 
-type GraphViewType = 'canonical' | 'exploratory' | 'codebase';
+type GraphViewType =
+  | 'canonical'
+  | 'profiled_schema'
+  | 'database_schema'
+  | 'stale_schema'
+  | 'exploratory'
+  | 'codebase';
+
+const GRAPH_TYPE_LABELS: Record<string, string> = {
+  canonical: 'Ontology (approved classes)',
+  profiled_schema: 'Data profile (measured FKs + samples)',
+  database_schema: 'Database schema (legacy)',
+  stale_schema: 'Schema stub — rebuild fabric for measured FKs',
+  exploratory: 'Exploratory (co-occurrence)',
+  codebase: 'Code structure',
+};
+
+function coerceNodeType(raw: unknown): GraphNodeType {
+  const t = String(raw || '').toLowerCase();
+  if (t === 'fabric' || t === 'workspace') return 'fabric';
+  if (t === 'collection' || t === 'table') return 'collection';
+  if (t === 'class' || t === 'ontology_class') return 'class';
+  if (t === 'entity' || t === 'instance') return 'entity';
+  if (t === 'code' || t === 'module' || t === 'file' || t === 'symbol' || t === 'node') return 'code';
+  // Heuristic from id prefixes used by the backend builders.
+  return 'entity';
+}
 
 function normalizeGraphPayload(data: Record<string, unknown>): {
   nodes: GraphNode[];
   edges: GraphEdge[];
   graphType: GraphViewType;
   ontologyVersionId?: string;
+  graphNote?: string;
+  availableViews: GraphViewOption[];
+  activeView: string;
+  rebuildRequired: boolean;
+  sampleSize?: number;
+  sampleTotal?: number;
+  sampleCapped?: boolean;
 } {
   const graphType = (data.graph_type as GraphViewType) || 'exploratory';
   const rawNodes = (data.nodes as Array<Record<string, unknown>>) || [];
   const rawEdges = (data.edges as Array<Record<string, unknown>>) || [];
 
-  const nodes: GraphNode[] = rawNodes.map((n) => ({
-    id: String(n.id),
-    label: String(n.label || n.normalized_name || n.id),
-    type: (n.type === 'fabric' || n.type === 'workspace' ? 'fabric' : 'entity') as GraphNodeType,
-    weight: Number(n.weight ?? 1),
-  }));
+  const nodes: GraphNode[] = rawNodes.map((n) => {
+    const id = String(n.id);
+    let type = coerceNodeType(n.type);
+    if (id.startsWith('collection:')) type = 'collection';
+    else if (id.startsWith('instance:')) type = 'entity';
+    else if (id.startsWith('fabric:')) type = 'fabric';
+    return {
+      id,
+      label: String(n.label || n.normalized_name || n.id),
+      type,
+      weight: Number(n.weight ?? 1),
+      group: n.group != null ? String(n.group) : undefined,
+      properties: (n.properties as Record<string, unknown>) || {},
+    };
+  });
 
   const edges: GraphEdge[] = rawEdges.map((e) => ({
     source: String(e.source),
     target: String(e.target),
     relation: String(e.relation || e.label || e.type || e.relationship_type || 'relates_to'),
     weight: Number(e.weight ?? 1),
+    properties: (e.properties as Record<string, unknown>) || {
+      confidence: e.confidence,
+      evidence_refs: e.evidence_refs,
+    },
   }));
 
   return {
@@ -118,6 +175,13 @@ function normalizeGraphPayload(data: Record<string, unknown>): {
     edges,
     graphType,
     ontologyVersionId: data.ontology_version_id as string | undefined,
+    graphNote: data.graph_note as string | undefined,
+    availableViews: (data.available_views as GraphViewOption[]) || [],
+    activeView: String(data.active_view || 'data'),
+    rebuildRequired: Boolean(data.rebuild_required),
+    sampleSize: data.document_sample_size as number | undefined,
+    sampleTotal: data.document_total as number | undefined,
+    sampleCapped: data.document_sample_capped as boolean | undefined,
   };
 }
 
@@ -162,6 +226,14 @@ const FabricKnowledgeGraph: React.FC = () => {
   const [graphType, setGraphType] = useState<GraphViewType>('exploratory');
   const [ontologyVersionId, setOntologyVersionId] = useState<string | undefined>();
   const [graphReloadKey, setGraphReloadKey] = useState(0);
+  const [graphNote, setGraphNote] = useState<string | null>(null);
+  const [availableViews, setAvailableViews] = useState<GraphViewOption[]>([]);
+  const [activeView, setActiveView] = useState<string>('auto');
+  const [rebuildRequired, setRebuildRequired] = useState(false);
+  const [sampleMeta, setSampleMeta] = useState<{ size?: number; total?: number; capped?: boolean }>({});
+  const [selectedEdge, setSelectedEdge] = useState<GraphEdge | null>(null);
+  /** Server-side focus neighborhood for canonical ontology graphs (null = use client BFS). */
+  const [serverFocusIds, setServerFocusIds] = useState<Set<string> | null>(null);
 
   const showPharmaGraphUi = shouldShowPharmaGraphUi(getWeaveDomain(), fabricDetails);
 
@@ -170,7 +242,12 @@ const FabricKnowledgeGraph: React.FC = () => {
     try {
       setLoading(true);
       setError(null);
-      const response = await apiRequest(`api/v1/knowledge/${fabricId}/knowledge-graph?include_llm=true`);
+      setSelectedNode(null);
+      setSelectedEdge(null);
+      const viewParam = activeView && activeView !== 'auto' ? `&view=${encodeURIComponent(activeView)}` : '';
+      const response = await apiRequest(
+        `api/v1/knowledge/${fabricId}/knowledge-graph?include_llm=true${viewParam}`
+      );
       if (response.status === 401) {
         throw new Error('Session expired after a long fabric create. Sign in again, then reopen this fabric from Available Fabrics.');
       }
@@ -185,6 +262,16 @@ const FabricKnowledgeGraph: React.FC = () => {
       setEdges(normalized.edges);
       setGraphType(normalized.graphType);
       setOntologyVersionId(normalized.ontologyVersionId);
+      setGraphNote(normalized.graphNote || null);
+      setAvailableViews(normalized.availableViews);
+      setRebuildRequired(normalized.rebuildRequired);
+      setSampleMeta({
+        size: normalized.sampleSize,
+        total: normalized.sampleTotal,
+        capped: normalized.sampleCapped,
+      });
+      // Reflect the server-chosen view on first load without re-fetching.
+      setActiveView((prev) => (prev === 'auto' ? normalized.activeView || 'data' : prev));
       setAnalytics((data.analytics as GraphAnalytics) || null);
       setLlmInsight((data.llm_insight as LLMInsight) || null);
       setFabricDetails((data.fabric_details as FabricDetails) || null);
@@ -193,17 +280,62 @@ const FabricKnowledgeGraph: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [fabricId]);
+  }, [fabricId, activeView]);
 
   useEffect(() => {
     loadGraph();
   }, [loadGraph, graphReloadKey]);
+
+  // Canonical focus: use persisted Postgres neighbors (bidirectional) so hops
+  // match the stored ontology graph, not only the client adjacency copy.
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (
+        graphType !== 'canonical' ||
+        focusHops <= 0 ||
+        !selectedNode ||
+        !fabricId
+      ) {
+        setServerFocusIds(null);
+        return;
+      }
+      try {
+        const versionQs = ontologyVersionId
+          ? `&ontology_version_id=${encodeURIComponent(ontologyVersionId)}`
+          : '';
+        const response = await apiRequest(
+          `api/v1/graph/fabrics/${fabricId}/graph/neighbors/${encodeURIComponent(selectedNode.id)}?hops=${focusHops}${versionQs}`
+        );
+        const payload = await response.json();
+        if (!response.ok || !payload?.success) {
+          setServerFocusIds(null);
+          return;
+        }
+        const ids = new Set<string>(
+          ((payload.data?.nodes as Array<{ id?: string }>) || [])
+            .map((n) => String(n.id || ''))
+            .filter(Boolean)
+        );
+        ids.add(selectedNode.id);
+        if (!cancelled) setServerFocusIds(ids);
+      } catch {
+        if (!cancelled) setServerFocusIds(null);
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [graphType, focusHops, selectedNode, fabricId, ontologyVersionId]);
 
   const graphStats = useMemo(
     () => ({
       nodes: nodes.length,
       edges: edges.length,
       entities: nodes.filter((n) => n.type === 'entity').length,
+      collections: nodes.filter((n) => n.type === 'collection').length,
+      classes: nodes.filter((n) => n.type === 'class').length,
     }),
     [nodes, edges]
   );
@@ -222,30 +354,34 @@ const FabricKnowledgeGraph: React.FC = () => {
     let nodesAllowed = new Set(nodes.map((n) => n.id));
 
     if (focusHops > 0 && selectedNode) {
-      const adjacency = new Map<string, Set<string>>();
-      for (const edge of relationFiltered) {
-        const src = typeof edge.source === 'string' ? edge.source : edge.source.id;
-        const dst = typeof edge.target === 'string' ? edge.target : edge.target.id;
-        if (!adjacency.has(src)) adjacency.set(src, new Set());
-        if (!adjacency.has(dst)) adjacency.set(dst, new Set());
-        adjacency.get(src)!.add(dst);
-        adjacency.get(dst)!.add(src);
-      }
-      const visited = new Set<string>([selectedNode.id]);
-      let frontier = new Set<string>([selectedNode.id]);
-      for (let hop = 0; hop < focusHops; hop += 1) {
-        const next = new Set<string>();
-        frontier.forEach((id) => {
-          (adjacency.get(id) || new Set()).forEach((nbr) => {
-            if (!visited.has(nbr)) {
-              visited.add(nbr);
-              next.add(nbr);
-            }
+      if (serverFocusIds && serverFocusIds.size > 0) {
+        nodesAllowed = new Set(serverFocusIds);
+      } else {
+        const adjacency = new Map<string, Set<string>>();
+        for (const edge of relationFiltered) {
+          const src = typeof edge.source === 'string' ? edge.source : edge.source.id;
+          const dst = typeof edge.target === 'string' ? edge.target : edge.target.id;
+          if (!adjacency.has(src)) adjacency.set(src, new Set());
+          if (!adjacency.has(dst)) adjacency.set(dst, new Set());
+          adjacency.get(src)!.add(dst);
+          adjacency.get(dst)!.add(src);
+        }
+        const visited = new Set<string>([selectedNode.id]);
+        let frontier = new Set<string>([selectedNode.id]);
+        for (let hop = 0; hop < focusHops; hop += 1) {
+          const next = new Set<string>();
+          frontier.forEach((id) => {
+            (adjacency.get(id) || new Set()).forEach((nbr) => {
+              if (!visited.has(nbr)) {
+                visited.add(nbr);
+                next.add(nbr);
+              }
+            });
           });
-        });
-        frontier = next;
+          frontier = next;
+        }
+        nodesAllowed = visited;
       }
-      nodesAllowed = visited;
       relationFiltered = relationFiltered.filter((e) => {
         const src = typeof e.source === 'string' ? e.source : e.source.id;
         const dst = typeof e.target === 'string' ? e.target : e.target.id;
@@ -255,7 +391,7 @@ const FabricKnowledgeGraph: React.FC = () => {
 
     const nodeFiltered = nodes.filter((n) => nodesAllowed.has(n.id));
     return { nodes: nodeFiltered, edges: relationFiltered };
-  }, [nodes, edges, showMentions, showRelated, showOtherRelations, focusHops, selectedNode]);
+  }, [nodes, edges, showMentions, showRelated, showOtherRelations, focusHops, selectedNode, serverFocusIds]);
 
   const visibleGraph = useMemo(() => {
     if (!showPharmaGraphUi || pharmaLens === 'full') return relationFilteredGraph;
@@ -430,6 +566,12 @@ const FabricKnowledgeGraph: React.FC = () => {
     fabricGradient.append('stop').attr('offset', '0%').attr('stop-color', '#fde68a');
     fabricGradient.append('stop').attr('offset', '65%').attr('stop-color', '#f59e0b');
     fabricGradient.append('stop').attr('offset', '100%').attr('stop-color', '#b45309');
+    const collectionGradient = defs.append('radialGradient').attr('id', 'collection-gradient');
+    collectionGradient.append('stop').attr('offset', '0%').attr('stop-color', '#6ee7b7');
+    collectionGradient.append('stop').attr('offset', '100%').attr('stop-color', '#059669');
+    const classGradient = defs.append('radialGradient').attr('id', 'class-gradient');
+    classGradient.append('stop').attr('offset', '0%').attr('stop-color', '#c4b5fd');
+    classGradient.append('stop').attr('offset', '100%').attr('stop-color', '#7c3aed');
 
     const root = svg.append('g');
     rootGroupRef.current = root;
@@ -454,7 +596,11 @@ const FabricKnowledgeGraph: React.FC = () => {
       )
       .force('charge', d3.forceManyBody().strength(-270))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide<GraphNode>().radius((d) => (d.type === 'fabric' ? 30 : 12 + Math.min(d.weight, 10))));
+      .force('collision', d3.forceCollide<GraphNode>().radius((d) => {
+        if (d.type === 'fabric') return 30;
+        if (d.type === 'collection' || d.type === 'class') return 18;
+        return 12 + Math.min(d.weight, 8);
+      }));
 
     const link = root
       .append('g')
@@ -466,6 +612,7 @@ const FabricKnowledgeGraph: React.FC = () => {
       .attr('stroke', (d) => {
         if (d.relation === 'mentions') return '#22d3ee';
         if (d.relation === 'related_to') return '#c084fc';
+        if (d.relation === 'references' || d.relation === 'contains' || d.relation === 'includes') return '#34d399';
         return '#fbbf24';
       })
       .attr('stroke-width', (d) => {
@@ -473,7 +620,13 @@ const FabricKnowledgeGraph: React.FC = () => {
         if (d.relation === 'related_to') return Math.max(1.2, Math.min(3.6, d.weight * 0.3));
         return 2.4;
       })
-      .attr('stroke-linecap', 'round');
+      .attr('stroke-linecap', 'round')
+      .style('cursor', 'pointer')
+      .on('click', (event, d) => {
+        event.stopPropagation();
+        setSelectedEdge(d);
+        setSelectedNode(null);
+      });
 
     const linkDirection = root
       .append('g')
@@ -506,16 +659,25 @@ const FabricKnowledgeGraph: React.FC = () => {
       .selectAll<SVGCircleElement, GraphNode>('circle')
       .data(visibleGraph.nodes)
       .join('circle')
-      .attr('r', (d) => (d.type === 'fabric' ? 18 : Math.max(6, Math.min(13, 5 + d.weight * 0.35))))
+      .attr('r', (d) => {
+        if (d.type === 'fabric') return 18;
+        if (d.type === 'collection' || d.type === 'class') return Math.max(10, Math.min(16, 8 + Math.log10(Math.max(d.weight, 1)) * 4));
+        return Math.max(6, Math.min(12, 5 + Math.min(d.weight, 8) * 0.35));
+      })
       .attr('fill', (d) => {
         if (searchTerm.trim() && d.label.toLowerCase().includes(searchTerm.toLowerCase())) return '#f43f5e';
         if (d.type === 'fabric') return 'url(#fabric-gradient)';
+        if (d.type === 'collection') return 'url(#collection-gradient)';
+        if (d.type === 'class') return 'url(#class-gradient)';
         return 'url(#entity-gradient)';
       })
       .attr('stroke', '#e2e8f0')
       .attr('stroke-width', 1.2)
       .attr('filter', 'url(#node-shadow)')
-      .on('click', (_, d) => setSelectedNode(d))
+      .on('click', (_, d) => {
+        setSelectedNode(d);
+        setSelectedEdge(null);
+      })
       .call(dragBehavior);
 
     const pulseNode = root
@@ -549,8 +711,8 @@ const FabricKnowledgeGraph: React.FC = () => {
       .data(visibleGraph.nodes)
       .join('text')
       .text((d) => d.label)
-      .attr('font-size', (d) => (d.type === 'fabric' ? 12 : 10))
-      .attr('font-weight', (d) => (d.type === 'fabric' ? 700 : 400))
+      .attr('font-size', (d) => (d.type === 'fabric' || d.type === 'collection' || d.type === 'class' ? 12 : 10))
+      .attr('font-weight', (d) => (d.type === 'fabric' || d.type === 'collection' || d.type === 'class' ? 700 : 400))
       .attr('fill', '#f8fafc')
       .attr('pointer-events', 'none');
 
@@ -607,12 +769,14 @@ const FabricKnowledgeGraph: React.FC = () => {
           <div className="mt-1 flex flex-wrap items-center gap-2">
             <span
               className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${
-                graphType === 'canonical'
+                graphType === 'canonical' || graphType === 'profiled_schema'
                   ? 'border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.14)] text-[#3ecf9b]'
+                  : graphType === 'stale_schema' || graphType === 'exploratory'
+                  ? 'border-[rgba(232,184,74,0.4)] bg-[rgba(232,184,74,0.12)] text-[#e8b84a]'
                   : 'border-[rgba(148,163,184,0.25)] bg-white/[0.05] text-[#8b9cb0]'
               }`}
             >
-              {graphType === 'canonical' ? 'Canonical (approved ontology)' : 'Exploratory (co-occurrence)'}
+              {GRAPH_TYPE_LABELS[graphType] || graphType}
             </span>
             {ontologyVersionId && (
               <span className="text-[11px] text-[#8b9cb0] font-mono">v {ontologyVersionId}</span>
@@ -685,14 +849,55 @@ const FabricKnowledgeGraph: React.FC = () => {
 
       {!loading && !error && (
         <>
+          {availableViews.length > 0 && (
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <span className="text-xs uppercase tracking-[0.14em] text-[#8b9cb0] mr-1">View</span>
+              {availableViews.map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => setActiveView(v.id)}
+                  className={`rounded-full border px-3 py-1 text-xs ${
+                    activeView === v.id
+                      ? 'border-[rgba(94,200,242,0.45)] bg-[rgba(94,200,242,0.18)] text-[#cfefff]'
+                      : 'border-[rgba(148,163,184,0.25)] bg-white/[0.03] text-[#8b9cb0] hover:bg-white/[0.06]'
+                  }`}
+                >
+                  {v.label}
+                  {v.node_count != null ? ` · ${v.node_count}` : ''}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {graphNote && (
+            <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
+              rebuildRequired
+                ? 'border-[rgba(232,184,74,0.4)] bg-[rgba(232,184,74,0.1)] text-[#f5d78e]'
+                : 'border-[rgba(94,200,242,0.3)] bg-[rgba(94,200,242,0.08)] text-[#cbd5e1]'
+            }`}>
+              <p className="font-semibold text-[#e8edf4] mb-1">How this graph was built</p>
+              <p>{graphNote}</p>
+              {sampleMeta.capped && sampleMeta.size != null && sampleMeta.total != null && (
+                <p className="mt-1 text-xs text-[#8b9cb0]">
+                  Sample on canvas: {sampleMeta.size.toLocaleString()} of {sampleMeta.total.toLocaleString()} rows/chunks.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4">
             <div className="bg-white border border-gray-200 rounded-lg p-4">
               <p className="text-sm text-gray-500">Nodes</p>
               <p className="text-2xl font-semibold text-gray-900">{graphStats.nodes}</p>
             </div>
             <div className="bg-white border border-gray-200 rounded-lg p-4">
-              <p className="text-sm text-gray-500">Entities</p>
-              <p className="text-2xl font-semibold text-gray-900">{graphStats.entities}</p>
+              <p className="text-sm text-gray-500">
+                {graphStats.collections ? 'Tables' : graphStats.classes ? 'Classes' : 'Entities'}
+              </p>
+              <p className="text-2xl font-semibold text-gray-900">
+                {graphStats.collections || graphStats.classes || graphStats.entities}
+              </p>
             </div>
             <div className="bg-white border border-gray-200 rounded-lg p-4">
               <p className="text-sm text-gray-500">Relationships</p>
@@ -988,7 +1193,13 @@ const FabricKnowledgeGraph: React.FC = () => {
                 </>
               ) : (
                 <div className="md:col-span-3 text-sm text-gray-600">
-                  Schema relationships from approved ontology. Use the platform panel above to rebuild after approval.
+                  {graphType === 'canonical'
+                    ? 'Ontology class relationships (approved). Switch to Data view for measured tables and sample rows.'
+                    : graphType === 'profiled_schema'
+                    ? 'Tables, foreign keys measured by value overlap, and sample instance rows from the table store.'
+                    : graphType === 'stale_schema'
+                    ? 'Rebuild this fabric to unlock measured foreign keys and sample instances.'
+                    : 'Structured relationships for this fabric.'}
                 </div>
               )}
               <div>
@@ -1035,11 +1246,13 @@ const FabricKnowledgeGraph: React.FC = () => {
             </div>
 
             <div className="absolute top-3 left-1/2 -translate-x-1/2 rounded-lg border border-[rgba(148,163,184,0.22)] bg-[#0b0f16]/88 backdrop-blur px-3 py-2 flex flex-wrap items-center gap-3 text-[11px] text-[#9fb0c5] max-w-[90%]">
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-cyan-300" /> Entity</span>
               <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-amber-400" /> Fabric</span>
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-emerald-400" /> Table</span>
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-cyan-300" /> Instance</span>
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-violet-400" /> Ontology class</span>
+              <span className="inline-flex items-center gap-1"><span className="h-0.5 w-5 bg-emerald-400" /> references</span>
               <span className="inline-flex items-center gap-1"><span className="h-0.5 w-5 bg-cyan-400" /> mentions</span>
               <span className="inline-flex items-center gap-1"><span className="h-0.5 w-5 bg-fuchsia-400" /> related_to</span>
-              <span className="inline-flex items-center gap-1"><span className="h-0.5 w-5 bg-amber-300" /> other</span>
             </div>
 
             <div className="absolute top-24 right-3 rounded-xl p-3 border border-fuchsia-300/20 bg-gradient-to-br from-slate-950/95 via-indigo-950/92 to-fuchsia-950/90 backdrop-blur-xl shadow-lg shadow-indigo-950/35 w-[270px] max-h-[230px] overflow-auto">
@@ -1054,19 +1267,84 @@ const FabricKnowledgeGraph: React.FC = () => {
               </div>
             </div>
 
-            <div className="absolute bottom-3 left-3 rounded-xl p-3 border border-emerald-300/20 bg-gradient-to-br from-slate-950/95 via-emerald-950/92 to-cyan-950/90 backdrop-blur-xl shadow-lg shadow-emerald-950/35 w-[300px]">
-              <h3 className="text-xs font-semibold text-white mb-1">Node Inspector</h3>
+            <div className="absolute bottom-3 left-3 rounded-xl p-3 border border-emerald-300/20 bg-gradient-to-br from-slate-950/95 via-emerald-950/92 to-cyan-950/90 backdrop-blur-xl shadow-lg shadow-emerald-950/35 w-[320px] max-h-[280px] overflow-auto">
+              <h3 className="text-xs font-semibold text-white mb-1">Inspector</h3>
               {selectedNode ? (
                 <>
                   <p className="text-xs text-slate-100/90">Label: <span className="font-semibold text-cyan-200">{selectedNode.label}</span></p>
                   <p className="text-xs text-slate-100/90">Type: <span className="font-semibold text-emerald-200">{selectedNode.type}</span></p>
-                  <p className="text-xs text-slate-100/90">Weight: <span className="font-semibold text-amber-200">{selectedNode.weight}</span></p>
+                  {selectedNode.group && (
+                    <p className="text-xs text-slate-100/90">Group: <span className="font-semibold text-amber-200">{selectedNode.group}</span></p>
+                  )}
                   <p className="text-xs text-slate-100/90">Connections: <span className="font-semibold text-fuchsia-200">{selectedNodeStats?.degree ?? 0}</span></p>
-                  <p className="text-xs text-slate-100/90">Relation Types: <span className="font-semibold text-cyan-200">{selectedNodeStats?.relationTypes ?? 0}</span></p>
-                  <p className="text-xs text-slate-100/90">Signal Weight: <span className="font-semibold text-emerald-200">{selectedNodeStats?.totalWeight ?? 0}</span></p>
+                  {selectedNode.properties && Object.keys(selectedNode.properties).length > 0 && (
+                    <div className="mt-2 border-t border-white/10 pt-2 space-y-1">
+                      <p className="text-[10px] uppercase tracking-wider text-slate-400">Properties</p>
+                      {Object.entries(selectedNode.properties).map(([key, value]) => {
+                        if (key === 'fields' && value && typeof value === 'object') {
+                          return (
+                            <div key={key} className="space-y-0.5">
+                              <p className="text-[10px] text-slate-400">fields</p>
+                              {Object.entries(value as Record<string, unknown>).slice(0, 8).map(([fk, fv]) => (
+                                <p key={fk} className="text-[11px] text-slate-100/90 pl-2">
+                                  <span className="text-slate-400">{fk}:</span> {String(fv)}
+                                </p>
+                              ))}
+                            </div>
+                          );
+                        }
+                        const shown = Array.isArray(value) ? value.join(', ') : typeof value === 'object' ? JSON.stringify(value) : String(value);
+                        return (
+                          <p key={key} className="text-[11px] text-slate-100/90 break-words">
+                            <span className="text-slate-400">{key}:</span> {shown.slice(0, 160)}
+                          </p>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              ) : selectedEdge ? (
+                <>
+                  <p className="text-xs text-slate-100/90">Relation: <span className="font-semibold text-cyan-200">{selectedEdge.relation}</span></p>
+                  <p className="text-xs text-slate-100/90">
+                    From → To:{' '}
+                    <span className="font-semibold text-emerald-200">
+                      {typeof selectedEdge.source === 'string' ? selectedEdge.source : selectedEdge.source.id}
+                      {' → '}
+                      {typeof selectedEdge.target === 'string' ? selectedEdge.target : selectedEdge.target.id}
+                    </span>
+                  </p>
+                  {selectedEdge.properties && Object.keys(selectedEdge.properties).length > 0 && (
+                    <div className="mt-2 border-t border-white/10 pt-2 space-y-1">
+                      <p className="text-[10px] uppercase tracking-wider text-slate-400">Evidence</p>
+                      {selectedEdge.properties.confidence != null && (
+                        <p className="text-[11px] text-emerald-200">
+                          confidence:{' '}
+                          <span className="font-semibold">
+                            {Number(selectedEdge.properties.confidence).toFixed(3)}
+                          </span>
+                        </p>
+                      )}
+                      {selectedEdge.properties.evidence != null && selectedEdge.properties.evidence !== '' && (
+                        <p className="text-[11px] text-slate-100/90 break-words">
+                          <span className="text-slate-400">evidence:</span>{' '}
+                          {String(selectedEdge.properties.evidence).slice(0, 220)}
+                        </p>
+                      )}
+                      {Object.entries(selectedEdge.properties).map(([key, value]) => {
+                        if (value == null || value === '' || key === 'confidence' || key === 'evidence') return null;
+                        const shown = Array.isArray(value) ? value.map((v) => (typeof v === 'object' ? JSON.stringify(v) : String(v))).join('; ') : typeof value === 'object' ? JSON.stringify(value) : String(value);
+                        return (
+                          <p key={key} className="text-[11px] text-slate-100/90 break-words">
+                            <span className="text-slate-400">{key}:</span> {shown.slice(0, 220)}
+                          </p>
+                        );
+                      })}
+                    </div>
+                  )}
                 </>
               ) : (
-                <p className="text-xs text-slate-100/80">Click a node to inspect.</p>
+                <p className="text-xs text-slate-100/80">Click a node or edge to inspect properties and evidence.</p>
               )}
             </div>
 

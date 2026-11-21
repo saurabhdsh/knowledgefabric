@@ -23,7 +23,11 @@ class DocumentService:
         async with aiofiles.open(file_path, 'wb') as f:
             content = await file.read()
             await f.write(content)
-        
+
+        # Keep original name <-> stored name so fabrics bind to the exact files requested.
+        from app.services.upload_registry import upload_registry
+        upload_registry.register(file_path, file.filename or unique_filename, content)
+
         return file_path
     
     def extract_text_from_pdf(self, file_path: str) -> List[Dict[str, Any]]:
@@ -431,12 +435,17 @@ class DocumentService:
             upload_dir = settings.UPLOAD_DIR
             
             if os.path.exists(upload_dir):
+                from app.services.upload_registry import upload_registry
                 for filename in os.listdir(upload_dir):
+                    if filename.startswith("."):
+                        continue
                     file_path = os.path.join(upload_dir, filename)
                     if os.path.isfile(file_path):
                         file_stat = os.stat(file_path)
+                        entry = upload_registry.get(filename) or {}
                         files.append({
                             "name": filename,
+                            "original_name": entry.get("original_name") or filename,
                             "path": file_path,
                             "size": file_stat.st_size,
                             "created_at": datetime.fromtimestamp(file_stat.st_ctime).isoformat()

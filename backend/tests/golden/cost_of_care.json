@@ -1,0 +1,29 @@
+{
+  "fabric": "cost_of_care",
+  "questions": [
+    {
+      "id": "member-lisa",
+      "question": "Who is member MEM-LISA-COPD?",
+      "must_retrieve": ["mem-lisa-copd", "lisa"],
+      "answer_must_mention": ["lisa"],
+      "min_recall": 1.0,
+      "min_groundedness": 1.0
+    },
+    {
+      "id": "avoidable-er",
+      "question": "Which cost driver is Avoidable ER for Lisa?",
+      "must_retrieve": ["avoidable er"],
+      "answer_must_mention": ["avoidable er"],
+      "min_recall": 1.0,
+      "min_groundedness": 1.0
+    },
+    {
+      "id": "claim-count",
+      "question": "How many claims does MEM-LISA-COPD have?",
+      "must_retrieve": ["mem-lisa-copd"],
+      "answer_must_mention": ["10"],
+      "min_recall": 1.0,
+      "min_groundedness": 1.0
+    }
+  ]
+}

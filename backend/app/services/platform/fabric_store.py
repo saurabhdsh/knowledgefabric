@@ -34,20 +34,41 @@ class FabricStore:
         self._initialized = True
         logger.info("FabricStore ready (%d fabrics)", len(self._cache))
 
-    def _migrate_json_if_needed(self) -> None:
+    def _load_json_fabrics(self) -> List[Dict[str, Any]]:
         if not os.path.exists(FABRICS_JSON):
+            return []
+        try:
+            with open(FABRICS_JSON, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return [f for f in data if isinstance(f, dict) and f.get("id")]
+            if isinstance(data, dict) and isinstance(data.get("fabrics"), list):
+                return [f for f in data["fabrics"] if isinstance(f, dict) and f.get("id")]
+        except Exception as exc:
+            logger.warning("Could not read fabrics.json: %s", exc)
+        return []
+
+    def _migrate_json_if_needed(self) -> None:
+        """Upsert any fabrics.json entries missing from the DB.
+
+        Previously this bailed when DB count > 0, which left Release 2.0
+        fabrics that only existed in JSON invisible to fabric_store.get —
+        ontology discovery then fell through to vector-document LLM
+        extraction (Record / Dataset / Medication).
+        """
+        fabrics = self._load_json_fabrics()
+        if not fabrics:
             return
         session = get_session_factory()()
         try:
-            count = session.query(FabricRecord).count()
-            if count > 0:
+            existing = {r.id for r in session.query(FabricRecord.id).all()}
+            missing = [f for f in fabrics if f.get("id") not in existing]
+            if not missing:
                 return
-            with open(FABRICS_JSON, "r", encoding="utf-8") as f:
-                fabrics = json.load(f)
-            for fab in fabrics:
+            for fab in missing:
                 self._upsert_record(session, fab)
             session.commit()
-            logger.info("Migrated %d fabrics from JSON to database", len(fabrics))
+            logger.info("Migrated %d missing fabrics from JSON to database", len(missing))
         except Exception as exc:
             session.rollback()
             logger.warning("JSON migration skipped: %s", exc)
@@ -141,7 +162,18 @@ class FabricStore:
         cached = next((f for f in self._cache if f.get("id") == fabric_id), None)
         if cached and owner_id and cached.get("owner_id") != owner_id:
             return None
-        return cached
+        if cached:
+            return cached
+        # Last resort: fabrics.json may still hold Release 2.0 rows not yet in DB.
+        for fab in self._load_json_fabrics():
+            if fab.get("id") != fabric_id:
+                continue
+            if owner_id and fab.get("owner_id") and fab.get("owner_id") != owner_id:
+                return None
+            if owner_id and not fab.get("owner_id"):
+                return None
+            return sanitize_for_json(fab)
+        return None
 
     def save(self, fabric: Dict[str, Any]) -> Dict[str, Any]:
         fabric = sanitize_for_json(fabric)

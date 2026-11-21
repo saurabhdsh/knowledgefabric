@@ -18,6 +18,13 @@ function formatKnowledgeApiError(data: unknown, fallback: string): string {
   if (!data || typeof data !== 'object') return fallback;
   const d = data as Record<string, unknown>;
   if (typeof d.detail === 'string') return d.detail;
+  if (d.detail && typeof d.detail === 'object' && !Array.isArray(d.detail)) {
+    const detail = d.detail as Record<string, unknown>;
+    if (typeof detail.message === 'string') {
+      const stage = detail.stage ? ` (stage: ${detail.stage})` : '';
+      return `${detail.message}${stage}`;
+    }
+  }
   if (Array.isArray(d.detail)) {
     return d.detail
       .map((item: unknown) => {
@@ -464,7 +471,11 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
         requestAnimationFrame(tick);
       });
 
-    const runCreationProgressAndComplete = async (createFabricRequest: () => Promise<string>) => {
+    const runCreationProgressAndComplete = async (
+      createFabricRequest: () => Promise<
+        string | { fabricId: string; rowsImported?: number; rowsInSource?: number }
+      >
+    ) => {
       try {
         const creationPromise = createFabricRequest();
 
@@ -478,13 +489,20 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
         updateProgressStepStatus(finalStep, 'processing');
         await animateStep(finalStep, 1400, 85);
 
-        const fabricId = await creationPromise;
+        const created = await creationPromise;
+        const fabricId = typeof created === 'string' ? created : created.fabricId;
         await animateStep(finalStep, 300, 100);
         updateProgressStepStatus(finalStep, 'completed');
         setCreationOverallProgress(100);
 
+        const rowNote =
+          typeof created !== 'string' && created.rowsImported != null
+            ? created.rowsInSource != null && created.rowsInSource !== created.rowsImported
+              ? ` Imported ${Number(created.rowsImported).toLocaleString()} of ${Number(created.rowsInSource).toLocaleString()} source rows.`
+              : ` Imported ${Number(created.rowsImported).toLocaleString()} rows.`
+            : '';
         setConnectionStatus('success');
-        setConnectionMessage(`Knowledge fabric created successfully! Fabric ID: ${fabricId}`);
+        setConnectionMessage(`Knowledge fabric created successfully! Fabric ID: ${fabricId}.${rowNote}`);
         setTimeout(() => {
           setShowCreationProgress(false);
           onComplete(fabricId);
@@ -532,7 +550,11 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
             )
           );
         }
-        return result.data.source_id;
+        return {
+          fabricId: result.data.source_id,
+          rowsImported: result.data.rows_imported,
+          rowsInSource: result.data.rows_in_source,
+        };
       });
       return;
     }
@@ -571,7 +593,11 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
       if (!fabricId) {
         throw new Error('Fabric created but no fabric id was returned by the API.');
       }
-      return fabricId;
+      return {
+        fabricId,
+        rowsImported: result.data.rows_imported,
+        rowsInSource: result.data.rows_in_source,
+      };
     });
   };
 

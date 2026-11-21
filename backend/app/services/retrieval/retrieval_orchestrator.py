@@ -39,10 +39,24 @@ class RetrievalOrchestrator:
         version_id = fabric.get("approved_ontology_version_id")
 
         trace: List[Dict[str, Any]] = []
-        chunks = vector_service.search_similar_chunks(query, fabric_id, top_k=top_k)
+        from app.services.retrieval.hybrid_ranker import fuse_and_rerank
+
+        fetch_k = 0 if (retrieve_all or top_k <= 0) else max(top_k * 3, top_k)
+        vector_chunks = vector_service.search_similar_chunks(query, fabric_id, top_k=fetch_k if fetch_k else 0)
+        keyword_chunks: List[Dict[str, Any]] = []
+        if not retrieve_all:
+            from app.services.fabric_pipeline.tabular_query import _candidate_tokens
+
+            for token in _candidate_tokens(query)[0][:4]:
+                keyword_chunks.extend(vector_service.find_chunks_containing(fabric_id, token, limit=4))
+            chunks = fuse_and_rerank(query, vector_chunks, keyword_chunks, top_k=max(1, top_k))
+        else:
+            chunks = vector_chunks
         trace.append({
-            "stage": "vector_search",
-            "count": len(chunks),
+            "stage": "hybrid_search",
+            "vector": len(vector_chunks),
+            "keyword": len(keyword_chunks),
+            "kept": len(chunks),
             "retrieve_all": bool(retrieve_all or top_k <= 0),
             "requested_top_k": top_k,
         })
@@ -95,8 +109,10 @@ class RetrievalOrchestrator:
         summary = retrieval.get("ontology_summary")
         if summary:
             parts.append(f"Domain ontology (approved): {summary}")
-        for path in retrieval.get("graph_context", {}).get("paths") or []:
-            parts.append(f"Graph path from {path.get('root')}: {path.get('edge_count')} related edges")
+        facts = retrieval.get("graph_context", {}).get("facts") or []
+        if facts:
+            parts.append("Graph facts:")
+            parts.extend(f"- {fact}" for fact in facts[:12])
         for ent in retrieval.get("entities") or []:
             parts.append(f"Linked entity: {ent.get('label')} ({ent.get('normalized_name')})")
         return "\n".join(parts)
@@ -125,25 +141,61 @@ class RetrievalOrchestrator:
     ) -> List[Dict[str, Any]]:
         if not graph_context.get("nodes"):
             return chunks
+        facts = self.graph_facts(graph_context, entities)
+        graph_context["facts"] = facts
         graph_summary = {
             "rank": 0,
-            "content": self._graph_summary_text(graph_context, entities),
+            "content": "Graph facts:\n" + "\n".join(f"- {f}" for f in facts),
             "similarity_score": 0.0,
-            "metadata": {"source": "graph_context", "type": "graph_expansion"},
+            "rerank_score": 0.9 if facts else 0.0,
+            "metadata": {"source": "graph_context", "type": "graph_facts", "fact_count": len(facts)},
         }
         return [graph_summary] + chunks
 
-    def _graph_summary_text(
+    def graph_facts(
         self,
         graph_context: Dict[str, Any],
         entities: List[Dict[str, Any]],
-    ) -> str:
-        lines = ["Related knowledge graph context:"]
+    ) -> List[str]:
+        """Turn expanded nodes/edges into readable facts (values, not type names only)."""
+        by_id = {n.get("id"): n for n in (graph_context.get("nodes") or []) if n.get("id")}
         for ent in entities:
-            lines.append(f"- Entity: {ent.get('label')}")
+            if ent.get("id") and ent["id"] not in by_id:
+                by_id[ent["id"]] = ent
+        facts: List[str] = []
         for edge in graph_context.get("edges") or []:
-            lines.append(f"- Relationship: {edge.get('relationship_type')}")
-        return "\n".join(lines)
+            src = by_id.get(edge.get("source")) or {}
+            tgt = by_id.get(edge.get("target")) or {}
+            rel = edge.get("relationship_type") or "related_to"
+            conf = edge.get("confidence")
+            conf_txt = f" (confidence {float(conf):.2f})" if isinstance(conf, (int, float)) else ""
+            facts.append(
+                f"{self._node_fact(src)} —{rel}→ {self._node_fact(tgt)}{conf_txt}"
+            )
+            if len(facts) >= 16:
+                break
+        if not facts:
+            for node in list(by_id.values())[:8]:
+                facts.append(self._node_fact(node))
+        return facts
+
+    def _node_fact(self, node: Dict[str, Any]) -> str:
+        if not node:
+            return "unknown"
+        label = node.get("label") or node.get("normalized_name") or node.get("id") or "entity"
+        props = node.get("properties") or {}
+        interesting = []
+        for key, value in list(props.items())[:6]:
+            if key in ("node_kind", "instance_id") or value in (None, "", [], {}):
+                continue
+            text = str(value)
+            if len(text) > 80:
+                text = text[:77] + "…"
+            interesting.append(f"{key}={text}")
+        table = node.get("source_table")
+        prefix = f"{table}." if table else ""
+        detail = "; ".join(interesting)
+        return f"{prefix}{label}" + (f" [{detail}]" if detail else "")
 
     def _ontology_summary(self, fabric: Dict[str, Any]) -> Optional[str]:
         version_id = fabric.get("approved_ontology_version_id")

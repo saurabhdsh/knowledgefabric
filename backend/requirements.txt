@@ -1,6 +1,9 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 chromadb==0.4.15
+# Used directly by app/services/embedding_service.py (also chromadb dependencies).
+onnxruntime>=1.14.1
+tokenizers>=0.13.2
 sentence-transformers==2.2.2
 pypdf2==3.0.1
 python-multipart==0.0.6
@@ -33,6 +36,8 @@ pytest==7.4.3
 python-docx==1.1.0
 Pillow>=10.0.0
 pytesseract>=0.3.10
+# Layout-aware PDF parsing (headings, tables, page numbers) and page rendering for OCR.
+pdfplumber==0.11.4
 databricks-sql-connector>=3.3.0
 snowflake-connector-python>=3.11.0
 httpx==0.27.2

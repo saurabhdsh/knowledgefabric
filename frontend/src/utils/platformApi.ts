@@ -39,11 +39,18 @@ export const platformApi = {
     return parseJson<PlatformJob[]>(res);
   },
 
-  async discoverOntology(fabricId: string, useLlm = true): Promise<{ job_id: string }> {
-    const res = await apiRequest(`${PLATFORM_BASE}/fabrics/${fabricId}/discover-ontology?use_llm=${useLlm}`, {
-      method: 'POST',
-    });
-    return parseJson<{ job_id: string }>(res);
+  async discoverOntology(
+    fabricId: string,
+    useLlm = true,
+    projectId?: string,
+  ): Promise<{ job_id: string; project_id?: string }> {
+    const qs = new URLSearchParams({ use_llm: String(useLlm) });
+    if (projectId) qs.set('project_id', projectId);
+    const res = await apiRequest(
+      `${PLATFORM_BASE}/fabrics/${fabricId}/discover-ontology?${qs.toString()}`,
+      { method: 'POST' },
+    );
+    return parseJson<{ job_id: string; project_id?: string }>(res);
   },
 
   async approveOntologyVersion(

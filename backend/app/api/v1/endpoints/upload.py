@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from typing import List, Optional
+import os
 import uuid
 from datetime import datetime
 
@@ -51,7 +52,9 @@ async def upload_files(
                 results.append({
                     "file": file.filename,
                     "status": "success",
-                    "file_path": file_path
+                    "file_path": file_path,
+                    # Pass this back when creating a fabric so it binds to exactly this upload.
+                    "stored_name": os.path.basename(file_path),
                 })
                 
             except Exception as e:

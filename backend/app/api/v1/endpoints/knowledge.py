@@ -2,6 +2,7 @@ import os
 import uuid
 from typing import List, Dict, Any, Optional, Tuple, Set
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Body, Request
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel
 from pymongo import MongoClient
@@ -41,6 +42,19 @@ from app.services.analytics.tabular_analytics import (
 )
 from app.services import agent_memory_service
 from app.utils.json_sanitize import sanitize_for_json
+from app.services.upload_registry import UploadNotFoundError, upload_registry
+from app.services.fabric_pipeline.pipelines import (
+    delete_fabric_artifacts,
+    refresh_composite_pipeline,
+    run_composite_pipeline,
+    run_document_pipeline,
+    run_tabular_pipeline,
+)
+from app.services.fabric_pipeline.runner import PipelineError, load_manifest, load_profile
+from app.services.fabric_pipeline.query import answer_query, is_v2_fabric
+from app.services.fabric_pipeline.graph import build_profile_graph
+from app.services.fabric_pipeline.tabular_profiler import split_rows_by_table
+from app.services.fabric_pipeline.table_store import table_store
 import time
 import json
 import pandas as pd
@@ -220,6 +234,105 @@ def persist_fabric(fabric_data: Dict[str, Any]) -> None:
     fabric_store.save(fabric_data)
 
 
+def _pipeline_http_error(exc: BaseException) -> HTTPException:
+    if isinstance(exc, UploadNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, PipelineError):
+        detail: Dict[str, Any] = {"message": str(exc), "fabric_id": exc.fabric_id, "stage": exc.stage}
+        return HTTPException(status_code=422, detail=detail)
+    if isinstance(exc, HTTPException):
+        return exc
+    return HTTPException(status_code=500, detail=str(exc) or type(exc).__name__)
+
+
+def _v2_llm_callable(llm_provider: str, fastapi_request: Optional[Request]):
+    """Build the LLM callable used by the Release 2.0 query router, or None."""
+    is_valid, _message = api_key_service.validate_provider(llm_provider)
+    if not is_valid or llm_provider not in ("openai", "bedrock"):
+        return None
+
+    def _call(messages, max_tokens, temperature):
+        api_key = _resolve_llm_key(fastapi_request) if llm_provider == "openai" else None
+        return llm_router.chat_completion(
+            provider=llm_provider,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            api_key=api_key,
+        )
+
+    return _call
+
+
+def _tables_from_fetched_rows(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Group fetched rows into tables for the tabular pipeline.
+
+    Prefers ``__source_collection`` (CSV / Mongo multi-collection). Falls back to
+    ``record_type`` (seeded Cost of Care / reference fabrics), pluralising the
+    name so it matches the schema the seed already publishes.
+    """
+    if any(r.get("__source_collection") for r in rows):
+        return split_rows_by_table(rows)
+    if any(r.get("record_type") for r in rows):
+        plural = {
+            "member": "members", "plan": "plans", "provider": "providers",
+            "claim": "claims", "diagnosis": "diagnoses", "medication": "medications",
+            "care_plan": "care_plans", "care_manager": "care_managers",
+            "cost_driver": "cost_drivers", "care_event": "care_events", "sdoh": "sdoh",
+            "contract_term": "contract_terms", "prior_auth_rule": "prior_auth_rules",
+        }
+        tables: Dict[str, List[Dict[str, Any]]] = {}
+        for row in rows:
+            rt = str(row.get("record_type") or "records")
+            name = plural.get(rt, rt if rt.endswith("s") else f"{rt}s")
+            item = {k: v for k, v in row.items() if k != "record_type"}
+            item["__source_collection"] = name
+            tables.setdefault(name, []).append(item)
+        return tables
+    return split_rows_by_table(rows, default_table="records")
+
+
+def _source_counts_from_fetched(
+    fetched: Dict[str, Any], tables: Dict[str, List[Dict[str, Any]]]
+) -> Dict[str, Optional[int]]:
+    """Per-table source sizes reported by the fetcher, falling back to imported counts."""
+    info = fetched.get("connection_info") or {}
+    counts: Dict[str, Optional[int]] = {}
+    # Explicit map from live connectors.
+    explicit = info.get("source_row_counts") or {}
+    if isinstance(explicit, dict):
+        for name, value in explicit.items():
+            try:
+                counts[str(name)] = None if value is None else int(value)
+            except (TypeError, ValueError):
+                counts[str(name)] = None
+    for entry in info.get("per_collection") or []:
+        if not isinstance(entry, dict) or not entry.get("name"):
+            continue
+        name = str(entry["name"])
+        if name in counts:
+            continue
+        raw = entry.get("rows_in_source", entry.get("documents_imported"))
+        try:
+            counts[name] = None if raw is None else int(raw)
+        except (TypeError, ValueError):
+            counts[name] = None
+    # CSV / synthetic: every imported row is every source row.
+    for name, rows in tables.items():
+        counts.setdefault(name, len(rows))
+    return counts
+
+
+def _delete_fabric_fully(fabric_id: str) -> bool:
+    """Remove the fabric record, its vectors, its table store and its manifest."""
+    try:
+        vector_service.delete_source_documents(fabric_id)
+    except Exception as exc:
+        print(f"Vector cleanup for {fabric_id}: {exc}")
+    delete_fabric_artifacts(fabric_id)
+    return bool(fabric_store.delete(fabric_id))
+
+
 def _remember_query(
     fabric_id: str,
     query: str,
@@ -249,20 +362,41 @@ def _remember_query(
 
 
 def _enqueue_post_fabric_jobs(fabric_id: str, fabric_data: Dict[str, Any]) -> None:
-    """Auto-trigger ontology discovery when a fabric becomes ready."""
+    """Auto-trigger ontology discovery when a fabric becomes ready.
+
+    Composites (Phase 3) reuse a shared source ontology project when possible
+    so all origins sit under one project; discovery still runs on the merged
+    measured profile (cross-source FKs included).
+    """
     try:
-        project_id = fabric_data.get("ontology_project_id") or f"proj_{fabric_id[-12:]}"
+        project_id = fabric_data.get("ontology_project_id")
+        project_name = f"Ontology for {fabric_data.get('name', fabric_id)}"
+        job_config: Dict[str, Any] = {"use_llm": True}
+
+        if str(fabric_data.get("source_type") or "") == "composite":
+            from app.services.fabric_pipeline.composite_ontology import choose_shared_ontology_project
+
+            sources = []
+            for sid in fabric_data.get("source_fabric_ids") or []:
+                src = fabric_store.get(str(sid))
+                if src:
+                    sources.append(src)
+            choice = choose_shared_ontology_project(fabric_data, sources)
+            project_id = choice["project_id"]
+            project_name = choice["project_name"]
+            fabric_data["shared_ontology"] = {
+                **(fabric_data.get("shared_ontology") or {}),
+                **choice,
+            }
+            job_config["shared_ontology"] = choice
+            job_config["imported_versions"] = choice.get("imported_versions") or []
+
+        project_id = project_id or f"proj_{fabric_id[-12:]}"
         fabric_data["ontology_project_id"] = project_id
         fabric_store.save(fabric_data)
-        job_service.enqueue(
-            "ontology_discovery",
-            fabric_id,
-            {
-                "project_id": project_id,
-                "project_name": f"Ontology for {fabric_data.get('name', fabric_id)}",
-                "use_llm": True,
-            },
-        )
+        job_config["project_id"] = project_id
+        job_config["project_name"] = project_name
+        job_service.enqueue("ontology_discovery", fabric_id, job_config)
     except Exception as exc:
         print(f"Post-fabric job enqueue skipped: {exc}")
 
@@ -363,7 +497,21 @@ def _is_duplicate_count_query(query: str) -> bool:
 
 
 def _load_fabric_row_documents(source_id: str) -> Tuple[List[Any], List[Any], List[Dict[str, str]]]:
-    """Load indexed row chunks + parsed row dicts for a fabric (full index, not 5k cap)."""
+    """Load all rows for a fabric.
+
+    Release 2.0 fabrics read the table store (exact rows). Older fabrics fall
+    back to parsing indexed row chunks.
+    """
+    fabric = fabric_store.get(source_id) or {}
+    profile = load_profile(source_id) if table_store.exists(source_id) else None
+    if profile:
+        try:
+            rows = table_store.original_rows(source_id, profile)
+            documents = [""] * len(rows)
+            metadatas = [{"source_collection": r.get("__source_collection"), "chunk_type": "row"} for r in rows]
+            return documents, metadatas, [{str(k): "" if v is None else str(v) for k, v in r.items()} for r in rows]
+        except Exception as exc:
+            print(f"Table-store row load failed for {source_id}: {exc}")
     try:
         chunks = vector_service.list_source_chunks(source_id, limit=0)
     except Exception as exc:
@@ -753,9 +901,16 @@ def _fetch_mongodb_records(connection_data: Dict[str, Any]) -> Dict[str, Any]:
                 for key in row.keys():
                     if key != "__source_collection" and key not in coll_columns:
                         coll_columns.append(key)
+            try:
+                source_total = int(collection.count_documents(query or {}))
+            except Exception:
+                source_total = None
             per_collection.append({
                 "name": coll_name,
                 "documents_imported": len(rows),
+                "rows_imported": len(rows),
+                "rows_in_source": source_total,
+                "is_sample": source_total is not None and source_total > len(rows),
                 "columns": coll_columns,
             })
     finally:
@@ -791,6 +946,12 @@ def _fetch_mongodb_records(connection_data: Dict[str, Any]) -> Dict[str, Any]:
             "collection": collection_names[0],
             "collections": collection_names,
             "documents_imported": len(processed_rows),
+            "rows_imported": len(processed_rows),
+            "rows_in_source": sum(
+                (e.get("rows_in_source") or e.get("documents_imported") or 0) for e in per_collection
+            ),
+            "is_sample": any(e.get("is_sample") for e in per_collection),
+            "source_row_counts": {e["name"]: e.get("rows_in_source") for e in per_collection},
             "per_collection": per_collection,
             "limit_per_collection": per_collection_limit,
         },
@@ -907,11 +1068,16 @@ def _fetch_databricks_records(connection_data: Dict[str, Any]) -> Dict[str, Any]
             data_array.extend(chunk_payload.get("data_array") or [])
             next_chunk = chunk_payload.get("next_chunk_index")
 
-    processed_rows = [dict(zip(columns, row)) for row in data_array]
+    table_key = table_name or "databricks_query"
+    processed_rows = []
+    for row in data_array:
+        item = dict(zip(columns, row))
+        item["__source_collection"] = table_key
+        processed_rows.append(item)
 
     return {
         "rows": processed_rows,
-        "source_name": table_name or "databricks_query",
+        "source_name": table_key,
         "fabric_name": f"{safe_catalog}_{safe_schema}_{safe_table}",
         "connection_info": {
             "type": "databricks",
@@ -920,6 +1086,11 @@ def _fetch_databricks_records(connection_data: Dict[str, Any]) -> Dict[str, Any]
             "table": table_name,
             "warehouse_id": warehouse_id,
             "rows_imported": len(processed_rows),
+            "rows_in_source": len(processed_rows),
+            "is_sample": bool(custom_statement) is False and limit and len(processed_rows) >= limit,
+            "source_row_counts": {table_key: None if (custom_statement or not table_name) else len(processed_rows)},
+            "collections": [table_key],
+            "limit_per_collection": limit,
         },
         "tags": ["databricks", catalog, schema, safe_table],
         "description": f"Knowledge fabric created from Databricks {catalog}.{schema}.{table_name or 'query'}",
@@ -971,11 +1142,16 @@ def _fetch_snowflake_records(connection_data: Dict[str, Any]) -> Dict[str, Any]:
     finally:
         connection.close()
 
-    processed_rows = [dict(zip(columns, row)) for row in rows]
+    table_key = table_name or "snowflake_query"
+    processed_rows = []
+    for row in rows:
+        item = dict(zip(columns, row))
+        item["__source_collection"] = table_key
+        processed_rows.append(item)
 
     return {
         "rows": processed_rows,
-        "source_name": table_name or "snowflake_query",
+        "source_name": table_key,
         "fabric_name": f"{safe_database}_{safe_schema}_{safe_table}",
         "connection_info": {
             "type": "snowflake",
@@ -983,7 +1159,12 @@ def _fetch_snowflake_records(connection_data: Dict[str, Any]) -> Dict[str, Any]:
             "database": database,
             "schema": schema,
             "table": table_name,
-            "rows_imported": len(processed_rows)
+            "rows_imported": len(processed_rows),
+            "rows_in_source": len(processed_rows),
+            "is_sample": bool(query) is False and limit and len(processed_rows) >= limit,
+            "source_row_counts": {table_key: None if (query or not table_name) else len(processed_rows)},
+            "collections": [table_key],
+            "limit_per_collection": limit,
         },
         "tags": ["snowflake", database, schema, safe_table],
         "description": f"Knowledge fabric created from Snowflake {database}.{schema}.{table_name or 'query'}"
@@ -1015,25 +1196,50 @@ def _fetch_sql_records(connection_data: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="Unsupported database type")
 
     query = db_conn.query or f"SELECT * FROM {db_conn.table_name}"
+    source_total = None
     try:
+        if db_conn.table_name and not (db_conn.query or "").strip():
+            try:
+                count_df = pd.read_sql_query(
+                    f"SELECT COUNT(*) AS c FROM {db_conn.table_name}", conn
+                )
+                source_total = int(count_df.iloc[0]["c"])
+            except Exception:
+                source_total = None
         df = pd.read_sql_query(query, conn)
     finally:
         conn.close()
 
-    rows = df.to_dict('records')
+    table = db_conn.table_name or "records"
+    rows = []
+    for r in df.to_dict('records'):
+        item = dict(r)
+        item["__source_collection"] = table
+        rows.append(item)
     return {
         "rows": rows,
-        "source_name": db_conn.table_name,
-        "fabric_name": f"{db_conn.database}_{db_conn.table_name}",
+        "source_name": table,
+        "fabric_name": f"{db_conn.database}_{table}",
         "connection_info": {
             "type": db_conn.database_type,
             "host": db_conn.host,
             "database": db_conn.database,
-            "table": db_conn.table_name,
-            "rows_imported": len(rows)
+            "table": table,
+            "rows_imported": len(rows),
+            "rows_in_source": source_total if source_total is not None else len(rows),
+            "is_sample": source_total is not None and source_total > len(rows),
+            "source_row_counts": {table: source_total if source_total is not None else len(rows)},
+            "collections": [table],
+            "per_collection": [{
+                "name": table,
+                "documents_imported": len(rows),
+                "rows_imported": len(rows),
+                "rows_in_source": source_total if source_total is not None else len(rows),
+                "is_sample": source_total is not None and source_total > len(rows),
+            }],
         },
-        "tags": [db_conn.database, db_conn.database_type, db_conn.table_name],
-        "description": f"Knowledge fabric created from {db_conn.database_type} {db_conn.database}.{db_conn.table_name}"
+        "tags": [db_conn.database, db_conn.database_type, table],
+        "description": f"Knowledge fabric created from {db_conn.database_type} {db_conn.database}.{table}"
     }
 
 
@@ -1177,106 +1383,85 @@ def _finalize_database_fabric_from_fetch(
     guardrails: Optional[Dict[str, Any]] = None,
     input_mode: str = "live",
 ) -> APIResponse:
-    """Shared persistence path for live DB connections and CSV uploads."""
+    """Shared Release 2.0 persistence path for live DB connections and CSV uploads.
+
+    ``train_model`` is accepted for API compatibility and ignored: indexing is
+    the real build, not a simulated training sleep.
+    """
+    del train_model  # retired — indexing is the build
 
     rows = fetched.get("rows") or []
     if not rows:
         raise HTTPException(status_code=400, detail="No data found for the provided connection/query")
 
-    source_name = fetched["source_name"]
     fabric_name = fetched["fabric_name"]
-    documents = document_service.process_database_data(rows, source_name)
     fabric_id = f"fabric_{_safe_identifier(fabric_name, 'db_fabric')}_{int(time.time())}"
+    tables = _tables_from_fetched_rows(rows)
+    source_counts = _source_counts_from_fetched(fetched, tables)
+    notes = list(fetched.get("notes") or [])
+    limit = (fetched.get("connection_info") or {}).get("limit_per_collection")
+    if limit and any(
+        (source_counts.get(n) or 0) > len(tables.get(n) or []) for n in tables
+    ):
+        notes.append(
+            f"Import capped at {limit} rows per collection/table; "
+            f"aggregates run over the imported sample only."
+        )
 
-    print(f"Storing {len(documents)} documents in vector database for {connection_type} ({input_mode})...")
-    vector_service.add_documents(documents, fabric_id)
-
-    merged_tags = list(fetched["tags"])
     weave_domain = normalize_fabric_kind(weave_domain)
+    merged_tags = list(fetched.get("tags") or [])
     merged_tags.extend(domain_tags_for_kind(weave_domain))
 
-    fabric_data: Dict[str, Any] = {
+    record: Dict[str, Any] = {
         "id": fabric_id,
         "name": fabric_name,
         "source_type": "database",
-        "description": fetched["description"],
+        "description": fetched.get("description") or fabric_name,
         "tags": merged_tags,
         "weave_domain": weave_domain,
-        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "document_count": len(documents),
-        "status": "active",
-        "model_status": "not_trained",
-        "last_training": None,
-        "total_chunks": len(documents),
-        "connection_info": fetched["connection_info"],
+        "fabric_kind_label": fabric_kind_label(weave_domain),
+        "connection_info": dict(fetched.get("connection_info") or {}),
         "database_input_mode": input_mode,
     }
     if connector_profile:
-        fabric_data["connector_profile"] = connector_profile
+        record["connector_profile"] = connector_profile
     if guardrails:
-        fabric_data["guardrails"] = guardrails
+        record["guardrails"] = guardrails
 
-    if rows:
-        sample = sanitize_for_json(rows[:10])
-        columns = list(rows[0].keys()) if rows else []
-        fabric_data.setdefault("connection_info", {}).update({
-            "columns": columns,
-            "sample_rows": sample,
-        })
+    try:
+        fabric_data = run_tabular_pipeline(
+            fabric_id=fabric_id,
+            tables=tables,
+            record=record,
+            source_row_counts=source_counts,
+            inputs={
+                "connection_type": connection_type,
+                "input_mode": input_mode,
+                "source_name": fetched.get("source_name"),
+            },
+            notes=notes,
+        )
+    except PipelineError as exc:
+        raise _pipeline_http_error(exc) from exc
 
-    fabric_data = sanitize_for_json(fabric_data)
-
-    if train_model and documents:
-        try:
-            print("Starting model training...")
-            training_result = training_service.start_training(
-                source_ids=[fabric_id],
-                model_name=f"database_knowledge_model_{fabric_id}",
-            )
-            print("Model training started")
-            model_id = training_result.get("model_id")
-            if model_id:
-                fabric_data["model_id"] = model_id
-                fabric_data["model_status"] = "training"
-                fabric_data["training_started"] = time.strftime("%Y-%m-%d %H:%M:%S")
-
-                def update_model_status():
-                    import time as time_mod
-                    time_mod.sleep(12)
-                    fabric_data["model_status"] = "trained"
-                    fabric_data["last_training"] = time.strftime("%Y-%m-%d %H:%M:%S")
-                    persist_fabric(fabric_data)
-
-                import threading
-                status_thread = threading.Thread(target=update_model_status)
-                status_thread.daemon = True
-                status_thread.start()
-            else:
-                fabric_data["model_status"] = "failed"
-        except Exception as e:
-            print(f"Error starting training: {e}")
-            fabric_data["model_status"] = "failed"
-
-    persist_fabric(fabric_data)
     _enqueue_post_fabric_jobs(fabric_id, fabric_data)
-
-    print(f"=== Database Knowledge Fabric Creation Complete ({input_mode}) ===")
-    print(f"Fabric ID: {fabric_id}")
-    print(f"Total chunks: {len(documents)}")
-    print(f"Connection type: {connection_type}")
-
+    conn = fabric_data.get("connection_info") or {}
     return APIResponse(
         success=True,
         message="Database knowledge fabric created successfully",
         data={
             "source_id": fabric_id,
             "fabric_name": fabric_data["name"],
-            "total_chunks": len(documents),
-            "model_training": train_model,
+            "total_chunks": fabric_data.get("total_chunks", 0),
+            "model_training": False,
+            "model_status": fabric_data.get("model_status"),
             "connection_type": connection_type,
-            "rows_imported": len(rows),
-            "status": "active",
+            "rows_imported": conn.get("rows_imported", fabric_data.get("row_count")),
+            "rows_in_source": conn.get("rows_in_source", fabric_data.get("rows_in_source")),
+            "is_sample": conn.get("is_sample", fabric_data.get("is_sample")),
+            "table_count": fabric_data.get("table_count"),
+            "status": fabric_data.get("status"),
+            "pipeline": fabric_data.get("pipeline"),
             "input_mode": input_mode,
         },
     )
@@ -1485,109 +1670,17 @@ def _infer_logical_collections_from_columns(
     *,
     rows_imported: int = 0,
 ) -> List[Dict[str, Any]]:
-    """Infer schema nodes for CSV / denormalized ITSM-CMDB extracts."""
+    """Infer schema nodes for CSV / denormalized extracts via Phase 2 domain packs."""
+    from app.services.domain_packs import infer_collections_from_packs
+
     cols = [str(c) for c in columns if str(c).strip()]
-    lower = {c.lower() for c in cols}
-    out: List[Dict[str, Any]] = []
-
-    def add(name: str, relevant: List[str]) -> None:
-        out.append(
-            {
-                "name": name,
-                "documents_imported": int(rows_imported or 0),
-                "columns": relevant[:40] or cols[:40],
-            }
-        )
-
-    if {"incident_number", "incident_id"} & lower or "short_description" in lower:
-        add(
-            "incidents",
-            [c for c in cols if c.lower().startswith("incident") or c.lower() in {
-                "short_description", "description", "priority", "state", "category",
-                "subcategory", "urgency", "impact", "opened_at", "resolved_at",
-                "close_code", "close_notes", "sla_id", "sla_name", "sla_breach_status",
-                "business_rule_text", "relationship_summary",
-                "cmdb_ci_id", "business_service_id", "assignment_group_id",
-                "caller_user_id", "related_problem_id", "related_change_id",
-            } or c.lower().endswith("_id")],
-        )
-    if any(c.startswith("cmdb_ci") or c in {"ci_id", "ci_name", "ci_class"} for c in lower):
-        add("cmdb_cis", [c for c in cols if "cmdb_ci" in c.lower() or c.lower().startswith("ci_")])
-    if {"business_service_id", "business_service", "service_id", "service_name"} & lower:
-        add(
-            "business_services",
-            [c for c in cols if "service" in c.lower()],
-        )
-    if {"assignment_group_id", "assignment_group", "group_id"} & lower:
-        add(
-            "assignment_groups",
-            [c for c in cols if "assignment_group" in c.lower() or c.lower() in {"group_id", "group_name"}],
-        )
-    if {"related_problem_id", "problem_id"} & lower:
-        add("problems", [c for c in cols if "problem" in c.lower()])
-    if {"related_change_id", "change_id", "change_type"} & lower:
-        add("change_requests", [c for c in cols if "change" in c.lower()])
-    if {"caller_user_id", "caller_name", "user_id"} & lower:
-        add("users", [c for c in cols if c.lower().startswith("caller") or c.lower().startswith("user")])
-
-    # Cost-of-care / CSNP-style extracts
-    if {"member_id", "member_name"} & lower or (
-        "member_id" in lower and {"risk_tier", "ytd_total_cost", "primary_condition"} & lower
-    ):
-        add(
-            "members",
-            [c for c in cols if c.lower().startswith("member") or c.lower() in {
-                "dob", "age", "gender", "state", "county", "plan_id", "risk_tier",
-                "primary_condition", "icd10", "eligibility_status", "enrollment_status",
-                "ytd_medical_cost", "ytd_rx_cost", "ytd_total_cost", "pmpm_cost",
-                "er_visits_12m", "inpatient_admits_12m", "care_manager_id",
-                "pcp_provider_id", "specialist_provider_id", "case_narrative", "agent_focus",
-            }],
-        )
-    if {"claim_id"} & lower or (
-        {"allowed_amount", "paid_amount"} & lower
-        and any("claim" in c for c in lower)
-    ):
-        add(
-            "claims",
-            [c for c in cols if "claim" in c.lower() or c.lower() in {
-                "member_id", "plan_id", "provider_id", "service_date", "claim_type",
-                "procedure_code", "diagnosis_code", "allowed_amount", "paid_amount",
-                "claim_status", "cost_driver",
-            }],
-        )
-    if {"plan_id", "plan_name", "coverage_type"} & lower:
-        add("plans", [c for c in cols if "plan" in c.lower() or c.lower() in {"coverage_type", "network_id", "pmpm"}])
-    if {"provider_id", "provider_name", "npi", "specialty"} & lower:
-        add("providers", [c for c in cols if "provider" in c.lower() or c.lower() in {"npi", "specialty", "network_id"}])
-    if {"diagnosis_id", "icd10", "diagnosis_name"} & lower:
-        add("diagnoses", [c for c in cols if "diagnos" in c.lower() or c.lower() in {"member_id", "icd10", "onset_date", "severity"}])
-    if {"rx_claim_id", "drug_name", "adherence_flag"} & lower:
-        add("medications", [c for c in cols if c.lower() in {
-            "rx_claim_id", "member_id", "drug_name", "ndc", "days_supply", "fill_date",
-            "paid_amount", "adherence_flag", "provider_id",
-        } or "drug" in c.lower() or "rx" in c.lower()])
-    if {"care_plan_id", "interventions", "goals"} & lower:
-        add("care_plans", [c for c in cols if "care_plan" in c.lower() or c.lower() in {
-            "member_id", "care_manager_id", "plan_name", "status", "start_date", "goals",
-            "interventions", "priority",
-        }])
-    if {"care_manager_id", "care_manager_name", "panel"} & lower:
-        add("care_managers", [c for c in cols if "care_manager" in c.lower() or c.lower() in {"panel", "phone"}])
-    if {"cost_driver_id", "driver_category", "annualized_impact"} & lower:
-        add("cost_drivers", [c for c in cols if "cost_driver" in c.lower() or c.lower() in {
-            "member_id", "driver_category", "annualized_impact", "recommendation", "priority",
-        }])
-    if {"sdoh_id", "transportation_barrier", "food_insecurity"} & lower:
-        add("sdoh", [c for c in cols if c.lower().startswith("sdoh") or c.lower() in {
-            "member_id", "transportation_barrier", "food_insecurity", "housing_instability",
-            "social_isolation", "notes",
-        }])
-    if {"care_event_id", "event_type", "event_date"} & lower:
-        add("care_events", [c for c in cols if "event" in c.lower() or c.lower() in {"member_id", "setting", "outcome"}])
-
+    out = infer_collections_from_packs(cols, rows_imported=rows_imported)
     if not out and cols:
-        add("records", cols[:40])
+        out = [{
+            "name": "records",
+            "documents_imported": int(rows_imported or 0),
+            "columns": cols[:40],
+        }]
     return out
 
 
@@ -1606,6 +1699,13 @@ def _parse_row_chunk_fields(content: str) -> Dict[str, str]:
 
 
 def _short_instance_label(collection: str, fields: Dict[str, str], fallback: str) -> str:
+    from app.services.domain_packs import short_instance_label_from_packs
+
+    packed = short_instance_label_from_packs(collection, fields, fallback)
+    if packed:
+        return packed
+
+    # Non-pack domains (pharma compounds / assays) stay as local fallbacks.
     coll = (collection or "").lower()
     preferred: List[str] = []
     if "compound" in coll:
@@ -1614,63 +1714,10 @@ def _short_instance_label(collection: str, fields: Dict[str, str], fallback: str
         preferred = ["name", "target", "category", "assay_id", "_id"]
     elif "observation" in coll:
         preferred = ["compound_id", "assay_id", "dataset_id", "endpoint", "_id"]
-    elif "incident" in coll:
-        preferred = ["incident_number", "incident_id", "short_description", "priority", "_id"]
-    elif "cmdb" in coll or coll in {"cis", "ci"}:
-        preferred = ["cmdb_ci_name", "ci_name", "cmdb_ci_id", "ci_id", "name", "_id"]
-    elif "service" in coll:
-        preferred = ["business_service", "service_name", "business_service_id", "service_id", "name"]
-    elif "assignment" in coll or "group" in coll:
-        preferred = ["assignment_group", "group_name", "assignment_group_id", "group_id"]
-    elif "user" in coll or "caller" in coll:
-        preferred = ["caller_name", "name", "caller_user_id", "user_id", "email"]
-    elif "problem" in coll:
-        preferred = ["related_problem_id", "problem_id", "title", "name"]
-    elif "change" in coll:
-        preferred = ["related_change_id", "change_id", "change_type", "title"]
-    elif "member" in coll:
-        preferred = ["member_name", "member_id", "primary_condition", "risk_tier"]
-    elif "claim" in coll:
-        preferred = ["claim_id", "claim_type", "diagnosis_code", "paid_amount", "member_id"]
-    elif "plan" in coll and "care" not in coll:
-        preferred = ["plan_name", "plan_id", "coverage_type"]
-    elif "provider" in coll:
-        preferred = ["provider_name", "specialty", "provider_id", "npi"]
-    elif "diagnos" in coll:
-        preferred = ["diagnosis_name", "icd10", "diagnosis_id", "member_id"]
-    elif "medication" in coll or coll.startswith("rx"):
-        preferred = ["drug_name", "rx_claim_id", "adherence_flag", "member_id"]
-    elif "care_plan" in coll:
-        preferred = ["plan_name", "care_plan_id", "priority", "member_id"]
-    elif "care_manager" in coll:
-        preferred = ["care_manager_name", "panel", "care_manager_id"]
-    elif "cost_driver" in coll:
-        preferred = ["driver_category", "cost_driver_id", "annualized_impact", "member_id"]
-    elif coll == "sdoh" or "sdoh" in coll:
-        preferred = ["sdoh_id", "member_id", "transportation_barrier"]
-    elif "care_event" in coll or "event" in coll:
-        preferred = ["event_type", "care_event_id", "event_date", "member_id"]
     else:
         preferred = [
-            "member_name",
-            "claim_id",
-            "plan_name",
-            "provider_name",
-            "drug_name",
-            "diagnosis_name",
-            "incident_number",
-            "short_description",
-            "name",
-            "title",
-            "label",
-            "cmdb_ci_name",
-            "business_service",
-            "inchikey",
-            "compound_id",
-            "assay_id",
-            "_id",
+            "name", "title", "label", "inchikey", "compound_id", "assay_id", "_id",
         ]
-
     for key in preferred:
         for fk, fv in fields.items():
             if fk.lower() != key.lower():
@@ -1850,19 +1897,9 @@ def _enrich_database_graph_with_samples(
                 print(f"Fallback sample fetch failed for {coll_name}: {exc}")
                 continue
 
-        cost_of_care_collections = {
-            "members",
-            "claims",
-            "plans",
-            "providers",
-            "diagnoses",
-            "medications",
-            "care_plans",
-            "care_managers",
-            "cost_drivers",
-            "sdoh",
-            "care_events",
-        }
+        from app.services.domain_packs import cost_of_care_collections, id_hints_for
+
+        domain_collections = cost_of_care_collections()
 
         # Only materialize row instances under the primary fact collection once for
         # denormalized single-table CSVs. Multi-collection Cost of Care packs keep
@@ -1870,7 +1907,7 @@ def _enrich_database_graph_with_samples(
         if (
             csv_style
             and coll_name not in {"incidents", "records"}
-            and coll_name not in cost_of_care_collections
+            and coll_name not in domain_collections
             and docs
         ):
             if coll_name not in {"compounds", "assays"}:
@@ -1891,22 +1928,8 @@ def _enrich_database_graph_with_samples(
                 continue
             if file_coll and file_coll != coll_name:
                 continue
-            if not src_coll and not file_coll and coll_name in cost_of_care_collections:
-                # Heuristic: require the collection's natural id column.
-                id_hints = {
-                    "members": ("member_id", "member_name"),
-                    "claims": ("claim_id",),
-                    "plans": ("plan_id", "plan_name"),
-                    "providers": ("provider_id", "provider_name"),
-                    "diagnoses": ("diagnosis_id", "icd10"),
-                    "medications": ("rx_claim_id", "drug_name"),
-                    "care_plans": ("care_plan_id",),
-                    "care_managers": ("care_manager_id", "care_manager_name"),
-                    "cost_drivers": ("cost_driver_id", "driver_category"),
-                    "sdoh": ("sdoh_id",),
-                    "care_events": ("care_event_id", "event_type"),
-                }
-                hints = id_hints.get(coll_name, ())
+            if not src_coll and not file_coll and coll_name in domain_collections:
+                hints = id_hints_for(coll_name)
                 if hints and not any(fields_probe.get(h) for h in hints):
                     continue
             filtered_docs.append(content)
@@ -2528,6 +2551,59 @@ async def get_fabric_kinds():
     )
 
 
+@router.get("/embedding-status", response_model=APIResponse)
+async def get_embedding_status():
+    """Active embedding model and which of the caller's fabrics still need re-indexing."""
+    from app.services.platform.reindex import embedding_status
+
+    status = await run_in_threadpool(embedding_status, user_fabrics())
+    return APIResponse(success=True, message="Embedding status retrieved", data=status)
+
+
+@router.post("/reindex-embeddings", response_model=APIResponse)
+async def reindex_embeddings(request: dict = Body(default={})):
+    """Re-embed the caller's fabrics with the active embedding model (background job).
+
+    Body: ``{"fabric_ids": [...]}`` to limit the run; omit to re-index every
+    fabric of the caller that is not in the active collection.
+    """
+    from app.services.platform.reindex import embedding_status
+
+    owned = {str(f.get("id")) for f in user_fabrics()}
+    requested = [str(x) for x in (request.get("fabric_ids") or []) if str(x) in owned]
+    if not requested:
+        status = await run_in_threadpool(embedding_status, user_fabrics())
+        requested = [r["fabric_id"] for r in status["fabrics"] if r["needs_reindex"]]
+    if not requested:
+        return APIResponse(
+            success=True,
+            message="All fabrics already use the active embedding model",
+            data={"job_id": None, "fabric_ids": []},
+        )
+    job_id = job_service.enqueue(
+        "embedding_reindex",
+        None,
+        {"fabric_ids": requested, "purge_legacy": bool(request.get("purge_legacy", False))},
+    )
+    return APIResponse(
+        success=True,
+        message=f"Re-index enqueued for {len(requested)} fabric(s)",
+        data={"job_id": job_id, "fabric_ids": requested},
+    )
+
+
+@router.get("/{fabric_id}/manifest", response_model=APIResponse)
+async def get_fabric_manifest(fabric_id: str):
+    """Return the Release 2.0 build manifest (stages, checks, profile summary)."""
+    fabric = user_fabric(fabric_id)
+    if not fabric:
+        raise HTTPException(status_code=404, detail="Knowledge fabric not found")
+    manifest = load_manifest(fabric_id)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="No build manifest for this fabric (pre-2.0 or never built)")
+    return APIResponse(success=True, message="Fabric manifest retrieved", data=manifest)
+
+
 @router.get("/{source_id}", response_model=APIResponse)
 async def get_knowledge_source(source_id: str):
     """Get details of a specific knowledge source"""
@@ -2644,230 +2720,96 @@ async def update_fabric_guardrails(fabric_id: str, request: UpdateGuardrailsRequ
 
 @router.delete("/{source_id}")
 async def delete_knowledge_source(source_id: str):
-    """Delete a knowledge source"""
+    """Delete a knowledge source and its Release 2.0 artifacts."""
     try:
-        if fabric_store.delete(source_id):
-            print(f"Source {source_id} deleted successfully")
+        if _delete_fabric_fully(source_id):
             return {"message": "Knowledge source deleted successfully"}
-        print(f"Source {source_id} not found")
         return {"message": "Knowledge source not found"}
     except Exception as e:
-        print(f"Error deleting source: {e}")
         return {"message": f"Failed to delete knowledge source: {str(e)}"}
 
 @router.post("/create-pdf-fabric", response_model=APIResponse)
 async def create_pdf_knowledge_fabric(request: CreatePDFFabricRequest):
-    """Create knowledge fabric from uploaded PDF files"""
-    try:
-        print("=== Starting Knowledge Fabric Creation ===")
-        
-        # Get the uploaded files from the uploads directory
-        uploaded_files = document_service.get_uploaded_files()
-        print(f"Found {len(uploaded_files)} uploaded files")
-        
-        # Get the most recently uploaded files that match the requested count
-        # Sort by creation time (newest first) and take the requested number of files
-        sorted_files = sorted(uploaded_files, key=lambda x: x.get("created_at", ""), reverse=True)
-        
-        # Filter for PDF and TXT files only
-        pdf_txt_files = [f for f in sorted_files if f["name"].lower().endswith(('.pdf', '.txt'))]
-        print(f"Found {len(pdf_txt_files)} PDF/TXT files")
-        
-        # Take the number of files requested (or all if more files were uploaded than requested)
-        matching_files = pdf_txt_files[:len(request.files)]
-        print(f"Processing {len(matching_files)} files")
-        
-        if not matching_files:
-            raise HTTPException(status_code=404, detail="No matching uploaded files found")
-        
-        processed_docs = []
-        vector_documents = []
-        total_chunks = 0
-        
-        for file in matching_files:
-            print(f"Processing file: {file['name']}")
-            
-            # Extract text based on file type
-            file_extension = file["name"].lower().split('.')[-1]
-            
-            try:
-                if file_extension == 'pdf':
-                    text_content = document_service.extract_text_from_pdf_simple(file["path"])
-                    print(f"Extracted {len(text_content)} characters from PDF")
-                elif file_extension == 'txt':
-                    # Read text file directly
-                    try:
-                        with open(file["path"], 'r', encoding='utf-8') as f:
-                            text_content = f.read()
-                        print(f"Read {len(text_content)} characters from TXT file")
-                    except Exception as e:
-                        print(f"Error reading text file {file['name']}: {e}")
-                        text_content = ""
-                else:
-                    text_content = ""
-                
-                # Chunk the text
-                chunks = document_service.chunk_text(text_content)
-                total_chunks += len(chunks)
-                print(f"Created {len(chunks)} chunks from {file['name']}")
+    """Create a knowledge fabric from the uploaded files named in the request.
 
-                # Prepare chunk docs for vector storage (actual graph/RAG content).
-                for idx, chunk in enumerate(chunks):
-                    chunk_content = chunk.strip()
-                    if not chunk_content:
-                        continue
-                    vector_documents.append({
-                        "content": chunk_content,
-                        "page_number": idx + 1,
-                        "file_name": file["name"],
-                        "source_name": file["name"],
-                        "created_at": datetime.now().isoformat(),
-                        "metadata": {
-                            "file_type": file_extension,
-                            "source_type": "pdf",
-                            "chunk_index": idx,
-                            "total_chunks_in_file": len(chunks),
-                        }
-                    })
-                
-                # Create a simple fabric ID for now
-                fabric_id = f"fabric_{file['name'].replace('.', '_')}_{int(time.time())}"
-                
-                # Create a shorter, more readable name
-                original_filename = file["name"]
-                # Extract the original filename without UUID
-                if original_filename.endswith('.pdf'):
-                    # Try to get the original name from the upload request
-                    readable_name = original_filename.replace('.pdf', '').replace('.txt', '')
-                    # If it's a UUID, create a generic name
-                    if len(readable_name) > 20:  # Likely a UUID
-                        readable_name = f"Knowledge_Fabric_{len(user_fabrics()) + 1}"
-                    else:
-                        readable_name = readable_name.replace('_', ' ').title()
-                else:
-                    readable_name = f"Knowledge_Fabric_{len(user_fabrics()) + 1}"
-                
-                processed_docs.append({
-                    "filename": file["name"],
-                    "doc_id": fabric_id,
-                    "chunks": len(chunks),
-                    "readable_name": readable_name
-                })
-                
-                print(f"Created fabric with ID: {fabric_id}")
-                
-            except Exception as e:
-                print(f"Error processing file {file['name']}: {e}")
-                import traceback
-                traceback.print_exc()
-                # Continue with other files
-                continue
-        
-        fabric_id = processed_docs[0]["doc_id"] if processed_docs else None
+    ``request.files`` must list stored names returned by ``POST /upload/`` (or
+    the original filenames of those uploads). The N most recent uploads are
+    never guessed.
+    """
+    try:
+        if not request.files:
+            raise HTTPException(status_code=400, detail="At least one file name is required")
+        try:
+            resolved = upload_registry.resolve_many(list(request.files))
+        except UploadNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        files = [
+            {
+                "path": e["path"],
+                "original_name": e["original_name"],
+                "stored_name": e["stored_name"],
+                "size": e.get("size"),
+                "sha256": e.get("sha256"),
+            }
+            for e in resolved
+        ]
+        # Keep the historical id shape so older UI heuristics still recognise PDF fabrics.
+        first_stored = files[0]["stored_name"].replace(".", "_")
+        fabric_id = f"fabric_{first_stored}_{int(time.time())}"
+        readable = files[0]["original_name"]
+        # Prefer the first original filename as the fabric name.
+        base = os.path.splitext(os.path.basename(readable))[0].replace("_", " ").strip()
+        fabric_name = base.title() if base else f"Knowledge_Fabric_{len(user_fabrics()) + 1}"
 
         weave_domain = normalize_fabric_kind(request.weave_domain)
         normalized_guardrails = _normalize_guardrails(
             request.guardrails.model_dump() if request.guardrails else None
         )
-        base_tags = ["pdf", "knowledge-fabric"]
-        base_tags.extend(domain_tags_for_kind(weave_domain))
-        
-        # Store the created fabric
-        if fabric_id:
-            fabric_data = {
-                "id": fabric_id,
-                "name": processed_docs[0]["readable_name"] if processed_docs else "Unknown",
-                "source_type": "pdf",
-                "description": f"Knowledge fabric created from {len(processed_docs)} files",
-                "tags": base_tags,
-                "weave_domain": weave_domain,
-                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "document_count": len(processed_docs),
-                "status": "active",
-                "model_status": "not_trained",
-                "last_training": None,
-                "total_chunks": total_chunks,
-                "processed_files": processed_docs
-            }
-            if request.connector_profile:
-                fabric_data["connector_profile"] = request.connector_profile
-            if normalized_guardrails:
-                fabric_data["guardrails"] = normalized_guardrails
-            
-            # Start model training if requested
-            if request.train_model and processed_docs:
-                try:
-                    print("Starting model training...")
-                    # Start training
-                    training_result = training_service.start_training(
-                        source_ids=[doc["doc_id"] for doc in processed_docs if doc["doc_id"] is not None],
-                        model_name="pdf_knowledge_model"
-                    )
-                    print("Model training started")
-                    
-                    # Get the model ID from training result
-                    model_id = training_result.get("model_id")
-                    
-                    # Update fabric data with model information
-                    if model_id:
-                        fabric_data["model_id"] = model_id
-                        fabric_data["model_status"] = "training"
-                        fabric_data["training_started"] = time.strftime("%Y-%m-%d %H:%M:%S")
-                        
-                        # Update model status after training completes
-                        def update_model_status():
-                            import time
-                            time.sleep(12)  # Wait for training to complete
-                            fabric_data["model_status"] = "trained"
-                            fabric_data["last_training"] = time.strftime("%Y-%m-%d %H:%M:%S")
-                            persist_fabric(fabric_data)
-                        
-                        import threading
-                        status_thread = threading.Thread(target=update_model_status)
-                        status_thread.daemon = True
-                        status_thread.start()
-                    else:
-                        fabric_data["model_status"] = "failed"
-                        
-                except Exception as e:
-                    print(f"Error starting training: {e}")
-                    fabric_data["model_status"] = "failed"
-            
-            # Persist chunk content in vector DB under the fabric id for graph/RAG queries.
-            if vector_documents:
-                try:
-                    vector_service.add_documents(vector_documents, fabric_id)
-                    print(f"Stored {len(vector_documents)} chunks for fabric {fabric_id}")
-                except Exception as vector_error:
-                    print(f"Failed to store vector chunks for {fabric_id}: {vector_error}")
+        tags = ["pdf", "knowledge-fabric"] + domain_tags_for_kind(weave_domain)
+        record: Dict[str, Any] = {
+            "id": fabric_id,
+            "name": fabric_name,
+            "source_type": "pdf",
+            "description": f"Knowledge fabric created from {len(files)} file(s)",
+            "tags": tags,
+            "weave_domain": weave_domain,
+            "fabric_kind_label": fabric_kind_label(weave_domain),
+        }
+        if request.connector_profile:
+            record["connector_profile"] = request.connector_profile
+        if normalized_guardrails:
+            record["guardrails"] = normalized_guardrails
 
-            persist_fabric(fabric_data)
-            _enqueue_post_fabric_jobs(fabric_id, fabric_data)
-            print(f"Stored fabric in memory: {fabric_id}")
-        
-        print(f"=== Knowledge Fabric Creation Complete ===")
-        print(f"Fabric ID: {fabric_id}")
-        print(f"Total chunks: {total_chunks}")
-        print(f"Processed files: {len(processed_docs)}")
-        
+        # Pipeline stages are CPU/IO bound; keep the event loop free.
+        fabric_data = await run_in_threadpool(
+            run_document_pipeline, fabric_id=fabric_id, files=files, record=record
+        )
+        _enqueue_post_fabric_jobs(fabric_id, fabric_data)
         return APIResponse(
             success=True,
             message="Knowledge fabric created successfully",
             data={
                 "source_id": fabric_id,
-                "processed_files": processed_docs,
-                "total_chunks": total_chunks,
-                "model_training": request.train_model,
-                "fabric_name": processed_docs[0]["filename"] if processed_docs else "Unknown",
-                "status": "active"
-            }
+                "fabric_name": fabric_data.get("name"),
+                "processed_files": fabric_data.get("processed_files"),
+                "total_chunks": fabric_data.get("total_chunks", 0),
+                "page_count": fabric_data.get("page_count"),
+                "pages_ocr": fabric_data.get("pages_ocr"),
+                "model_training": False,
+                "model_status": fabric_data.get("model_status"),
+                "status": fabric_data.get("status"),
+                "pipeline": fabric_data.get("pipeline"),
+            },
         )
+    except (HTTPException, StarletteHTTPException):
+        raise
+    except PipelineError as exc:
+        raise _pipeline_http_error(exc) from exc
     except Exception as e:
-        print(f"Error creating knowledge fabric: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to create knowledge fabric: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create knowledge fabric: {str(e)}") from e
 
 
 @router.post("/create-codebase-fabric", response_model=APIResponse)
@@ -3126,131 +3068,56 @@ async def import_codebase_migration_json(
 
 @router.post("/create-composite-fabric", response_model=APIResponse)
 async def create_composite_knowledge_fabric(request: CreateCompositeFabricRequest):
-    """Create a composite fabric by combining existing fabric sources."""
+    """Combine existing fabrics through the Release 2.0 composite pipeline (Phase 3 join)."""
     try:
-        global created_fabrics  # noqa: F841 — legacy; use user_fabrics() instead
-
         if not request.source_ids:
             raise HTTPException(status_code=400, detail="At least one source fabric is required")
-
-        # Resolve source fabrics and validate
         source_map = {f.get("id"): f for f in user_fabrics()}
         selected_sources: List[Dict[str, Any]] = []
-        missing_sources: List[str] = []
+        missing: List[str] = []
         for source_id in request.source_ids:
             source = source_map.get(source_id)
             if not source:
-                missing_sources.append(source_id)
+                missing.append(source_id)
                 continue
             selected_sources.append(source)
-
-        if missing_sources:
-            raise HTTPException(status_code=404, detail=f"Source fabrics not found: {', '.join(missing_sources)}")
+        if missing:
+            raise HTTPException(status_code=404, detail=f"Source fabrics not found: {', '.join(missing)}")
         if len(selected_sources) < 2:
             raise HTTPException(status_code=400, detail="Select at least two source fabrics to create a composite fabric")
 
         composite_id = f"fabric_composite_{int(time.time())}_{uuid.uuid4().hex[:8]}"
-        composite_name = request.name.strip() or f"Composite_Fabric_{len(user_fabrics()) + 1}"
+        composite_name = (request.name or "").strip() or f"Composite_Fabric_{len(user_fabrics()) + 1}"
         resolved_kind = normalize_fabric_kind(request.weave_domain)
-
-        total_documents = int(sum(int(s.get("document_count", 0) or 0) for s in selected_sources))
-        total_chunks = int(sum(int(s.get("total_chunks", 0) or 0) for s in selected_sources))
-        source_types = sorted(list({str(s.get("source_type", "unknown")) for s in selected_sources}))
-        materialized_chunks = 0
+        source_types = sorted({str(s.get("source_type", "unknown")) for s in selected_sources})
         source_guardrails = _merge_guardrails_from_sources(selected_sources)
         explicit_guardrails = _normalize_guardrails(
             request.guardrails.model_dump() if request.guardrails else None
         )
-
-        # Materialize a merged composite index so queries hit one unified source id.
-        # This improves retrieval quality compared with per-source fallback searching.
-        merged_documents: List[Dict[str, Any]] = []
-        for source in selected_sources:
-            source_id = source.get("id")
-            if not source_id:
-                continue
-            try:
-                source_docs = vector_service.get_source_documents(source_id)
-                documents = source_docs.get("documents") or []
-                metadatas = source_docs.get("metadatas") or []
-                for idx, content in enumerate(documents):
-                    content_text = str(content or "").strip()
-                    if not content_text:
-                        continue
-                    source_meta = metadatas[idx] if idx < len(metadatas) and isinstance(metadatas[idx], dict) else {}
-                    merged_documents.append({
-                        "content": content_text,
-                        "page_number": source_meta.get("page_number", idx + 1),
-                        "file_name": source_meta.get("file_name", source.get("name", source_id)),
-                        "source_name": source.get("name", source_id),
-                        "created_at": datetime.now().isoformat(),
-                        "metadata": {
-                            **source_meta,
-                            "source_type": source.get("source_type", "unknown"),
-                            "composite_parent_id": composite_id,
-                            "composite_origin_source_id": source_id,
-                            "composite_origin_source_name": source.get("name", source_id),
-                        }
-                    })
-            except Exception as source_error:
-                print(f"Failed to gather vector docs for composite source {source_id}: {source_error}")
-
-        if merged_documents:
-            try:
-                vector_service.add_documents(merged_documents, composite_id)
-                materialized_chunks = len(merged_documents)
-            except Exception as index_error:
-                print(f"Failed to materialize composite vector index for {composite_id}: {index_error}")
-
-        composite_fabric = {
+        record: Dict[str, Any] = {
             "id": composite_id,
             "name": composite_name,
             "source_type": "composite",
             "description": request.description or f"Composite fabric combining {len(selected_sources)} sources",
-            "tags": sorted(
-                list(
-                    set(
-                        (request.tags or [])
-                        + ["composite", "multi-source"]
-                        + source_types
-                        + domain_tags_for_kind(resolved_kind)
-                    )
-                )
-            ),
+            "tags": sorted(set((request.tags or []) + ["composite", "multi-source"] + source_types + domain_tags_for_kind(resolved_kind))),
             "weave_domain": resolved_kind,
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "document_count": total_documents,
-            "status": "active",
-            "model_status": "trained",
-            "last_training": None,
-            "total_chunks": materialized_chunks if materialized_chunks > 0 else total_chunks,
-            "source_fabric_ids": [s.get("id") for s in selected_sources],
-            "source_fabrics": [
-                {
-                    "id": s.get("id"),
-                    "name": s.get("name"),
-                    "source_type": s.get("source_type"),
-                    "document_count": s.get("document_count", 0),
-                    "total_chunks": s.get("total_chunks", 0),
-                }
-                for s in selected_sources
-            ],
-            "composite_metadata": {
-                "source_count": len(selected_sources),
-                "source_types": source_types,
-                "materialized_chunks": materialized_chunks
-            }
+            "fabric_kind_label": fabric_kind_label(resolved_kind),
         }
         if source_guardrails:
-            composite_fabric["inherited_guardrails"] = source_guardrails
+            record["inherited_guardrails"] = source_guardrails
         if explicit_guardrails:
-            composite_fabric["guardrails"] = explicit_guardrails
+            record["guardrails"] = explicit_guardrails
         elif source_guardrails:
-            composite_fabric["guardrails"] = source_guardrails
+            record["guardrails"] = source_guardrails
 
-        persist_fabric(composite_fabric)
-
+        fabric_data = await run_in_threadpool(
+            run_composite_pipeline,
+            fabric_id=composite_id,
+            sources=selected_sources,
+            record=record,
+        )
+        # Shared ontology project + discovery on merged profile (cross-source FKs).
+        _enqueue_post_fabric_jobs(composite_id, fabric_data)
         return APIResponse(
             success=True,
             message="Composite knowledge fabric created successfully",
@@ -3258,15 +3125,228 @@ async def create_composite_knowledge_fabric(request: CreateCompositeFabricReques
                 "source_id": composite_id,
                 "fabric_name": composite_name,
                 "source_count": len(selected_sources),
-                "total_documents": total_documents,
-                "total_chunks": composite_fabric["total_chunks"],
-                "materialized_chunks": materialized_chunks
-            }
+                "total_documents": fabric_data.get("document_count", 0),
+                "total_chunks": fabric_data.get("total_chunks", 0),
+                "materialized_chunks": (fabric_data.get("composite_metadata") or {}).get("materialized_chunks"),
+                "entity_link_count": (fabric_data.get("entity_links") or {}).get("link_count"),
+                "cross_source_fk_count": len(
+                    ((fabric_data.get("pipeline") or {}).get("manifest") or {})
+                    .get("stages", [{}])[2].get("metrics", {}).get("cross_source_relationships") or []
+                ) if isinstance(fabric_data.get("pipeline"), dict) else None,
+                "table_count": fabric_data.get("table_count"),
+                "ontology_project_id": fabric_data.get("ontology_project_id"),
+                "shared_ontology": fabric_data.get("shared_ontology"),
+                "model_status": fabric_data.get("model_status"),
+                "status": fabric_data.get("status"),
+                "pipeline": fabric_data.get("pipeline"),
+            },
         )
-    except HTTPException:
+    except (HTTPException, StarletteHTTPException):
+        raise
+    except PipelineError as exc:
+        raise _pipeline_http_error(exc) from exc
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create composite fabric: {str(e)}") from e
+
+
+@router.post("/{fabric_id}/refresh-composite", response_model=APIResponse)
+async def refresh_composite_fabric(fabric_id: str):
+    """Rebuild a composite from its live source fabrics (Phase 3).
+
+    Keeps the same fabric id and ontology project; re-merges table stores and
+    document chunks, re-runs entity resolution, and refreshes citations.
+    """
+    try:
+        fabric = user_fabric(fabric_id)
+        if not fabric:
+            raise HTTPException(status_code=404, detail="Knowledge fabric not found")
+        if str(fabric.get("source_type") or "") != "composite":
+            raise HTTPException(status_code=400, detail="Only composite fabrics can be refreshed")
+        refreshed = await run_in_threadpool(refresh_composite_pipeline, fabric_id=fabric_id)
+        _enqueue_post_fabric_jobs(fabric_id, refreshed)
+        return APIResponse(
+            success=True,
+            message="Composite fabric refreshed from live sources",
+            data={
+                "source_id": fabric_id,
+                "fabric_name": refreshed.get("name"),
+                "source_count": len(refreshed.get("source_fabric_ids") or []),
+                "total_chunks": refreshed.get("total_chunks"),
+                "table_count": refreshed.get("table_count"),
+                "entity_link_count": (refreshed.get("entity_links") or {}).get("link_count"),
+                "last_refreshed_at": refreshed.get("last_refreshed_at"),
+                "ontology_project_id": refreshed.get("ontology_project_id"),
+                "status": refreshed.get("status"),
+                "refresh": refreshed.get("refresh"),
+            },
+        )
+    except (HTTPException, StarletteHTTPException):
+        raise
+    except PipelineError as exc:
+        raise _pipeline_http_error(exc) from exc
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh composite: {str(e)}") from e
+
+
+@router.get("/{fabric_id}/lineage", response_model=APIResponse)
+async def get_fabric_lineage(fabric_id: str):
+    """Version history for a fabric (Phase 5)."""
+    fabric = user_fabric(fabric_id)
+    if not fabric:
+        raise HTTPException(status_code=404, detail="Knowledge fabric not found")
+    from app.services.enterprise.ops import AccessDenied, authorize, list_lineage
+
+    try:
+        authorize(fabric, "query")
+    except AccessDenied as denied:
+        raise HTTPException(status_code=403, detail=denied.reason) from denied
+    return APIResponse(success=True, message="OK", data=list_lineage(fabric_id))
+
+
+@router.get("/{fabric_id}/pii", response_model=APIResponse)
+async def get_fabric_pii(fabric_id: str):
+    """PII / PHI column classification for a fabric (Phase 5)."""
+    fabric = user_fabric(fabric_id)
+    if not fabric:
+        raise HTTPException(status_code=404, detail="Knowledge fabric not found")
+    from app.services.enterprise.ops import AccessDenied, authorize
+
+    try:
+        authorize(fabric, "query")
+    except AccessDenied as denied:
+        raise HTTPException(status_code=403, detail=denied.reason) from denied
+    return APIResponse(success=True, message="OK", data=fabric.get("pii") or {"sensitive": []})
+
+
+@router.get("/{fabric_id}/audit", response_model=APIResponse)
+async def get_fabric_audit(fabric_id: str, limit: int = 50):
+    """Recent access and change events for a fabric (Phase 5)."""
+    fabric = user_fabric(fabric_id)
+    if not fabric:
+        raise HTTPException(status_code=404, detail="Knowledge fabric not found")
+    from app.services.enterprise.ops import AccessDenied, authorize, list_audit
+
+    try:
+        authorize(fabric, "query")
+    except AccessDenied as denied:
+        raise HTTPException(status_code=403, detail=denied.reason) from denied
+    return APIResponse(success=True, message="OK", data=list_audit(fabric_id, limit=limit))
+
+
+@router.post("/{fabric_id}/access", response_model=APIResponse)
+async def grant_fabric_access(fabric_id: str, request: dict):
+    """Grant owner, analyst, or viewer on a fabric (Phase 5)."""
+    fabric = user_fabric(fabric_id)
+    if not fabric:
+        raise HTTPException(status_code=404, detail="Knowledge fabric not found")
+    from app.services.enterprise.ops import AccessDenied, record_grant
+
+    user_id = str(request.get("user_id") or "").strip()
+    role = str(request.get("role") or "viewer").strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        access = record_grant(fabric, user_id, role)
+    except AccessDenied as denied:
+        raise HTTPException(status_code=403, detail=denied.reason) from denied
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    persist_fabric(fabric)
+    return APIResponse(success=True, message="Access updated", data=access)
+
+
+@router.post("/{fabric_id}/sync-rows", response_model=APIResponse)
+async def sync_fabric_rows(fabric_id: str, request: dict):
+    """Incremental row sync for one table (Phase 5).
+
+    Body: ``table``, ``key_columns``, ``rows``, optional ``apply`` (default false).
+    A changed column set returns mode ``full_rebuild`` and does not write.
+    """
+    fabric = user_fabric(fabric_id)
+    if not fabric:
+        raise HTTPException(status_code=404, detail="Knowledge fabric not found")
+    from app.services.enterprise.ops import AccessDenied, authorize, plan_row_sync, record_audit
+    from app.services.fabric_pipeline.table_store import table_store
+
+    try:
+        authorize(fabric, "sync")
+    except AccessDenied as denied:
+        raise HTTPException(status_code=403, detail=denied.reason) from denied
+
+    table = str(request.get("table") or "").strip()
+    key_columns = [str(c) for c in (request.get("key_columns") or [])]
+    incoming = request.get("rows") or []
+    if not table or not isinstance(incoming, list):
+        raise HTTPException(status_code=400, detail="table and rows are required")
+    current: List[Dict[str, Any]] = []
+    if table_store.exists(fabric_id):
+        try:
+            current = table_store.rows(fabric_id, table)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Could not read table '{table}': {exc}") from exc
+    current_columns = list(current[0].keys()) if current else []
+    incoming_columns = list(incoming[0].keys()) if incoming else current_columns
+    plan = plan_row_sync(
+        current,
+        incoming,
+        key_columns=key_columns,
+        current_columns=current_columns,
+        incoming_columns=incoming_columns,
+    )
+    applied = None
+    if request.get("apply") and plan.get("mode") == "incremental" and table_store.exists(fabric_id):
+        columns = incoming_columns or current_columns
+        applied = table_store.apply_row_delta(fabric_id, table, columns, key_columns, plan)
+        record_audit(
+            fabric_id,
+            "sync",
+            detail={
+                "table": table,
+                "added": plan.get("added_count"),
+                "changed": plan.get("changed_count"),
+                "removed": plan.get("removed_count"),
+            },
+        )
+    return APIResponse(
+        success=True,
+        message="Sync plan ready",
+        data={
+            "mode": plan.get("mode"),
+            "reason": plan.get("reason"),
+            "added_count": plan.get("added_count", len(plan.get("added") or [])),
+            "changed_count": plan.get("changed_count", len(plan.get("changed") or [])),
+            "removed_count": plan.get("removed_count", len(plan.get("removed") or [])),
+            "applied": applied,
+        },
+    )
+
+
+@router.get("/{fabric_id}/entity-links", response_model=APIResponse)
+async def get_fabric_entity_links(fabric_id: str, limit: int = 100):
+    """Return Phase 3 document→row entity links for a fabric (usually a composite)."""
+    try:
+        fabric = user_fabric(fabric_id)
+        if not fabric:
+            raise HTTPException(status_code=404, detail="Knowledge fabric not found")
+        from app.services.fabric_pipeline.entity_resolution import load_entity_links
+
+        payload = load_entity_links(fabric_id)
+        links = list(payload.get("links") or [])[: max(1, min(int(limit or 100), 500))]
+        return APIResponse(
+            success=True,
+            message="Entity links",
+            data={
+                "fabric_id": fabric_id,
+                "link_count": payload.get("link_count", len(links)),
+                "links": links,
+                "summary": fabric.get("entity_links"),
+            },
+        )
+    except (HTTPException, StarletteHTTPException):
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create composite fabric: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @router.get("/progress/{progress_id}", response_model=APIResponse)
 async def get_progress(progress_id: str):
@@ -3342,15 +3422,12 @@ async def clear_progress(progress_id: str):
 
 @router.delete("/{fabric_id}")
 async def delete_knowledge_fabric(fabric_id: str):
-    """Delete a knowledge fabric"""
+    """Delete a knowledge fabric and its Release 2.0 artifacts."""
     try:
-        if fabric_store.delete(fabric_id):
-            print(f"Fabric {fabric_id} deleted successfully")
+        if _delete_fabric_fully(fabric_id):
             return {"message": "Knowledge source deleted successfully"}
-        print(f"Fabric {fabric_id} not found")
         return {"message": "Knowledge fabric not found"}
     except Exception as e:
-        print(f"Error deleting fabric: {e}")
         return {"message": f"Failed to delete knowledge fabric: {str(e)}"}
 
 @router.get("/{source_id}/documents")
@@ -3363,149 +3440,362 @@ async def get_source_documents(source_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+def _canonical_graph_payload(fabric: Dict[str, Any], canonical: Dict[str, Any]) -> Dict[str, Any]:
+    """Approved ontology class graph (+ Phase 2 persisted instances when present)."""
+    fabric_id = str(fabric.get("id") or "")
+    nodes = []
+    instance_count = 0
+    for n in canonical.get("nodes") or []:
+        props = dict(n.get("properties") or {})
+        kind = str(props.get("node_kind") or "class")
+        if kind == "instance":
+            ntype = "entity"
+            group = props.get("collection") or "instance"
+            instance_count += 1
+        else:
+            ntype = "class"
+            group = "ontology"
+        nodes.append({
+            "id": n["id"],
+            "label": n.get("label") or n.get("normalized_name") or n["id"],
+            "type": ntype,
+            "group": group,
+            "weight": 1,
+            "properties": {
+                "normalized_name": n.get("normalized_name"),
+                "ontology_class_id": n.get("ontology_class_id"),
+                "source_table": n.get("source_table"),
+                **props,
+            },
+        })
+    edges = []
+    for e in canonical.get("edges") or []:
+        src, tgt = e.get("source"), e.get("target")
+        if not src or not tgt or src == tgt:
+            continue
+        rel = e.get("relationship_type") or e.get("label") or "related"
+        evidence_refs = e.get("evidence_refs") or []
+        edge_props = dict(e.get("properties") or {}) if isinstance(e.get("properties"), dict) else {}
+        snippet = None
+        if evidence_refs and isinstance(evidence_refs[0], dict):
+            snippet = evidence_refs[0].get("snippet") or evidence_refs[0].get("basis")
+        edges.append({
+            "source": src,
+            "target": tgt,
+            "label": rel,
+            "type": "ontology_relationship",
+            "relation": rel,
+            "weight": 1,
+            "properties": {
+                "confidence": e.get("confidence"),
+                "evidence_refs": evidence_refs,
+                "evidence": snippet,
+                "basis": edge_props.get("basis") or "approved_ontology",
+                **{k: v for k, v in edge_props.items() if k not in ("confidence",)},
+            },
+        })
+    note = (
+        "Canonical ontology graph: approved classes and relationships with measured "
+        "confidence and evidence."
+    )
+    if instance_count:
+        note += (
+            f" Phase 2 also persisted {instance_count:,} sample instance nodes linked by "
+            f"real foreign keys (instance_of + references)."
+        )
+    else:
+        note += " Open the Data view for the live profiled table graph when a table store exists."
+    return {
+        "fabric_id": fabric_id,
+        "fabric_name": fabric.get("name", fabric_id),
+        "graph_type": "canonical",
+        "ontology_version_id": canonical.get("ontology_version_id"),
+        "nodes": nodes,
+        "edges": edges,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "rendered_node_count": len(nodes),
+        "rendered_edge_count": len(edges),
+        "instance_node_count": instance_count,
+        "graph_note": note,
+    }
+
+
+def _codebase_graph_payload(fabric: Dict[str, Any]) -> Dict[str, Any]:
+    fabric_id = str(fabric.get("id") or "")
+    cg = fabric.get("code_graph") or {}
+    nodes = [
+        {
+            "id": n.get("id"),
+            "label": n.get("label") or n.get("id"),
+            "type": n.get("type") or "code",
+            "group": n.get("type") or "code",
+            "weight": 1,
+            "properties": n.get("properties") or {},
+        }
+        for n in (cg.get("nodes") or [])
+        if n.get("id")
+    ]
+    node_ids = {n["id"] for n in nodes}
+    edges = []
+    for e in (cg.get("edges") or []):
+        source, target = e.get("source"), e.get("target")
+        if source not in node_ids or target not in node_ids:
+            continue
+        rel = e.get("type") or e.get("label") or "related"
+        edges.append({
+            "source": source, "target": target, "label": rel, "type": rel, "relation": rel, "weight": 1,
+        })
+    return {
+        "fabric_id": fabric_id,
+        "fabric_name": fabric.get("name", fabric_id),
+        "graph_type": "codebase",
+        "nodes": nodes,
+        "edges": edges,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "discovery_summary": fabric.get("discovery_summary"),
+        "migration_blueprint": fabric.get("migration_blueprint"),
+        "codebase": fabric.get("codebase"),
+        "graph_note": "Structural codebase graph from static analysis (modules, files, symbols).",
+    }
+
+
+def _exploratory_graph_payload(fabric: Dict[str, Any], *, reason: str) -> Dict[str, Any]:
+    fabric_id = str(fabric.get("id") or "")
+    exploratory_doc_limit = 2000
+    source_docs = vector_service.get_source_documents(fabric_id, limit=exploratory_doc_limit)
+    documents = source_docs.get("documents") or []
+    sampled_count = len(documents)
+    total_indexed = int(fabric.get("total_chunks") or fabric.get("document_count") or 0)
+    if total_indexed <= 0:
+        try:
+            total_indexed = vector_service.count_source_documents(fabric_id)
+        except Exception:
+            total_indexed = sampled_count
+    if not documents:
+        documents = _reconstruct_graph_documents(fabric)
+        sampled_count = len(documents)
+        if total_indexed <= 0:
+            total_indexed = sampled_count
+    graph_data = knowledge_graph_service.build_graph(
+        fabric_id=fabric_id,
+        fabric_name=fabric.get("name", fabric_id),
+        documents=documents,
+    )
+    graph_data["graph_type"] = "exploratory"
+    graph_data["document_sample_size"] = sampled_count
+    graph_data["document_total"] = max(total_indexed, sampled_count)
+    graph_data["document_sample_capped"] = max(total_indexed, sampled_count) > sampled_count
+    capped_note = ""
+    if graph_data["document_sample_capped"]:
+        capped_note = (
+            f" Built from a sample of {sampled_count:,} / {graph_data['document_total']:,} "
+            f"indexed chunks to keep memory bounded."
+        )
+    graph_data["graph_note"] = (
+        f"Exploratory co-occurrence graph (not a measured schema). {reason}.{capped_note}"
+    )
+    return graph_data
+
+
+def _tabular_rebuild_stub(fabric: Dict[str, Any]) -> Dict[str, Any]:
+    """Honest empty/stub graph when a DB fabric has no Phase-1 table store."""
+    fabric_id = str(fabric.get("id") or "")
+    conn = fabric.get("connection_info") or {}
+    collections = list(conn.get("collections") or [])
+    if not collections:
+        collections = [e.get("name") for e in (conn.get("per_collection") or []) if isinstance(e, dict) and e.get("name")]
+    nodes = [{
+        "id": f"fabric:{fabric_id}",
+        "label": fabric.get("name") or fabric_id,
+        "type": "fabric",
+        "group": "fabric",
+        "weight": 1,
+    }]
+    edges = []
+    for name in collections:
+        nid = f"collection:{name}"
+        nodes.append({
+            "id": nid,
+            "label": _humanize_collection_label(str(name)),
+            "type": "collection",
+            "group": "schema",
+            "weight": 1,
+            "properties": {"collection": name, "stale": True},
+        })
+        edges.append({
+            "source": f"fabric:{fabric_id}", "target": nid,
+            "label": "contains", "type": "contains", "relation": "contains", "weight": 1,
+        })
+    return {
+        "fabric_id": fabric_id,
+        "fabric_name": fabric.get("name", fabric_id),
+        "graph_type": "stale_schema",
+        "nodes": nodes,
+        "edges": edges,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "graph_note": (
+            "This fabric was built before Release 2.0 (or its table store is missing), so foreign "
+            "keys cannot be measured from the data. Re-create the fabric from CSV/database to get "
+            "a profiled schema graph with evidence. Co-occurrence exploration was not used, to avoid "
+            "presenting a word graph as a knowledge graph."
+        ),
+        "rebuild_required": True,
+    }
+
+
+def _build_data_graph(fabric: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Measured / structured data graph (preferred for tabular fabrics)."""
+    fabric_id = str(fabric.get("id") or "")
+    profile = load_profile(fabric_id) if table_store.exists(fabric_id) else None
+    if profile:
+        return build_profile_graph(fabric, profile, table_store)
+    structured = _build_structured_database_graph(fabric)
+    if structured:
+        measured = bool(fabric.get("pipeline_version") and int(fabric.get("pipeline_version") or 0) >= 2)
+        structured["graph_note"] = (
+            "Release 2.0 data graph should use the table-store profile. The profile was missing, "
+            "so this fallback uses connection metadata only."
+            if measured else
+            "Legacy database schema graph: collections from connection metadata; "
+            "foreign keys are guessed from column names (not measured by value overlap). "
+            "Re-create the fabric to get a profiled schema with evidence and sample rows linked by real keys."
+        )
+        structured["rebuild_required"] = not measured or not table_store.exists(str(fabric.get("id") or ""))
+        return structured
+    if str(fabric.get("source_type") or "").lower() in ("database", "composite") and (
+        (fabric.get("connection_info") or {}).get("collections")
+        or (fabric.get("connection_info") or {}).get("tables")
+        or (fabric.get("connection_info") or {}).get("per_collection")
+        or fabric.get("source_type") == "database"
+    ):
+        return _tabular_rebuild_stub(fabric)
+    return None
+
+
+def _normalize_graph_edges(graph_data: Dict[str, Any]) -> None:
+    for edge in graph_data.get("edges") or []:
+        if isinstance(edge, dict) and not edge.get("relation"):
+            edge["relation"] = edge.get("label") or edge.get("type") or "related"
+
+
 @router.get("/{fabric_id}/knowledge-graph", response_model=APIResponse)
-async def get_fabric_knowledge_graph(fabric_id: str, include_llm: bool = True):
-    """Build and return entity-relationship graph for a single fabric."""
+async def get_fabric_knowledge_graph(
+    fabric_id: str,
+    include_llm: bool = True,
+    view: Optional[str] = None,
+):
+    """Return the knowledge graph for a fabric.
+
+    ``view`` selects which construction to show when more than one exists:
+
+    - ``data`` — measured profile / structured schema (tables, FKs, sample rows)
+    - ``ontology`` — approved canonical class graph
+    - ``codebase`` — structural code graph
+    - ``auto`` / omitted — prefer data when available, else ontology, else codebase,
+      else exploratory (documents only)
+    """
     try:
         fabric = user_fabric(fabric_id)
         if not fabric:
-            return APIResponse(
-                success=False,
-                message="Knowledge fabric not found",
-                data=None,
-                error="Fabric not found"
-            )
+            return APIResponse(success=False, message="Knowledge fabric not found", data=None, error="Fabric not found")
 
         version_id = fabric.get("approved_ontology_version_id")
-        canonical = graph_store.get_graph_payload(fabric_id, version_id) if version_id else {"node_count": 0}
-        if fabric.get("source_type") == "codebase" and (fabric.get("code_graph") or {}).get("nodes"):
-            cg = fabric.get("code_graph") or {}
-            nodes = [
-                {
-                    "id": n.get("id"),
-                    "label": n.get("label") or n.get("id"),
-                    "type": n.get("type") or "node",
-                    "group": n.get("type") or "code",
-                    "properties": n.get("properties") or {},
-                }
-                for n in (cg.get("nodes") or [])
-                if n.get("id")
-            ]
-            node_ids = {n["id"] for n in nodes}
-            edges = []
-            for e in (cg.get("edges") or []):
-                source = e.get("source")
-                target = e.get("target")
-                if source not in node_ids or target not in node_ids:
-                    continue
-                edges.append(
-                    {
-                        "source": source,
-                        "target": target,
-                        "label": e.get("type") or e.get("label") or "related",
-                        "type": e.get("type") or e.get("label") or "related",
-                        "relation": e.get("type") or e.get("label") or "related",
-                    }
-                )
-            graph_data = {
-                "fabric_id": fabric_id,
-                "fabric_name": fabric.get("name", fabric_id),
-                "graph_type": "codebase",
-                "nodes": nodes,
-                "edges": edges,
-                "node_count": len(nodes),
-                "edge_count": len(edges),
-                "discovery_summary": fabric.get("discovery_summary"),
-                "migration_blueprint": fabric.get("migration_blueprint"),
-                "codebase": fabric.get("codebase"),
-            }
-        elif canonical.get("node_count", 0) > 0:
-            graph_data = {
-                "fabric_id": fabric_id,
-                "fabric_name": fabric.get("name", fabric_id),
+        canonical_raw = graph_store.get_graph_payload(fabric_id, version_id) if version_id else {"node_count": 0}
+        has_ontology = int(canonical_raw.get("node_count") or 0) > 0
+        has_codebase = (
+            fabric.get("source_type") == "codebase"
+            and bool((fabric.get("code_graph") or {}).get("nodes"))
+        )
+        data_graph = None if has_codebase else _build_data_graph(fabric)
+        has_data = bool(data_graph) and data_graph.get("graph_type") not in (None, "exploratory")
+
+        available: List[Dict[str, Any]] = []
+        if has_data:
+            available.append({
+                "id": "data",
+                "label": "Data (profile / schema)",
+                "graph_type": data_graph.get("graph_type"),
+                "node_count": data_graph.get("node_count"),
+                "edge_count": data_graph.get("edge_count"),
+            })
+        if has_ontology:
+            available.append({
+                "id": "ontology",
+                "label": "Ontology (approved classes)",
                 "graph_type": "canonical",
-                "ontology_version_id": canonical.get("ontology_version_id"),
-                "nodes": [
-                    {"id": n["id"], "label": n["label"], "type": n.get("normalized_name"), "group": "schema"}
-                    for n in canonical.get("nodes") or []
-                ],
-                "edges": [
-                    {"source": e["source"], "target": e["target"], "label": e["relationship_type"]}
-                    for e in canonical.get("edges") or []
-                ],
-                "node_count": canonical.get("node_count", 0),
-                "edge_count": canonical.get("edge_count", 0),
-            }
-        else:
-            structured_db_graph = _build_structured_database_graph(fabric)
-            if structured_db_graph:
-                # Prefer schema graph for DB fabrics so Compounds/Assays always appear.
-                graph_data = structured_db_graph
+                "node_count": canonical_raw.get("node_count"),
+                "edge_count": canonical_raw.get("edge_count"),
+            })
+        if has_codebase:
+            available.append({
+                "id": "codebase",
+                "label": "Code structure",
+                "graph_type": "codebase",
+                "node_count": len((fabric.get("code_graph") or {}).get("nodes") or []),
+            })
+
+        choice = (view or "auto").strip().lower()
+        if choice == "auto":
+            if has_data:
+                choice = "data"
+            elif has_ontology:
+                choice = "ontology"
+            elif has_codebase:
+                choice = "codebase"
             else:
-                # Cap exploratory NER graph build — loading 50k–100k+ Mongo chunks OOM-kills the API.
-                exploratory_doc_limit = 2000
-                source_docs = vector_service.get_source_documents(
-                    fabric_id, limit=exploratory_doc_limit
-                )
-                documents = source_docs.get("documents") or []
-                sampled_count = len(documents)
-                total_indexed = int(
-                    fabric.get("total_chunks")
-                    or fabric.get("document_count")
-                    or 0
-                )
-                if total_indexed <= 0:
-                    try:
-                        total_indexed = vector_service.count_source_documents(fabric_id)
-                    except Exception:
-                        total_indexed = sampled_count
+                choice = "exploratory"
 
-                if not documents:
-                    documents = _reconstruct_graph_documents(fabric)
-                    sampled_count = len(documents)
-                    if total_indexed <= 0:
-                        total_indexed = sampled_count
+        if choice == "ontology" and has_ontology:
+            graph_data = _canonical_graph_payload(fabric, canonical_raw)
+        elif choice == "codebase" and has_codebase:
+            graph_data = _codebase_graph_payload(fabric)
+        elif choice == "data" and data_graph is not None:
+            graph_data = data_graph
+        elif has_data:
+            graph_data = data_graph
+        elif has_ontology:
+            graph_data = _canonical_graph_payload(fabric, canonical_raw)
+        elif has_codebase:
+            graph_data = _codebase_graph_payload(fabric)
+        else:
+            # Documents / PDFs without a table store: exploratory is honest only here.
+            reason = "No measured table profile and no approved ontology graph are available for this fabric"
+            graph_data = _exploratory_graph_payload(fabric, reason=reason)
+            available.append({
+                "id": "exploratory",
+                "label": "Exploratory (co-occurrence)",
+                "graph_type": "exploratory",
+                "node_count": graph_data.get("node_count"),
+            })
 
-                graph_data = knowledge_graph_service.build_graph(
-                    fabric_id=fabric_id,
-                    fabric_name=fabric.get("name", fabric_id),
-                    documents=documents,
-                )
-                graph_data["graph_type"] = "exploratory"
-                graph_data["document_sample_size"] = sampled_count
-                graph_data["document_total"] = max(total_indexed, sampled_count)
-                graph_data["document_sample_capped"] = max(total_indexed, sampled_count) > sampled_count
-                if graph_data["document_sample_capped"]:
-                    graph_data["graph_note"] = (
-                        f"Exploratory graph built from a sample of {sampled_count:,} / "
-                        f"{graph_data['document_total']:,} indexed chunks to keep memory bounded."
-                    )
         if graph_data.get("node_count", 1) <= 1 and str(fabric.get("source_type", "")).startswith("servicenow"):
             structured_graph = _build_structured_servicenow_graph(fabric)
             if structured_graph:
                 graph_data = structured_graph
-        # Normalize edge relation field so analytics/UI work for codebase + exploratory graphs.
-        for edge in graph_data.get("edges") or []:
-            if isinstance(edge, dict) and not edge.get("relation"):
-                edge["relation"] = edge.get("label") or edge.get("type") or "related"
 
+        _normalize_graph_edges(graph_data)
         analytics = _build_graph_analytics(graph_data)
         llm_insight = (
             _generate_graph_llm_insight(
-                fabric.get("name", fabric_id),
-                analytics,
-                fabric=fabric,
-                graph_data=graph_data,
+                fabric.get("name", fabric_id), analytics, fabric=fabric, graph_data=graph_data,
             )
             if include_llm
-            else {
-                "generated": False,
-                "summary": "LLM insight generation disabled for this request.",
-            }
+            else {"generated": False, "summary": "LLM insight generation disabled for this request."}
         )
 
         graph_data["analytics"] = analytics
         graph_data["llm_insight"] = llm_insight
+        graph_data["available_views"] = available
+        graph_data["active_view"] = (
+            "ontology" if graph_data.get("graph_type") == "canonical"
+            else "codebase" if graph_data.get("graph_type") == "codebase"
+            else "exploratory" if graph_data.get("graph_type") == "exploratory"
+            else "data"
+        )
         graph_data["fabric_details"] = {
             "id": fabric.get("id"),
             "name": fabric.get("name"),
@@ -3514,6 +3804,9 @@ async def get_fabric_knowledge_graph(fabric_id: str, include_llm: bool = True):
             "model_status": fabric.get("model_status"),
             "document_count": fabric.get("document_count", 0),
             "total_chunks": fabric.get("total_chunks", 0),
+            "row_count": fabric.get("row_count"),
+            "table_count": fabric.get("table_count"),
+            "pipeline_version": fabric.get("pipeline_version"),
             "created_at": fabric.get("created_at"),
             "updated_at": fabric.get("updated_at"),
             "description": fabric.get("description", ""),
@@ -3527,21 +3820,25 @@ async def get_fabric_knowledge_graph(fabric_id: str, include_llm: bool = True):
             "discovery_summary": fabric.get("discovery_summary"),
             "migration_blueprint": fabric.get("migration_blueprint"),
             "codebase": fabric.get("codebase"),
+            "has_table_store": bool(table_store.exists(fabric_id)),
         }
 
         return APIResponse(
             success=True,
             message="Knowledge graph generated successfully",
             data=graph_data,
-            error=None
+            error=None,
         )
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return APIResponse(
             success=False,
             message="Failed to generate knowledge graph",
             data=None,
-            error=str(e)
+            error=str(e),
         )
+
 
 @router.post("/export/{source_id}")
 async def export_knowledge_source(source_id: str):
@@ -3625,62 +3922,57 @@ async def validate_knowledge_base(fabric_id: str, request: dict):
         if not fabric:
             raise HTTPException(status_code=404, detail="Knowledge fabric not found")
         
-        # Check if model is trained
-        if fabric.get("model_status") != "trained":
+        status = fabric.get("status")
+        model_status = fabric.get("model_status")
+        if status in ("building", "failed") or model_status in ("failed", "indexing"):
             return APIResponse(
                 success=False,
-                message="Model is not yet trained",
+                message=f"Fabric is not ready (status={status}, model_status={model_status})",
                 data={
                     "fabric_id": fabric_id,
-                    "model_status": fabric.get("model_status"),
-                    "validation_score": 0.0
+                    "model_status": model_status,
+                    "status": status,
+                    "validation_score": 0.0,
                 },
-                error="Model training in progress or failed"
+                error="Fabric build incomplete or failed",
             )
-        
-        # Get test questions from request
-        test_questions = request.get("questions", [])
-        if not test_questions:
-            test_questions = [
-                "What is the main topic of this document?",
-                "What are the key points discussed?",
-                "What is the conclusion of this document?"
-            ]
-        
-        # Simulate knowledge validation (in real implementation, this would query the model)
+
+        test_questions = request.get("questions") or [
+            "What is the main topic of this document?",
+            "What are the key points discussed?",
+            "What is the conclusion of this document?",
+        ]
         validation_results = []
         total_score = 0.0
-        
         for question in test_questions:
-            # Simulate model response based on fabric content
-            # In real implementation, this would use the trained model to answer
-            response = f"Based on the knowledge fabric '{fabric['name']}', this document contains relevant information about the topic."
-            confidence = 0.85  # Simulated confidence score
-            
+            hits = vector_service.search_similar_chunks(str(question), fabric_id, top_k=3)
+            top = float(hits[0].get("similarity_score") or 0.0) if hits else 0.0
+            snippet = (hits[0].get("content") or "")[:280] if hits else ""
             validation_results.append({
                 "question": question,
-                "response": response,
-                "confidence": confidence,
-                "is_relevant": confidence > 0.7
+                "response": snippet or f"No indexed passage matched '{question}'.",
+                "confidence": round(top, 3),
+                "is_relevant": bool(hits) and top >= 0.25,
+                "ranker": (hits[0].get("ranker") if hits else None),
             })
-            
-            total_score += confidence
-        
-        avg_score = total_score / len(test_questions)
-        
+            total_score += top
+        avg_score = total_score / max(len(test_questions), 1)
         return APIResponse(
             success=True,
             message="Knowledge base validation completed",
             data={
                 "fabric_id": fabric_id,
                 "fabric_name": fabric["name"],
-                "model_status": fabric.get("model_status"),
-                "validation_score": avg_score,
+                "model_status": model_status,
+                "validation_score": round(avg_score, 3),
                 "test_questions": len(test_questions),
                 "results": validation_results,
-                "overall_assessment": "excellent" if avg_score > 0.8 else "good" if avg_score > 0.6 else "needs_improvement"
+                "overall_assessment": (
+                    "excellent" if avg_score > 0.55 else "good" if avg_score > 0.35 else "needs_improvement"
+                ),
+                "basis": "Top retrieval similarity of each probe question against the fabric index.",
             },
-            error=None
+            error=None,
         )
         
     except Exception as e:
@@ -3951,35 +4243,30 @@ async def create_reference_flow_fabric():
         for row in claims:
             rows.append({"record_type": "claim", **row})
 
-        documents = document_service.process_database_data(rows, "referential_flow")
-        # Vector metadata values must be scalar types.
-        for doc in documents:
-            meta = doc.get("metadata", {}) or {}
-            if isinstance(meta.get("columns"), list):
-                meta["columns"] = ",".join(str(col) for col in meta["columns"])
-            doc["metadata"] = meta
-        vector_service.add_documents(documents, fabric_id)
-
-        fabric_data = {
+        tables = _tables_from_fetched_rows(rows)
+        source_counts = {n: len(r) for n, r in tables.items()}
+        record = {
             "id": fabric_id,
             "name": fabric_name,
             "source_type": "database",
             "description": "Synthetic referential architecture flow for Member -> Plan -> Contract -> Claim -> Provider -> Prior Auth.",
             "tags": ["reference-architecture", "member", "plan", "contract", "claim", "provider", "prior-auth", "data-for-ai"],
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "document_count": len(rows),
-            "status": "active",
-            "model_status": "trained",
-            "last_training": None,
-            "total_chunks": len(documents),
             "connection_info": {
                 "type": "synthetic_reference_flow",
                 "domains": ["member", "plan", "contract_terms", "claim", "provider_network", "prior_auth_rules"],
-                "rows_imported": len(rows),
             },
+            "database_input_mode": "seed",
         }
-        persist_fabric(fabric_data)
+        try:
+            fabric_data = run_tabular_pipeline(
+                fabric_id=fabric_id,
+                tables=tables,
+                record=record,
+                source_row_counts=source_counts,
+                inputs={"seed": "reference_flow"},
+            )
+        except PipelineError as exc:
+            raise _pipeline_http_error(exc) from exc
 
         return APIResponse(
             success=True,
@@ -3987,9 +4274,11 @@ async def create_reference_flow_fabric():
             data={
                 "source_id": fabric_id,
                 "fabric_name": fabric_name,
-                "rows_imported": len(rows),
-                "total_chunks": len(documents),
-                "domains": fabric_data["connection_info"]["domains"],
+                "rows_imported": fabric_data.get("row_count", len(rows)),
+                "total_chunks": fabric_data.get("total_chunks", 0),
+                "domains": (fabric_data.get("connection_info") or {}).get("domains"),
+                "model_status": fabric_data.get("model_status"),
+                "pipeline": fabric_data.get("pipeline"),
             },
             error=None,
         )
@@ -4019,49 +4308,48 @@ async def create_cost_of_care_fabric():
         weave_domain = normalize_fabric_kind("insurance_claims")
 
         rows, connection_info = build_cost_of_care_rows()
-        documents = document_service.process_database_data(rows, "cost_of_care_agents")
-        for doc in documents:
-            meta = doc.get("metadata", {}) or {}
-            if isinstance(meta.get("columns"), list):
-                meta["columns"] = ",".join(str(col) for col in meta["columns"])
-            doc["metadata"] = meta
-        vector_service.add_documents(documents, fabric_id)
-
         tags = [
-            "cost-of-care",
-            "csnp",
-            "copd",
-            "lisa-chen",
-            "care-management",
-            "claims",
-            "sdoh",
-            "data-for-ai",
-            "ckf-ready",
+            "cost-of-care", "csnp", "copd", "lisa-chen", "care-management",
+            "claims", "sdoh", "data-for-ai", "ckf-ready",
         ]
         tags.extend(domain_tags_for_kind(weave_domain))
-
-        fabric_data = {
-            "id": fabric_id,
-            "name": fabric_name,
-            "source_type": "database",
+        fetched = {
+            "rows": rows,
+            "source_name": "cost_of_care_agents",
+            "fabric_name": fabric_name,
+            "connection_info": connection_info,
+            "tags": tags,
             "description": (
                 f"Cost of Care agent fabric with {MEMBER_COUNT} members. "
                 f"Hero case: {LISA_NAME} ({LISA_MEMBER_ID}) — COPD with exacerbations, "
                 "avoidable ER, medication gaps, care plan, and SDOH barriers."
             ),
+        }
+        # Force the deterministic fabric id the seed historically used.
+        # _finalize builds its own id; call the pipeline directly instead.
+        tables = _tables_from_fetched_rows(rows)
+        source_counts = {n: len(r) for n, r in tables.items()}
+        record = {
+            "id": fabric_id,
+            "name": fabric_name,
+            "source_type": "database",
+            "description": fetched["description"],
             "tags": tags,
             "weave_domain": weave_domain,
             "fabric_kind_label": fabric_kind_label(weave_domain),
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "document_count": len(rows),
-            "status": "active",
-            "model_status": "trained",
-            "last_training": None,
-            "total_chunks": len(documents),
             "connection_info": connection_info,
+            "database_input_mode": "seed",
         }
-        persist_fabric(fabric_data)
+        try:
+            fabric_data = run_tabular_pipeline(
+                fabric_id=fabric_id,
+                tables=tables,
+                record=record,
+                source_row_counts=source_counts,
+                inputs={"seed": "cost_of_care"},
+            )
+        except PipelineError as exc:
+            raise _pipeline_http_error(exc) from exc
         _enqueue_post_fabric_jobs(fabric_id, fabric_data)
 
         return APIResponse(
@@ -4071,8 +4359,8 @@ async def create_cost_of_care_fabric():
                 "source_id": fabric_id,
                 "fabric_id": fabric_id,
                 "fabric_name": fabric_name,
-                "rows_imported": len(rows),
-                "total_chunks": len(documents),
+                "rows_imported": fabric_data.get("row_count", len(rows)),
+                "total_chunks": fabric_data.get("total_chunks", 0),
                 "member_count": MEMBER_COUNT,
                 "hero_member_id": LISA_MEMBER_ID,
                 "hero_member_name": LISA_NAME,
@@ -4080,6 +4368,8 @@ async def create_cost_of_care_fabric():
                 "record_type_counts": connection_info.get("record_type_counts"),
                 "ontology_project_id": fabric_data.get("ontology_project_id"),
                 "weave_domain": weave_domain,
+                "model_status": fabric_data.get("model_status"),
+                "pipeline": fabric_data.get("pipeline"),
             },
             error=None,
         )
@@ -4368,7 +4658,15 @@ async def query_knowledge_base(
         fabric = user_fabric(fabric_id)
         if not fabric:
             raise HTTPException(status_code=404, detail="Knowledge fabric not found")
-        
+        from app.services.enterprise.ops import AccessDenied, authorize, record_audit
+
+        try:
+            role = authorize(fabric, "query")
+        except AccessDenied as denied:
+            record_audit(fabric_id, "query_denied", detail={"reason": denied.reason})
+            raise HTTPException(status_code=403, detail=denied.reason) from denied
+        record_audit(fabric_id, "query", detail={"role": role, "query": str(request.get("query") or "")[:240]})
+
         # Allow querying even when model is not trained.
         # Fabric creation now defers heavy training by design; semantic retrieval still works.
         model_status = fabric.get("model_status")
@@ -4386,7 +4684,87 @@ async def query_knowledge_base(
                 data=None,
                 error="Query is required"
             )
-        
+
+        # Release 2.0 fabrics: one staged answerer (SQL / entity / retrieval).
+        if is_v2_fabric(fabric):
+            system_prompt = build_domain_system_prompt(
+                fabric_name=fabric.get("name") or fabric_id,
+                weave_domain=fabric.get("weave_domain"),
+                source_type=fabric.get("source_type"),
+            )
+            try:
+                memory_context = agent_memory_service.build_query_context(
+                    fabric_id, request.get("session_id")
+                )
+            except Exception as memory_exc:
+                print(f"Session memory context skipped for {fabric_id}: {memory_exc}")
+                memory_context = ""
+            ontology_context = ""
+            try:
+                retrieval = retrieval_orchestrator.retrieve(
+                    fabric_id, query, top_k=int(request.get("top_k") or 8), retrieve_all=False
+                )
+                ontology_context = retrieval_orchestrator.build_query_context(fabric_id, retrieval) or ""
+            except Exception as ont_exc:
+                print(f"Ontology context skipped for {fabric_id}: {ont_exc}")
+
+            llm = _v2_llm_callable(llm_provider, fastapi_request)
+            top_k = request.get("top_k", request.get("limit"))
+            try:
+                top_k_i = int(top_k) if top_k not in (None, "") else None
+            except (TypeError, ValueError):
+                top_k_i = None
+            result = await run_in_threadpool(
+                answer_query,
+                fabric,
+                query,
+                llm=llm,
+                system_prompt=system_prompt,
+                top_k=top_k_i,
+                memory_context=memory_context,
+                ontology_context=ontology_context,
+            )
+            processing_time = f"{time.time() - processing_start:.1f}s"
+            answer = result.get("answer") or ""
+            return APIResponse(
+                success=True,
+                message="Knowledge base query completed",
+                data={
+                    "fabric_id": fabric_id,
+                    "fabric_name": fabric["name"],
+                    "query": query,
+                    "answer": answer,
+                    "confidence": result.get("confidence"),
+                    "confidence_basis": result.get("confidence_basis"),
+                    "route": result.get("route"),
+                    "citations": result.get("citations") or [],
+                    "sql": result.get("sql"),
+                    "analytics": result.get("analytics"),
+                    "entities": result.get("entities") or [],
+                    "notes": result.get("notes") or [],
+                    "model_status": fabric.get("model_status"),
+                    "relevant_chunks_found": result.get("relevant_chunks", 0),
+                    "relevant_chunks": result.get("relevant_chunks", 0),
+                    "llm_provider": "deterministic" if result.get("route") in ("sql", "rules") else (llm_provider if llm else "none"),
+                    "processing_time": processing_time,
+                    "weave_domain": normalize_fabric_kind(fabric.get("weave_domain")),
+                    "fabric_kind_label": fabric_kind_label(fabric.get("weave_domain")),
+                    "pipeline_version": fabric.get("pipeline_version"),
+                    "retrieval": result.get("retrieval") or {},
+                    **_remember_query(
+                        fabric_id,
+                        query,
+                        answer,
+                        request,
+                        llm_provider=llm_provider if llm else "none",
+                        analytics_intent=(result.get("analytics") or {}).get("intent") or result.get("route"),
+                        relevant_chunks=int(result.get("relevant_chunks") or 0),
+                        processing_time=processing_time,
+                    ),
+                },
+                error=None,
+            )
+
         # True analytical queries (counts, group-by, filters, aggregates, unique)
         # scan ALL indexed row chunks — never sample_rows / tiny top-k windows.
         if fabric.get("source_type") == "database":

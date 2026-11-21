@@ -1,104 +1,222 @@
+"""Vector index over fabric chunks (Chroma).
+
+Release 2.0 (Phase 0):
+
+* Vectors come from a named, versioned embedding model
+  (:mod:`app.services.embedding_service`), not from a per-process word hash.
+* Each embedding model has its own collection, so vectors from different models
+  are never compared. The pre-2.0 collection (``documents``) is kept read-only
+  as *legacy*; :meth:`VectorService.reindex_source` re-embeds a fabric into the
+  active collection.
+* A fabric that still lives in the legacy collection cannot be vector-searched
+  (its stored vectors were never stable), so it is ranked lexically (BM25) and
+  the result says so.
+"""
+from __future__ import annotations
+
+import hashlib
+import logging
+import math
+import re
+import threading
+import uuid
+from collections import Counter
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
 import chromadb
 from chromadb.config import Settings
-import numpy as np
-from typing import List, Dict, Any, Optional
-import uuid
-import json
-import os
-from datetime import datetime
+
 from app.core.config import settings
+from app.services.embedding_service import (
+    LEGACY_COLLECTION,
+    EmbeddingModel,
+    collection_name_for,
+    get_embedding_model,
+)
+
+logger = logging.getLogger(__name__)
+
+_WORD_RE = re.compile(r"[a-z0-9]+")
+_PAGE = 5000
+
+
+def _tokens(text: str) -> List[str]:
+    return _WORD_RE.findall(str(text or "").lower())
+
+
+def lexical_scores(query: str, texts: List[str]) -> List[float]:
+    """BM25 scores of ``texts`` for ``query``, scaled to 0..1 (best match = 1)."""
+    q_terms = [t for t in dict.fromkeys(_tokens(query)) if len(t) > 1]
+    if not q_terms or not texts:
+        return [0.0] * len(texts)
+    doc_tokens = [_tokens(t) for t in texts]
+    doc_freq: Counter = Counter()
+    for toks in doc_tokens:
+        present = set(toks)
+        for term in q_terms:
+            if term in present:
+                doc_freq[term] += 1
+    n_docs = len(texts)
+    avg_len = (sum(len(t) for t in doc_tokens) / n_docs) or 1.0
+    k1, b = 1.5, 0.75
+    scores: List[float] = []
+    for toks in doc_tokens:
+        tf = Counter(toks)
+        length = len(toks) or 1
+        score = 0.0
+        for term in q_terms:
+            freq = tf.get(term, 0)
+            if not freq:
+                continue
+            idf = math.log(1.0 + (n_docs - doc_freq[term] + 0.5) / (doc_freq[term] + 0.5))
+            score += idf * (freq * (k1 + 1)) / (freq + k1 * (1 - b + b * length / avg_len))
+        scores.append(score)
+    top = max(scores) if scores else 0.0
+    return [s / top if top > 0 else 0.0 for s in scores]
+
 
 class VectorService:
-    def __init__(self):
-        try:
-            self.client = chromadb.PersistentClient(
-                path=settings.CHROMA_PERSIST_DIRECTORY,
-                settings=Settings(
-                    anonymized_telemetry=False,
-                    allow_reset=True
-                )
-            )
-        except Exception as e:
-            print(f"Warning: ChromaDB initialization error: {e}")
-            # Create a fallback client
-            self.client = chromadb.PersistentClient(
-                path=settings.CHROMA_PERSIST_DIRECTORY,
-                settings=Settings(
-                    anonymized_telemetry=False,
-                    allow_reset=True
-                )
-            )
-        
-        # Lazy-load embedding model only when needed to reduce startup crashes.
-        self.model = None
+    def __init__(self) -> None:
+        self.client = chromadb.PersistentClient(
+            path=settings.CHROMA_PERSIST_DIRECTORY,
+            settings=Settings(anonymized_telemetry=False, allow_reset=True),
+        )
         self.model_name = settings.MODEL_NAME
-        # Keep heavyweight transformer embeddings opt-in to avoid native crashes in constrained Docker envs.
-        self.enable_transformer_embeddings = os.getenv("ENABLE_TRANSFORMER_EMBEDDINGS", "false").lower() == "true"
-        
-        # Get or create collections
-        try:
-            self.documents_collection = self.client.get_or_create_collection(
-                name="documents",
-                metadata={"hnsw:space": "cosine"}
-            )
-            
-            self.sources_collection = self.client.get_or_create_collection(
-                name="sources",
-                metadata={"hnsw:space": "cosine"}
-            )
-        except Exception as e:
-            print(f"Warning: Collection creation error: {e}")
-            # Try to get existing collections
-            try:
-                self.documents_collection = self.client.get_collection("documents")
-                self.sources_collection = self.client.get_collection("sources")
-            except Exception as e2:
-                print(f"Error getting collections: {e2}")
-                # Create minimal collections
-                self.documents_collection = self.client.create_collection("documents")
-                self.sources_collection = self.client.create_collection("sources")
-    
-    def create_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Create embeddings for a list of texts"""
-        # Safe default: deterministic embeddings unless explicitly enabled.
-        if not self.enable_transformer_embeddings:
-            dim = 64
-            fallback_embeddings: List[List[float]] = []
-            for text in texts:
-                vec = np.zeros(dim, dtype=float)
-                for token in str(text).lower().split():
-                    idx = hash(token) % dim
-                    vec[idx] += 1.0
-                norm = np.linalg.norm(vec)
-                if norm > 0:
-                    vec = vec / norm
-                fallback_embeddings.append(vec.tolist())
-            return fallback_embeddings
+        self._lock = threading.RLock()
+        self._collections: Dict[str, Any] = {}
+        self._source_collection: Dict[str, str] = {}
+        self.sources_collection = self.client.get_or_create_collection(
+            name="sources", metadata={"hnsw:space": "cosine"}
+        )
 
+    # ------------------------------------------------------------------
+    # Embedding model and collections
+    # ------------------------------------------------------------------
+
+    @property
+    def embedder(self) -> EmbeddingModel:
+        return get_embedding_model()
+
+    def embedding_info(self) -> Dict[str, Any]:
+        """The model new chunks are embedded with (recorded on each fabric)."""
+        return self.embedder.info()
+
+    def _collection(self, name: str, *, create: bool = False) -> Any:
+        with self._lock:
+            cached = self._collections.get(name)
+            if cached is not None:
+                return cached
+            if create:
+                collection = self.client.get_or_create_collection(
+                    name=name,
+                    metadata={"hnsw:space": "cosine", "embedding_model": self.embedder.id},
+                )
+            else:
+                try:
+                    collection = self.client.get_collection(name)
+                except Exception:
+                    return None
+            self._collections[name] = collection
+            return collection
+
+    @property
+    def active_collection_name(self) -> str:
+        return collection_name_for(self.embedder.id)
+
+    @property
+    def documents_collection(self) -> Any:
+        """Collection for the active embedding model (kept for existing callers)."""
+        return self._collection(self.active_collection_name, create=True)
+
+    @property
+    def legacy_collection(self) -> Any:
+        """Pre-2.0 collection with unstable 64-dim hash vectors, or ``None``."""
+        if self.active_collection_name == LEGACY_COLLECTION:
+            return None
+        return self._collection(LEGACY_COLLECTION)
+
+    @staticmethod
+    def _has_source(collection: Any, source_id: str) -> bool:
         try:
-            if self.model is None:
-                from sentence_transformers import SentenceTransformer
-                self.model = SentenceTransformer(self.model_name)
-            embeddings = self.model.encode(texts, convert_to_tensor=False)
-            return embeddings.tolist()
-        except Exception as e:
-            print(f"Warning: embedding model unavailable, using deterministic fallback: {e}")
-            # Deterministic lightweight fallback vectors to keep API functional.
-            dim = 64
-            fallback_embeddings: List[List[float]] = []
-            for text in texts:
-                vec = np.zeros(dim, dtype=float)
-                for token in str(text).lower().split():
-                    idx = hash(token) % dim
-                    vec[idx] += 1.0
-                norm = np.linalg.norm(vec)
-                if norm > 0:
-                    vec = vec / norm
-                fallback_embeddings.append(vec.tolist())
-            return fallback_embeddings
-    
+            hit = collection.get(where={"source_id": source_id}, limit=1, include=[])
+            return bool(hit.get("ids"))
+        except Exception:
+            return False
+
+    def _collection_for_source(self, source_id: str) -> Any:
+        """Collection that currently holds a fabric's chunks (active wins)."""
+        active = self.documents_collection
+        if not source_id:
+            return active
+        if settings.ISOLATE_FABRIC_INDEX and source_id:
+            from app.services.enterprise.ops import isolated_collection_name
+
+            isolated = self._collection(isolated_collection_name(source_id))
+            if isolated is not None and self._has_source(isolated, source_id):
+                self._source_collection[source_id] = isolated.name
+                return isolated
+        cached_name = self._source_collection.get(source_id)
+        if cached_name:
+            cached = self._collection(cached_name)
+            if cached is not None:
+                return cached
+        if self._has_source(active, source_id):
+            self._source_collection[source_id] = active.name
+            return active
+        candidates: List[Any] = []
+        legacy = self.legacy_collection
+        if legacy is not None:
+            candidates.append(legacy)
+        try:
+            for col in self.client.list_collections():
+                if col.name.startswith("kf_") and col.name != active.name:
+                    candidates.append(self._collection(col.name))
+        except Exception:
+            pass
+        for collection in candidates:
+            if collection is not None and self._has_source(collection, source_id):
+                self._source_collection[source_id] = collection.name
+                return collection
+        return active
+
+    def _is_active(self, collection: Any) -> bool:
+        return collection is not None and collection.name == self.active_collection_name
+
+    def source_embedding_info(self, source_id: str) -> Dict[str, Any]:
+        """Which model a fabric's stored vectors came from, and whether it needs re-indexing."""
+        collection = self._collection_for_source(source_id)
+        if self._is_active(collection):
+            return {**self.embedding_info(), "needs_reindex": False}
+        if collection is not None and collection.name == LEGACY_COLLECTION:
+            return {
+                "id": "legacy-process-hash-64",
+                "provider": "legacy",
+                "model": "python-hash-bag-of-words",
+                "revision": "1.x",
+                "dimension": 64,
+                "semantic": False,
+                "collection": LEGACY_COLLECTION,
+                "needs_reindex": True,
+            }
+        return {
+            "id": "unknown",
+            "provider": "other",
+            "collection": getattr(collection, "name", None),
+            "semantic": None,
+            "needs_reindex": True,
+        }
+
+    # ------------------------------------------------------------------
+    # Embeddings
+    # ------------------------------------------------------------------
+
+    def create_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Embed texts with the active model. Raises if the model is unavailable."""
+        return self.embedder.embed(texts)
+
     def _chroma_max_batch_size(self) -> int:
-        """Chroma hard limit for a single collection.add() call (often ~41k)."""
+        """Chroma hard limit for a single add/upsert call (often ~41k)."""
         try:
             max_bs = self.client.get_max_batch_size()
             if isinstance(max_bs, int) and max_bs > 0:
@@ -107,6 +225,10 @@ class VectorService:
             pass
         return 5000
 
+    # ------------------------------------------------------------------
+    # Writes
+    # ------------------------------------------------------------------
+
     def _prepare_document_payload(
         self, documents: List[Dict[str, Any]], source_id: str, id_offset: int = 0
     ) -> tuple:
@@ -114,7 +236,8 @@ class VectorService:
         metadatas: List[Dict[str, Any]] = []
         ids: List[str] = []
         for i, doc in enumerate(documents):
-            texts.append(doc["content"])
+            content = str(doc["content"])
+            texts.append(content)
             doc_metadata = doc.get("metadata", {}) or {}
             metadata = {
                 **doc_metadata,
@@ -135,25 +258,42 @@ class VectorService:
                 else:
                     cleaned[str(key)] = str(value)
             metadatas.append(cleaned)
-            ids.append(f"{source_id}_{id_offset + i}_{uuid.uuid4().hex[:8]}")
+            explicit_id = doc.get("id")
+            if explicit_id:
+                ids.append(str(explicit_id))
+            else:
+                digest = hashlib.sha1(content.encode("utf-8", "ignore")).hexdigest()[:10]
+                ids.append(f"{source_id}_{id_offset + i}_{digest}")
         return texts, metadatas, ids
 
     def add_documents(self, documents: List[Dict[str, Any]], source_id: str) -> List[str]:
-        """Add documents to the vector database in Chroma-safe batches."""
+        """Embed and store chunks for a fabric in the active collection.
+
+        Chunk ids are derived from position and content, so re-running the same
+        ingest overwrites rather than duplicates. Embedding failures propagate:
+        a fabric must not be reported as indexed when it is not.
+        """
         if not documents:
             return []
 
-        # Stay under Chroma's max_batch_size and keep memory bounded for large Mongo pulls.
-        chroma_max = self._chroma_max_batch_size()
-        chunk_size = max(1, min(chroma_max - 1, 4000))
+        if settings.ISOLATE_FABRIC_INDEX:
+            from app.services.enterprise.ops import isolated_collection_name
 
+            collection = self._collection(isolated_collection_name(source_id), create=True)
+        else:
+            current = self._collection_for_source(source_id)
+            if not self._is_active(current) and self._has_source(current, source_id):
+                # Keep a fabric in one collection: migrate it before appending.
+                self.reindex_source(source_id)
+            collection = self.documents_collection
+        chunk_size = max(1, min(self._chroma_max_batch_size() - 1, 2000))
         all_ids: List[str] = []
         total = len(documents)
         for start in range(0, total, chunk_size):
             batch = documents[start : start + chunk_size]
             texts, metadatas, ids = self._prepare_document_payload(batch, source_id, id_offset=start)
             embeddings = self.create_embeddings(texts)
-            self.documents_collection.add(
+            collection.upsert(
                 embeddings=embeddings,
                 documents=texts,
                 metadatas=metadatas,
@@ -161,228 +301,233 @@ class VectorService:
             )
             all_ids.extend(ids)
             if total > chunk_size:
-                print(
-                    f"Indexed documents {start + 1}-{start + len(batch)} / {total} "
-                    f"(batch size {len(batch)}, chroma max {chroma_max})"
-                )
-
+                logger.info("Indexed chunks %d-%d / %d for %s", start + 1, start + len(batch), total, source_id)
+        self._source_collection[source_id] = collection.name
         return all_ids
-    
-    def search_documents(self, query: str, limit: int = 5, threshold: float = 0.7, 
-                        filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """Search for similar documents"""
-        # Create query embedding
-        query_embedding = self.create_embeddings([query])[0]
-        
-        # Prepare where clause for filters
-        where_clause = None
-        if filters:
-            where_clause = {}
-            for key, value in filters.items():
-                where_clause[f"metadata.{key}"] = value
-        
-        # Search in collection
-        results = self.documents_collection.query(
-            query_embeddings=[query_embedding],
-            n_results=limit,
-            where=where_clause
-        )
-        
-        # Process results
-        processed_results = []
-        if results["documents"] and results["documents"][0]:
-            for i, (doc, metadata, distance) in enumerate(zip(
-                results["documents"][0],
-                results["metadatas"][0],
-                results["distances"][0]
-            )):
-                # Convert distance to similarity score (cosine similarity)
-                similarity_score = 1 - distance
-                
-                if similarity_score >= threshold:
-                    processed_results.append({
-                        "id": results["ids"][0][i],
-                        "content": doc,
-                        "source": metadata.get("source_name", "Unknown"),
-                        "similarity_score": similarity_score,
-                        "metadata": metadata,
-                        "page_number": metadata.get("page_number")
-                    })
-        
-        return processed_results
-    
-    def get_source_statistics(self, source_id: str) -> Dict[str, Any]:
-        """Get statistics for a specific source"""
-        # Count documents for this source
-        count_result = self.documents_collection.count(
-            where={"source_id": source_id}
-        )
-        
+
+    def add_documents_simple(
+        self,
+        documents: List[str],
+        source_name: str,
+        source_type: str,
+        metadata: Dict[str, Any] = None,
+    ) -> Optional[str]:
+        """Add plain-text documents under a new generated source id."""
+        if not documents:
+            return None
+        source_id = f"{source_type}_{uuid.uuid4().hex[:8]}"
+        doc_list = []
+        for i, doc in enumerate(documents):
+            doc_metadata = dict(metadata or {})
+            doc_metadata.update({
+                "source_id": source_id,
+                "source_name": source_name,
+                "source_type": source_type,
+                "file_type": source_type,
+            })
+            doc_list.append({
+                "content": doc,
+                "source_name": source_name,
+                "page_number": i + 1,
+                "file_name": source_name,
+                "created_at": datetime.now().isoformat(),
+                "metadata": doc_metadata,
+            })
+        self.add_documents(doc_list, source_id)
+        return source_id
+
+    def _delete_everywhere(self, source_id: str) -> None:
+        collections = [self.documents_collection]
+        if settings.ISOLATE_FABRIC_INDEX and source_id:
+            from app.services.enterprise.ops import isolated_collection_name
+
+            isolated = self._collection(isolated_collection_name(source_id))
+            if isolated is not None:
+                collections.append(isolated)
+        legacy = self.legacy_collection
+        if legacy is not None:
+            collections.append(legacy)
+        for collection in collections:
+            collection.delete(where={"source_id": source_id})
+        self._source_collection.pop(source_id, None)
+
+    def delete_source_documents(self, source_id: str) -> bool:
+        """Delete all chunks for a fabric (active and legacy collections)."""
+        try:
+            self._delete_everywhere(source_id)
+            return True
+        except Exception as e:
+            logger.warning("Error deleting source documents for %s: %s", source_id, e)
+            return False
+
+    # Aliases used by other modules.
+    delete_documents_by_source = delete_source_documents
+    delete_source = delete_source_documents
+
+    def update_chunk_metadatas(
+        self,
+        source_id: str,
+        updates: List[Tuple[str, Dict[str, Any]]],
+    ) -> int:
+        """Update metadata for existing chunk ids (Phase 3 entity-link stamps)."""
+        if not source_id or not updates:
+            return 0
+        collection = self._collection_for_source(source_id)
+        ids = [str(i) for i, _ in updates if i]
+        metadatas = [dict(m) for _, m in updates if _]
+        if not ids:
+            return 0
+        # Ensure source_id is always present for where-filters.
+        for meta in metadatas:
+            meta.setdefault("source_id", source_id)
+            cleaned = {}
+            for key, value in meta.items():
+                if value is None:
+                    continue
+                if isinstance(value, (str, int, float, bool)):
+                    cleaned[str(key)] = value
+                else:
+                    cleaned[str(key)] = str(value)
+            meta.clear()
+            meta.update(cleaned)
+        try:
+            # Chroma update batches — keep modest.
+            step = 200
+            for start in range(0, len(ids), step):
+                collection.update(
+                    ids=ids[start:start + step],
+                    metadatas=metadatas[start:start + step],
+                )
+            return len(ids)
+        except Exception as exc:
+            logger.warning("update_chunk_metadatas failed for %s: %s", source_id, exc)
+            return 0
+
+    # ------------------------------------------------------------------
+    # Re-indexing (legacy -> active)
+    # ------------------------------------------------------------------
+
+    def list_legacy_source_ids(self) -> Dict[str, int]:
+        """Chunk counts per source id still stored in the legacy collection."""
+        legacy = self.legacy_collection
+        counts: Dict[str, int] = {}
+        if legacy is None:
+            return counts
+        offset = 0
+        while True:
+            batch = legacy.get(include=["metadatas"], limit=_PAGE, offset=offset)
+            metas = batch.get("metadatas") or []
+            if not metas:
+                break
+            for meta in metas:
+                sid = str((meta or {}).get("source_id") or "")
+                if sid:
+                    counts[sid] = counts.get(sid, 0) + 1
+            if len(metas) < _PAGE:
+                break
+            offset += _PAGE
+        return counts
+
+    def reindex_source(
+        self,
+        source_id: str,
+        progress: Optional[Callable[[int, int], None]] = None,
+        page_size: int = 512,
+    ) -> Dict[str, Any]:
+        """Re-embed one fabric's chunks with the active model.
+
+        Non-destructive: chunks are copied into the active collection and the
+        old collection is left untouched. Returns counts so the caller can
+        verify nothing was dropped.
+        """
+        source = self._collection_for_source(source_id)
+        active = self.documents_collection
+        if self._is_active(source):
+            return {
+                "source_id": source_id,
+                "status": "current",
+                "chunks": self._count_in(active, source_id),
+                "collection": active.name,
+            }
+        total = self._count_in(source, source_id)
+        copied = 0
+        offset = 0
+        while True:
+            batch = source.get(
+                where={"source_id": source_id},
+                include=["documents", "metadatas"],
+                limit=page_size,
+                offset=offset,
+            )
+            ids = batch.get("ids") or []
+            if not ids:
+                break
+            docs = [str(d or " ") for d in (batch.get("documents") or [])]
+            metas = [dict(m) if m else {"source_id": source_id} for m in (batch.get("metadatas") or [])]
+            embeddings = self.create_embeddings(docs)
+            active.upsert(ids=ids, embeddings=embeddings, documents=docs, metadatas=metas)
+            copied += len(ids)
+            offset += len(ids)
+            if progress:
+                progress(copied, total)
+            if len(ids) < page_size:
+                break
+        in_active = self._count_in(active, source_id)
+        if in_active >= total:
+            self._source_collection[source_id] = active.name
         return {
             "source_id": source_id,
-            "document_count": count_result,
-            "status": "active" if count_result > 0 else "empty"
+            "status": "reindexed" if in_active >= total else "incomplete",
+            "chunks": total,
+            "chunks_in_active": in_active,
+            "from_collection": source.name,
+            "collection": active.name,
+            "embedding": self.embedding_info(),
         }
-    
-    def delete_source_documents(self, source_id: str) -> bool:
-        """Delete all documents for a specific source"""
+
+    def purge_legacy_source(self, source_id: str) -> int:
+        """Delete a fabric's chunks from the legacy collection (after a verified re-index)."""
+        legacy = self.legacy_collection
+        if legacy is None:
+            return 0
+        before = self._count_in(legacy, source_id)
+        if before:
+            legacy.delete(where={"source_id": source_id})
+        return before
+
+    # ------------------------------------------------------------------
+    # Reads
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _count_in(collection: Any, source_id: str) -> int:
+        total = 0
+        offset = 0
+        while True:
+            batch = collection.get(where={"source_id": source_id}, include=[], limit=_PAGE, offset=offset)
+            ids = batch.get("ids") or []
+            total += len(ids)
+            if len(ids) < _PAGE:
+                break
+            offset += _PAGE
+        return total
+
+    def count_source_documents(self, source_id: str) -> int:
+        """How many chunks are stored for a fabric."""
         try:
-            # Get all documents for this source
-            results = self.documents_collection.get(
-                where={"source_id": source_id}
-            )
-            
-            if results["ids"]:
-                # Delete documents
-                self.documents_collection.delete(
-                    ids=results["ids"]
-                )
-            
-            return True
+            return self._count_in(self._collection_for_source(source_id), source_id)
         except Exception as e:
-            print(f"Error deleting source documents: {e}")
-            return False
-    
-    def get_all_statistics(self) -> Dict[str, Any]:
-        """Get overall statistics"""
-        total_documents = self.documents_collection.count()
-        
-        # Get unique sources
-        all_docs = self.documents_collection.get()
-        unique_sources = set()
-        if all_docs["metadatas"]:
-            for metadata in all_docs["metadatas"]:
-                if metadata and "source_id" in metadata:
-                    unique_sources.add(metadata["source_id"])
-        
+            logger.warning("Error counting source documents for %s: %s", source_id, e)
+            return 0
+
+    def get_source_statistics(self, source_id: str) -> Dict[str, Any]:
+        count = self.count_source_documents(source_id)
         return {
-            "total_documents": total_documents,
-            "total_sources": len(unique_sources),
-            "total_embeddings": total_documents,
-            "model_name": settings.MODEL_NAME
+            "source_id": source_id,
+            "document_count": count,
+            "status": "active" if count > 0 else "empty",
+            "embedding": self.source_embedding_info(source_id),
         }
-    
-    def update_model(self, new_model_name: str) -> bool:
-        """Update the embedding model"""
-        try:
-            from sentence_transformers import SentenceTransformer
-            self.model = SentenceTransformer(new_model_name)
-            self.model_name = new_model_name
-            return True
-        except Exception as e:
-            print(f"Error updating model: {e}")
-            return False
-
-    def get_all_sources(self):
-        """Get all knowledge sources"""
-        try:
-            # Get all documents to extract source information
-            all_docs = self.documents_collection.get()
-            
-            # Group by source
-            sources = {}
-            for i, metadata in enumerate(all_docs["metadatas"]):
-                if metadata and "source_id" in metadata:
-                    source_id = metadata["source_id"]
-                    source_name = metadata.get("source_name", "Unknown")
-                    
-                    if source_id not in sources:
-                        sources[source_id] = {
-                            "id": source_id,
-                            "name": source_name,
-                            "source_type": metadata.get("file_type", "unknown"),
-                            "description": metadata.get("description", ""),
-                            "tags": metadata.get("tags", []),
-                            "created_at": metadata.get("created_at"),
-                            "updated_at": metadata.get("created_at"),
-                            "document_count": 0,
-                            "status": "active",
-                            "model_status": "trained",  # Default status
-                            "last_training": metadata.get("created_at"),
-                            "chunks_count": 0,
-                            "embedding_count": 0
-                        }
-                    
-                    sources[source_id]["document_count"] += 1
-                    sources[source_id]["chunks_count"] += 1
-                    sources[source_id]["embedding_count"] += 1
-            
-            # Convert to list and add real statistics
-            source_list = list(sources.values())
-            
-            # Add real statistics for each source
-            for source in source_list:
-                # Get actual document count for this source
-                source_docs = self.documents_collection.get(
-                    where={"source_id": source["id"]}
-                )
-                source["document_count"] = len(source_docs["documents"]) if source_docs["documents"] else 0
-                source["chunks_count"] = source["document_count"]
-                source["embedding_count"] = source["document_count"]
-                
-                # Add real training status (for now, assume trained if documents exist)
-                if source["document_count"] > 0:
-                    source["model_status"] = "trained"
-                else:
-                    source["model_status"] = "not_trained"
-            
-            return source_list
-        except Exception as e:
-            print(f"Error getting all sources: {e}")
-            return []
-
-    def get_source(self, source_id: str):
-        """Get a specific knowledge source"""
-        try:
-            sources = self.get_all_sources()
-            for source in sources:
-                if source["id"] == source_id:
-                    return source
-            return None
-        except Exception as e:
-            print(f"Error getting source {source_id}: {e}")
-            return None
-
-    def delete_source(self, source_id: str) -> bool:
-        """Delete a knowledge source"""
-        try:
-            # Delete documents for this source
-            self.documents_collection.delete(
-                where={"source_id": source_id}
-            )
-            return True
-        except Exception as e:
-            print(f"Error deleting source {source_id}: {e}")
-            return False
-
-    def get_stats(self):
-        """Get knowledge fabric statistics"""
-        try:
-            all_docs = self.documents_collection.get()
-            total_documents = len(all_docs["documents"]) if all_docs["documents"] else 0
-            
-            # Count unique sources
-            sources = set()
-            for metadata in all_docs["metadatas"]:
-                if metadata and "source_id" in metadata:
-                    sources.add(metadata["source_id"])
-            
-            return {
-                "total_sources": len(sources),
-                "total_documents": total_documents,
-                "total_embeddings": total_documents,
-                "model_status": "active",
-                "last_training": None
-            }
-        except Exception as e:
-            print(f"Error getting stats: {e}")
-            return {
-                "total_sources": 0,
-                "total_documents": 0,
-                "total_embeddings": 0,
-                "model_status": "inactive",
-                "last_training": None
-            }
 
     def get_source_documents(
         self,
@@ -392,12 +537,10 @@ class VectorService:
         source_collection: Optional[str] = None,
         chunk_type: Optional[str] = None,
     ):
-        """Get documents for a specific source.
+        """Get stored chunks for a fabric.
 
-        Pass ``limit`` for large fabrics (e.g. Knowledge Graph) so callers do not
-        pull every chunk into memory and OOM the API process.
-        Optional ``source_collection`` / ``chunk_type`` filter Mongo multi-collection
-        samples so Compounds are not drowned out by assay rows.
+        Pass ``limit`` for large fabrics so callers do not pull every chunk into
+        memory. ``source_collection`` / ``chunk_type`` filter on chunk metadata.
         """
         try:
             clauses: List[Dict[str, Any]] = [{"source_id": source_id}]
@@ -405,189 +548,146 @@ class VectorService:
                 clauses.append({"source_collection": str(source_collection)})
             if chunk_type:
                 clauses.append({"chunk_type": str(chunk_type)})
-            where: Dict[str, Any]
-            if len(clauses) == 1:
-                where = clauses[0]
-            else:
-                where = {"$and": clauses}
+            where: Dict[str, Any] = clauses[0] if len(clauses) == 1 else {"$and": clauses}
             kwargs: Dict[str, Any] = {"where": where}
             if limit is not None and int(limit) > 0:
                 kwargs["limit"] = int(limit)
-            results = self.documents_collection.get(**kwargs)
-            return results
+            return self._collection_for_source(source_id).get(**kwargs)
         except Exception as e:
-            print(f"Error getting source documents: {e}")
-            # Fallback without chunk_type if metadata filter is unsupported.
+            logger.warning("Error getting source documents for %s: %s", source_id, e)
             if chunk_type:
                 return self.get_source_documents(
-                    source_id,
-                    limit=limit,
-                    source_collection=source_collection,
-                    chunk_type=None,
+                    source_id, limit=limit, source_collection=source_collection, chunk_type=None
                 )
             return {"documents": [], "metadatas": [], "ids": []}
 
-    def export_source(self, source_id: str):
-        """Export a knowledge source"""
-        try:
-            source = self.get_source(source_id)
-            if not source:
-                return None
-            
-            documents = self.get_source_documents(source_id)
-            return {
-                "source": source,
-                "documents": documents
-            }
-        except Exception as e:
-            print(f"Error exporting source: {e}")
-            return None
-
-    def add_documents_simple(self, documents: List[str], source_name: str, source_type: str, metadata: Dict[str, Any] = None) -> str:
-        """Add documents with simplified interface"""
-        if not documents:
-            return None
-        
-        source_id = f"{source_type}_{uuid.uuid4().hex[:8]}"
-        
-        # Prepare documents for vector service
-        doc_list = []
-        for i, doc in enumerate(documents):
-            doc_metadata = metadata or {}
-            doc_metadata.update({
-                "source_id": source_id,
-                "source_name": source_name,
-                "source_type": source_type,
-                "file_type": source_type
-            })
-            
-            doc_list.append({
-                "content": doc,
-                "source_name": source_name,
-                "page_number": i + 1,
-                "file_name": source_name,
-                "created_at": datetime.now().isoformat(),
-                "metadata": doc_metadata
-            })
-        
-        # Add to vector database
-        doc_ids = self.add_documents(doc_list, source_id)
-        return source_id
-
-    def count_source_documents(self, source_id: str) -> int:
-        """Return how many chunks are stored for a fabric/source id.
-
-        Uses id-only fetches in pages so large Mongo fabrics do not load all
-        document bodies just to count them.
-        """
-        try:
-            total = 0
-            offset = 0
-            page = 5000
-            while True:
-                batch = self.documents_collection.get(
-                    where={"source_id": source_id},
-                    include=[],
-                    limit=page,
-                    offset=offset,
-                )
-                ids = batch.get("ids") or []
-                total += len(ids)
-                if len(ids) < page:
-                    break
-                offset += page
-            return total
-        except Exception as e:
-            print(f"Error counting source documents for {source_id}: {e}")
-            return 0
-
     def list_source_chunks(self, source_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Return stored chunks for a fabric/source.
+        """Return stored chunks for a fabric, unranked.
 
-        Default caps at 5000 to avoid OOM on very large database fabrics.
-        Pass ``limit=0`` or a negative value for **uncapped** (full-fabric retrieve /
-        analytics). Uncapped loads page through Chroma in batches of 5000.
+        Default caps at 5000. Pass ``limit=0`` (or negative) for every chunk.
+        Chunks carry ``similarity_score`` 0.0 until a ranker scores them.
         """
-        effective_limit: Optional[int]
         if limit is None:
-            effective_limit = 5000
+            effective_limit: Optional[int] = 5000
         elif int(limit) <= 0:
             effective_limit = None
         else:
             effective_limit = int(limit)
 
-        def _to_chunks(
-            documents: List[Any],
-            metadatas: List[Any],
-            ids: List[Any],
-            rank_start: int,
-        ) -> List[Dict[str, Any]]:
+        def _to_chunks(documents, metadatas, ids, rank_start: int) -> List[Dict[str, Any]]:
             out: List[Dict[str, Any]] = []
             for i, content in enumerate(documents):
                 meta = metadatas[i] if i < len(metadatas) and isinstance(metadatas[i], dict) else {}
                 out.append({
                     "content": content,
                     "metadata": meta,
-                    "similarity_score": 1.0,
+                    "similarity_score": 0.0,
                     "rank": rank_start + i,
                     "id": ids[i] if i < len(ids) else f"{source_id}_{rank_start + i - 1}",
                     "chunk_type": str(meta.get("chunk_type", "")).strip().lower(),
                 })
             return out
 
-        # Bounded fetch
-        if effective_limit is not None:
-            raw = self.get_source_documents(source_id, limit=effective_limit)
-            documents = raw.get("documents") or []
-            metadatas = raw.get("metadatas") or []
-            ids = raw.get("ids") or []
-            return _to_chunks(documents, metadatas, ids, 1)
-
-        # Uncapped: page so Chroma/large fabrics are not truncated at the old 5k default.
+        collection = self._collection_for_source(source_id)
         chunks: List[Dict[str, Any]] = []
         offset = 0
-        page = 5000
         try:
             while True:
-                batch = self.documents_collection.get(
-                    where={"source_id": source_id},
-                    limit=page,
-                    offset=offset,
-                )
+                page = _PAGE
+                if effective_limit is not None:
+                    page = min(_PAGE, effective_limit - len(chunks))
+                    if page <= 0:
+                        break
+                batch = collection.get(where={"source_id": source_id}, limit=page, offset=offset)
                 documents = batch.get("documents") or []
-                metadatas = batch.get("metadatas") or []
-                ids = batch.get("ids") or []
                 if not documents:
                     break
-                chunks.extend(_to_chunks(documents, metadatas, ids, len(chunks) + 1))
+                chunks.extend(
+                    _to_chunks(documents, batch.get("metadatas") or [], batch.get("ids") or [], len(chunks) + 1)
+                )
                 if len(documents) < page:
                     break
-                offset += page
+                offset += len(documents)
         except Exception as e:
-            print(f"Error listing all source chunks for {source_id}: {e}")
-            # Fall back to single get without limit
-            raw = self.get_source_documents(source_id, limit=None)
-            documents = raw.get("documents") or []
-            metadatas = raw.get("metadatas") or []
-            ids = raw.get("ids") or []
-            return _to_chunks(documents, metadatas, ids, 1)
+            logger.warning("Error listing source chunks for %s: %s", source_id, e)
         return chunks
 
-    def search_similar_chunks(self, query: str, source_id: str = None, top_k: int = 3) -> List[Dict[str, Any]]:
-        """Search for similar chunks in the knowledge base.
+    # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
 
-        Pass ``top_k <= 0`` to retrieve **all** chunks for the source. Full-fabric
-        loads use ``get`` (list all docs) so CSV/DB fabrics are never reduced to
-        a tiny similarity window or metadata sample_rows.
+    def _rank_lexically(self, query: str, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        scores = lexical_scores(query, [str(c.get("content") or "") for c in chunks])
+        for chunk, score in zip(chunks, scores):
+            chunk["similarity_score"] = float(score)
+            chunk["ranker"] = "lexical-bm25"
+        chunks.sort(key=lambda c: float(c.get("similarity_score") or 0.0), reverse=True)
+        for i, chunk in enumerate(chunks):
+            chunk["rank"] = i + 1
+        return chunks
+
+    def find_chunks_containing(self, source_id: str, token: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Chunks of a fabric whose text contains ``token`` exactly (case-sensitive).
+
+        Embeddings are poor at telling identifiers apart (CLM-00017 vs CLM-00071);
+        this gives exact-token recall for codes and ids mentioned in a question.
         """
+        if not source_id or not token or len(token) < 3:
+            return []
         try:
-            if source_id and (top_k is None or int(top_k) <= 0):
+            batch = self._collection_for_source(source_id).get(
+                where={"source_id": source_id},
+                where_document={"$contains": token},
+                limit=int(limit),
+            )
+        except Exception as exc:
+            logger.warning("Exact-token lookup failed for %s (%s)", source_id, exc)
+            return []
+        documents = batch.get("documents") or []
+        metadatas = batch.get("metadatas") or []
+        ids = batch.get("ids") or []
+        return [
+            {
+                "content": content,
+                "metadata": metadatas[i] if i < len(metadatas) and isinstance(metadatas[i], dict) else {},
+                "similarity_score": 1.0,
+                "rank": i + 1,
+                "id": ids[i] if i < len(ids) else None,
+                "ranker": "exact-token",
+            }
+            for i, content in enumerate(documents)
+        ]
+
+    def search_similar_chunks(self, query: str, source_id: str = None, top_k: int = 3) -> List[Dict[str, Any]]:
+        """Rank a fabric's chunks for a query.
+
+        ``top_k <= 0`` returns every chunk, ranked. Each chunk reports its
+        ``ranker``: ``vector:<model id>`` when the fabric is in the active
+        collection, ``lexical-bm25`` when it is not (legacy fabric awaiting
+        re-index, or the embedding model failed at query time).
+        """
+        want_all = top_k is None or int(top_k) <= 0
+        collection = self._collection_for_source(source_id) if source_id else self.documents_collection
+        vector_ok = self._is_active(collection)
+        ranker = f"vector:{self.embedder.id}"
+
+        query_embedding: Optional[List[float]] = None
+        if vector_ok:
+            try:
+                query_embedding = self.create_embeddings([query])[0]
+            except Exception as exc:
+                logger.warning("Query embedding failed (%s); ranking lexically", exc)
+                vector_ok = False
+
+        try:
+            if source_id and want_all:
                 all_chunks = self.list_source_chunks(source_id, limit=0)
                 if not all_chunks:
                     return []
+                if not vector_ok:
+                    return self._rank_lexically(query, all_chunks)
                 try:
-                    query_embedding = self.create_embeddings([query])[0]
-                    results = self.documents_collection.query(
+                    results = collection.query(
                         query_embeddings=[query_embedding],
                         n_results=len(all_chunks),
                         where={"source_id": source_id},
@@ -597,56 +697,204 @@ class VectorService:
                         for doc_id, distance in zip(results["ids"][0], results["distances"][0]):
                             scored[str(doc_id)] = 1.0 - float(distance)
                     for chunk in all_chunks:
-                        chunk["similarity_score"] = scored.get(
-                            str(chunk.get("id")), float(chunk.get("similarity_score") or 0.5)
-                        )
-                    all_chunks.sort(
-                        key=lambda c: float(c.get("similarity_score") or 0.0),
-                        reverse=True,
-                    )
+                        chunk["similarity_score"] = scored.get(str(chunk.get("id")), 0.0)
+                        chunk["ranker"] = ranker
+                    all_chunks.sort(key=lambda c: float(c.get("similarity_score") or 0.0), reverse=True)
                     for i, chunk in enumerate(all_chunks):
                         chunk["rank"] = i + 1
+                    return all_chunks
                 except Exception as rank_exc:
-                    print(f"Full-fabric re-rank skipped for {source_id}: {rank_exc}")
-                return all_chunks
+                    logger.warning("Vector ranking failed for %s (%s); ranking lexically", source_id, rank_exc)
+                    return self._rank_lexically(query, all_chunks)
+
+            requested = max(1, int(top_k) if top_k is not None else 3)
+
+            if not vector_ok:
+                if not source_id:
+                    return []
+                ranked = self._rank_lexically(query, self.list_source_chunks(source_id, limit=0))
+                return ranked[:requested]
 
             available = self.count_source_documents(source_id) if source_id else 0
-            requested = max(1, int(top_k) if top_k is not None else 3)
             if available > 0:
                 requested = min(requested, available)
-
-            query_embedding = self.create_embeddings([query])[0]
-            where_clause = {"source_id": source_id} if source_id else None
-            results = self.documents_collection.query(
+            results = collection.query(
                 query_embeddings=[query_embedding],
                 n_results=requested,
-                where=where_clause,
+                where={"source_id": source_id} if source_id else None,
             )
-
-            processed_results = []
+            processed: List[Dict[str, Any]] = []
             if results["documents"] and results["documents"][0]:
+                ids = results.get("ids", [[]])[0]
                 for i, (doc, metadata, distance) in enumerate(zip(
-                    results["documents"][0],
-                    results["metadatas"][0],
-                    results["distances"][0],
+                    results["documents"][0], results["metadatas"][0], results["distances"][0]
                 )):
-                    processed_results.append({
+                    processed.append({
                         "content": doc,
                         "metadata": metadata,
                         "similarity_score": 1 - distance,
                         "rank": i + 1,
+                        "id": ids[i] if i < len(ids) else None,
+                        "ranker": ranker,
                     })
-            return processed_results
-
+            return processed
         except Exception as e:
-            print(f"Error in search_similar_chunks: {e}")
-            if source_id and (top_k is None or int(top_k) <= 0):
+            logger.warning("Error in search_similar_chunks for %s: %s", source_id, e)
+            if source_id:
                 try:
-                    return self.list_source_chunks(source_id, limit=0)
+                    ranked = self._rank_lexically(query, self.list_source_chunks(source_id, limit=0))
+                    return ranked if want_all else ranked[: max(1, int(top_k))]
                 except Exception:
                     return []
             return []
 
+    def search_documents(
+        self,
+        query: str,
+        limit: int = 5,
+        threshold: float = 0.7,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Search across all fabrics in the active collection."""
+        query_embedding = self.create_embeddings([query])[0]
+        where_clause = dict(filters) if filters else None
+        results = self.documents_collection.query(
+            query_embeddings=[query_embedding],
+            n_results=limit,
+            where=where_clause,
+        )
+        processed_results = []
+        if results["documents"] and results["documents"][0]:
+            for i, (doc, metadata, distance) in enumerate(zip(
+                results["documents"][0], results["metadatas"][0], results["distances"][0]
+            )):
+                similarity_score = 1 - distance
+                if similarity_score >= threshold:
+                    processed_results.append({
+                        "id": results["ids"][0][i],
+                        "content": doc,
+                        "source": metadata.get("source_name", "Unknown"),
+                        "similarity_score": similarity_score,
+                        "metadata": metadata,
+                        "page_number": metadata.get("page_number"),
+                    })
+        return processed_results
+
+    # ------------------------------------------------------------------
+    # Statistics
+    # ------------------------------------------------------------------
+
+    def _source_counts(self) -> Dict[str, Dict[str, Any]]:
+        """Chunk counts and first-seen metadata per source in the active collection."""
+        sources: Dict[str, Dict[str, Any]] = {}
+        collection = self.documents_collection
+        offset = 0
+        while True:
+            batch = collection.get(include=["metadatas"], limit=_PAGE, offset=offset)
+            metas = batch.get("metadatas") or []
+            if not metas:
+                break
+            for meta in metas:
+                sid = (meta or {}).get("source_id")
+                if not sid:
+                    continue
+                entry = sources.setdefault(sid, {"count": 0, "meta": meta})
+                entry["count"] += 1
+            if len(metas) < _PAGE:
+                break
+            offset += _PAGE
+        return sources
+
+    def get_all_statistics(self) -> Dict[str, Any]:
+        collection = self.documents_collection
+        total_documents = collection.count()
+        legacy = self.legacy_collection
+        return {
+            "total_documents": total_documents,
+            "total_sources": len(self._source_counts()),
+            "total_embeddings": total_documents,
+            "model_name": self.embedder.model_name,
+            "embedding": self.embedding_info(),
+            "legacy_documents_awaiting_reindex": legacy.count() if legacy is not None else 0,
+        }
+
+    def get_stats(self):
+        try:
+            total_documents = self.documents_collection.count()
+            return {
+                "total_sources": len(self._source_counts()),
+                "total_documents": total_documents,
+                "total_embeddings": total_documents,
+                "model_status": "active",
+                "last_training": None,
+                "embedding": self.embedding_info(),
+            }
+        except Exception as e:
+            logger.warning("Error getting stats: %s", e)
+            return {
+                "total_sources": 0,
+                "total_documents": 0,
+                "total_embeddings": 0,
+                "model_status": "inactive",
+                "last_training": None,
+            }
+
+    def update_model(self, new_model_name: str) -> bool:
+        """Kept for API compatibility. The embedding model is set by configuration
+        (``EMBEDDING_PROVIDER`` / ``MODEL_NAME``) because changing it requires a re-index."""
+        logger.warning(
+            "update_model(%s) ignored: change EMBEDDING_PROVIDER/MODEL_NAME and re-index instead.",
+            new_model_name,
+        )
+        return False
+
+    def get_all_sources(self):
+        """Sources present in the active collection, with chunk counts."""
+        try:
+            source_list = []
+            for source_id, entry in self._source_counts().items():
+                meta = entry["meta"] or {}
+                count = entry["count"]
+                source_list.append({
+                    "id": source_id,
+                    "name": meta.get("source_name", "Unknown"),
+                    "source_type": meta.get("file_type", "unknown"),
+                    "description": meta.get("description", ""),
+                    "tags": meta.get("tags", []),
+                    "created_at": meta.get("created_at"),
+                    "updated_at": meta.get("created_at"),
+                    "document_count": count,
+                    "status": "active",
+                    "model_status": "indexed" if count > 0 else "not_indexed",
+                    "last_training": None,
+                    "chunks_count": count,
+                    "embedding_count": count,
+                })
+            return source_list
+        except Exception as e:
+            logger.warning("Error getting all sources: %s", e)
+            return []
+
+    def get_source(self, source_id: str):
+        try:
+            for source in self.get_all_sources():
+                if source["id"] == source_id:
+                    return source
+            return None
+        except Exception as e:
+            logger.warning("Error getting source %s: %s", source_id, e)
+            return None
+
+    def export_source(self, source_id: str):
+        try:
+            source = self.get_source(source_id)
+            if not source:
+                return None
+            return {"source": source, "documents": self.get_source_documents(source_id)}
+        except Exception as e:
+            logger.warning("Error exporting source: %s", e)
+            return None
+
 
 # Global instance
-vector_service = VectorService() 
+vector_service = VectorService()

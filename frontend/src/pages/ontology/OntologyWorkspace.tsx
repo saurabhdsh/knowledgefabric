@@ -175,31 +175,71 @@ function ResultPanelHeader({
   countLabel: string;
   tone?: 'teal' | 'cyan' | 'violet' | 'emerald' | 'slate';
 }) {
-  const toneClass =
+  const accent =
     tone === 'cyan'
-      ? 'bg-[rgba(94,200,242,0.16)] border-[rgba(94,200,242,0.32)] text-[#5ec8f2]'
+      ? { chip: 'text-[#7ad4ff] border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.12)]', bar: 'from-[#5ec8f2] to-[#7ad4c0]' }
       : tone === 'violet'
-        ? 'bg-[rgba(155,139,212,0.16)] border-[rgba(155,139,212,0.32)] text-[#9b8bd4]'
+        ? { chip: 'text-[#c4b8ef] border-[rgba(155,139,212,0.35)] bg-[rgba(155,139,212,0.12)]', bar: 'from-[#9b8bd4] to-[#5ec8f2]' }
         : tone === 'emerald'
-          ? 'bg-[rgba(62,207,155,0.16)] border-[rgba(62,207,155,0.32)] text-[#3ecf9b]'
+          ? { chip: 'text-[#7ee0b8] border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.12)]', bar: 'from-[#3ecf9b] to-[#5ec8f2]' }
           : tone === 'slate'
-            ? 'bg-white/[0.04] border-[rgba(148,163,184,0.24)] text-[#8b9cb0]'
-            : 'bg-[rgba(94,200,242,0.16)] border-[rgba(94,200,242,0.32)] text-[#5ec8f2]';
+            ? { chip: 'text-[#8b9cb0] border-[rgba(148,163,184,0.28)] bg-white/[0.04]', bar: 'from-[#8b9cb0] to-[#5ec8f2]' }
+            : { chip: 'text-[#7ad4ff] border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.12)]', bar: 'from-[#5ec8f2] to-[#3ecf9b]' };
 
   return (
-    <div className="px-5 py-4 border-b border-[rgba(148,163,184,0.16)] bg-white/[0.04]">
+    <div className="relative px-5 py-5 border-b border-[rgba(148,163,184,0.12)]">
+      <div className={`absolute inset-x-0 top-0 h-px bg-gradient-to-r ${accent.bar} opacity-70`} />
       <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <div className={`p-1.5 rounded-lg border ${toneClass}`}>
+        <div className="flex items-center gap-3 min-w-0">
+          <div className={`relative p-2.5 rounded-2xl border ${accent.chip}`}>
             <Icon className="w-5 h-5" />
+            <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-[#5ec8f2]/90" />
           </div>
-          <div>
-            <h3 className="text-base font-semibold text-gray-900">{title}</h3>
-            <p className="text-xs text-gray-500 mt-0.5">{subtitle}</p>
+          <div className="min-w-0">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-[#8b9cb0] mb-0.5">Discovery result</p>
+            <h3 className="text-lg font-semibold text-[#e8edf4] tracking-tight truncate">{title}</h3>
+            <p className="text-xs text-[#8b9cb0] mt-0.5">{subtitle}</p>
           </div>
         </div>
-        <span className={`text-sm font-medium px-3 py-1 rounded-full border ${toneClass}`}>{countLabel}</span>
+        <span className={`shrink-0 text-xs font-semibold px-3 py-1.5 rounded-xl border ${accent.chip}`}>{countLabel}</span>
       </div>
+      <div className="or-flow-line mt-4" />
+    </div>
+  );
+}
+
+function StatusChip({ status }: { status?: string }) {
+  const s = (status || 'draft').toLowerCase();
+  const cls =
+    s === 'approved'
+      ? 'border-[rgba(62,207,155,0.4)] bg-[rgba(62,207,155,0.14)] text-[#7ee0b8]'
+      : s === 'rejected'
+        ? 'border-[rgba(148,163,184,0.3)] bg-white/[0.04] text-[#8b9cb0]'
+        : 'border-[rgba(245,186,94,0.35)] bg-[rgba(245,186,94,0.12)] text-[#f5ba5e]';
+  return (
+    <span className={`text-[10px] font-semibold uppercase tracking-[0.12em] px-2 py-0.5 rounded-md border ${cls}`}>
+      {status || 'draft'}
+    </span>
+  );
+}
+
+function ConfidenceMeter({ value, tone = 'cyan' }: { value: number; tone?: 'cyan' | 'mint' | 'lilac' }) {
+  const pct = Math.max(0, Math.min(100, Math.round((Number.isFinite(value) ? value : 0) * (value <= 1 ? 100 : 1))));
+  const fill =
+    tone === 'mint'
+      ? 'from-[#3ecf9b] to-[#7ad4c0]'
+      : tone === 'lilac'
+        ? 'from-[#9b8bd4] to-[#5ec8f2]'
+        : 'from-[#5ec8f2] to-[#3ecf9b]';
+  return (
+    <div className="flex items-center gap-2 min-w-[5.5rem]">
+      <div className="flex-1 h-1 rounded-full bg-white/[0.06] overflow-hidden">
+        <div
+          className={`h-full rounded-full bg-gradient-to-r ${fill}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="or-mono text-[10px] text-[#8b9cb0] tabular-nums w-8 text-right">{pct}%</span>
     </div>
   );
 }
@@ -230,6 +270,7 @@ const OntologyWorkspace: React.FC = () => {
   const [projectDescription, setProjectDescription] = useState<string>('');
   const [projectArtifactIds, setProjectArtifactIds] = useState<string[]>([]);
   const [fabricLinkOrigins, setFabricLinkOrigins] = useState<string[]>([]);
+  const [linkedFabricId, setLinkedFabricId] = useState<string | null>(null);
   const [artifacts, setArtifacts] = useState<Array<{ name: string; path: string }>>([]);
   const [selectedArtifactIds, setSelectedArtifactIds] = useState<string[]>([]);
   const [runId, setRunId] = useState<string | null>(null);
@@ -255,6 +296,16 @@ const OntologyWorkspace: React.FC = () => {
   const [platformAction, setPlatformAction] = useState<string | null>(null);
   const [platformLoading, setPlatformLoading] = useState(false);
 
+  const extractFabricId = (description?: string, artifactsList?: Array<{ metadata?: { fabric_id?: string } }>) => {
+    const fromMeta = (artifactsList || [])
+      .map((a) => a?.metadata?.fabric_id)
+      .find((id) => typeof id === 'string' && id.startsWith('fabric_'));
+    if (fromMeta) return fromMeta;
+    const desc = description || '';
+    const m = desc.match(/\(id:\s*(fabric_[A-Za-z0-9_\-]+)\s*,/i);
+    return m?.[1] || null;
+  };
+
   const loadProject = useCallback(() => {
     if (!projectId) return;
     ontologyApi.getProject(projectId).then(p => {
@@ -267,12 +318,17 @@ const OntologyWorkspace: React.FC = () => {
       const origins = Array.isArray(p.source_artifacts)
         ? p.source_artifacts
             .map((a) => {
-              const meta = (a as unknown as { metadata?: { linked_from?: string } }).metadata;
+              const meta = (a as unknown as { metadata?: { linked_from?: string; fabric_id?: string } }).metadata;
               return meta?.linked_from;
             })
             .filter((v): v is string => Boolean(v))
         : [];
       setFabricLinkOrigins(Array.from(new Set(origins)));
+      const fabricId = extractFabricId(
+        p.description,
+        (p.source_artifacts || []) as Array<{ metadata?: { fabric_id?: string } }>,
+      );
+      setLinkedFabricId(fabricId);
     }).catch(() => {});
   }, [projectId]);
 
@@ -282,7 +338,20 @@ const OntologyWorkspace: React.FC = () => {
 
   const loadVersions = useCallback(() => {
     if (!projectId) return;
-    ontologyApi.listVersions(projectId).then(setVersions).catch(() => setVersions([]));
+    ontologyApi.listVersions(projectId).then((list) => {
+      const sorted = [...list].sort((a, b) => {
+        const ta = String((a as { created_at?: string }).created_at || '');
+        const tb = String((b as { created_at?: string }).created_at || '');
+        return tb.localeCompare(ta);
+      });
+      setVersions(sorted);
+      // Prefer newest draft when nothing is selected yet (avoids sticking on a
+      // stale Record/Dataset artifact-discovery version).
+      setVersionId((current) => {
+        if (current && sorted.some((v) => v.id === current)) return current;
+        return sorted[0]?.id ?? null;
+      });
+    }).catch(() => setVersions([]));
   }, [projectId]);
 
   const loadRunsHistory = useCallback(() => {
@@ -506,15 +575,42 @@ const OntologyWorkspace: React.FC = () => {
       .finally(() => setChatLoading(false));
   };
 
+  const downloadBlob = (content: string, filename: string, mime: string) => {
+    const blob = new Blob([content], { type: mime });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
   const handleExportJson = () => {
     if (!versionId) return;
     ontologyApi.exportJson(versionId).then(res => {
-      const blob = new Blob([JSON.stringify(res.data || res, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `ontology_${versionId}.json`;
-      a.click();
+      downloadBlob(
+        JSON.stringify(res.data || res, null, 2),
+        `ontology_${versionId}.json`,
+        'application/json',
+      );
+    }).catch((err: unknown) => {
+      setPlatformAction(err instanceof Error ? `JSON export failed: ${err.message}` : 'JSON export failed');
     });
+  };
+
+  const handleExportSemantic = async (format: 'rdf' | 'owl') => {
+    if (!versionId) return;
+    try {
+      setPlatformLoading(true);
+      const { text, filename, mime } = await ontologyApi.exportSemanticText(versionId, format);
+      downloadBlob(text, filename, mime);
+      setPlatformAction(`Downloaded ${format.toUpperCase()} export (${filename}).`);
+    } catch (err: unknown) {
+      setPlatformAction(
+        err instanceof Error ? `${format.toUpperCase()} export failed: ${err.message}` : `${format.toUpperCase()} export failed`,
+      );
+    } finally {
+      setPlatformLoading(false);
+    }
   };
 
   const tabs: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
@@ -525,14 +621,6 @@ const OntologyWorkspace: React.FC = () => {
     { id: 'canonical', label: 'Canonical model', icon: TableCellsIcon },
     { id: 'graph', label: 'Graph schema', icon: ShareIcon },
   ];
-  const tabActiveClass: Record<Tab, string> = {
-    entities: 'border-[#5ec8f2] text-[#5ec8f2] bg-[rgba(94,200,242,0.08)]',
-    relationships: 'border-[#67d7ff] text-[#67d7ff] bg-[rgba(103,215,255,0.1)]',
-    attributes: 'border-[#b8a9ff] text-[#b8a9ff] bg-[rgba(184,169,255,0.1)]',
-    rules: 'border-[#62e8b7] text-[#62e8b7] bg-[rgba(98,232,183,0.1)]',
-    canonical: 'border-[#8b9cb0] text-[#cbd5e1] bg-white/[0.03]',
-    graph: 'border-[#5ec8f2] text-[#5ec8f2] bg-[rgba(94,200,242,0.08)]',
-  };
   const isFabricLinkedProject = React.useMemo(() => {
     const search = new URLSearchParams(location.search);
     if (search.get('source') === 'fabric') return true;
@@ -541,26 +629,69 @@ const OntologyWorkspace: React.FC = () => {
   const canRunFabricDiscovery = isFabricLinkedProject;
   const handleFabricDiscover = async () => {
     if (!projectId || !canRunFabricDiscovery) return;
-    const fabricId = fabricLinkOrigins[0];
-    if (fabricId) {
-      try {
-        setPlatformLoading(true);
-        const { job_id } = await platformApi.discoverOntology(fabricId);
-        setPlatformAction(`Schema discovery queued for fabric (${job_id})`);
-        setPolling(true);
-        loadRunsHistory();
-        return;
-      } catch {
-        /* fall through to artifact discovery */
-      } finally {
-        setPlatformLoading(false);
-      }
+    // Prefer the real fabric id (from project description / artifact metadata).
+    // Do NOT use fabricLinkOrigins[0] — that is often "vector_documents", which
+    // made schema discovery fail and silently fell through to document LLM
+    // discovery (Record / Dataset / Medication).
+    const fabricId = linkedFabricId;
+    if (!fabricId) {
+      setPlatformAction(
+        'No linked fabric id found on this project. Re-create from the Knowledge Fabric, or run discovery from the fabric Knowledge Graph platform panel.',
+      );
+      return;
     }
-    const data = await ontologyApi.discover(projectId, projectArtifactIds, true);
-    setRunId(data.run_id);
-    setRun({ id: data.run_id, project_id: projectId, status: data.status, progress_percent: 0, run_logs: [] });
-    setPolling(true);
-    loadRunsHistory();
+    try {
+      setPlatformLoading(true);
+      setPlatformAction(null);
+      const { job_id } = await platformApi.discoverOntology(fabricId, true, projectId);
+      setPlatformAction(
+        `Measured-profile schema discovery queued (${job_id}). Expect table entities (members, claims, …), not document concepts.`,
+      );
+      setPolling(true);
+      // Poll platform job until ready, then open the new schema version.
+      const poll = window.setInterval(async () => {
+        try {
+          const job = await platformApi.getJob(job_id);
+          loadRunsHistory();
+          if (job.status === 'ready' || job.status === 'completed') {
+            window.clearInterval(poll);
+            setPolling(false);
+            const resultVid = (job.result as { version_id?: string } | undefined)?.version_id;
+            loadVersions();
+            if (resultVid) {
+              setVersionId(resultVid);
+              loadVersion(resultVid);
+            }
+            setPlatformAction(
+              `Schema discovery complete${resultVid ? ` — ${resultVid}` : ''}. Select the latest draft if the catalog did not refresh.`,
+            );
+          } else if (job.status === 'failed') {
+            window.clearInterval(poll);
+            setPolling(false);
+            const errMsg =
+              (job.error_payload as { message?: string } | null | undefined)?.message ||
+              'unknown error';
+            setPlatformAction(`Schema discovery failed: ${errMsg}`);
+          }
+        } catch {
+          loadRunsHistory();
+          loadVersions();
+        }
+      }, 2500);
+      window.setTimeout(() => {
+        window.clearInterval(poll);
+        setPolling(false);
+      }, 120000);
+      loadRunsHistory();
+    } catch (err: unknown) {
+      setPlatformAction(
+        err instanceof Error
+          ? `Schema discovery failed: ${err.message}`
+          : 'Schema discovery failed. Open the fabric Knowledge Graph → Enterprise platform → Run ontology discovery.',
+      );
+    } finally {
+      setPlatformLoading(false);
+    }
   };
 
   const graphNodeTypes = React.useMemo(
@@ -706,35 +837,35 @@ const OntologyWorkspace: React.FC = () => {
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Source Artifacts panel - first column */}
-        <div className="bg-white rounded-xl shadow-sm border-2 border-teal-200 p-4">
+        <div className="ontology-result or-shell p-4 border-[rgba(94,200,242,0.28)]">
           {isFabricLinkedProject ? (
             <>
-              <h2 className="text-base font-semibold text-gray-900 mb-1 flex items-center gap-2">
-                <DocumentTextIcon className="w-5 h-5 text-teal-500" />
+              <h2 className="text-base font-semibold text-[#e8edf4] mb-1 flex items-center gap-2">
+                <DocumentTextIcon className="w-5 h-5 text-[#5ec8f2]" />
                 Fabric-linked source
               </h2>
               <p className="text-xs text-gray-500 mb-3">
-                This ontology project was created from an existing Knowledge Fabric. Source artifact upload is disabled for this project.
+                This ontology project was created from an existing Knowledge Fabric. For tabular Release 2.0 fabrics, discovery uses the measured table profile (not document co-occurrence).
               </p>
               <div className="py-4 px-3 rounded-lg bg-gray-50 border border-gray-200 text-sm text-gray-600">
                 <p className="font-medium text-gray-700">Using existing fabric context.</p>
-                <p className="mt-1">Select versions or discovery history on the right to review ontology outputs generated from the linked fabric.</p>
+                <p className="mt-1">
+                  {linkedFabricId
+                    ? `Linked fabric: ${linkedFabricId}`
+                    : 'Fabric id missing from project metadata — recreate from the fabric.'}
+                </p>
               </div>
               <button
                 type="button"
                 onClick={handleFabricDiscover}
-                disabled={!canRunFabricDiscovery || polling}
-                className="mt-3 w-full inline-flex items-center justify-center px-3 py-2 rounded-lg bg-teal-600 text-white text-sm font-medium hover:bg-teal-700 disabled:opacity-50"
+                disabled={!canRunFabricDiscovery || polling || !linkedFabricId || platformLoading}
+                className="mt-3 w-full inline-flex items-center justify-center px-3 py-2.5 rounded-xl bg-gradient-to-r from-[#5ec8f2] to-[#3ecf9b] text-[#061018] text-sm font-semibold hover:brightness-110 disabled:opacity-50 transition-all"
               >
                 <PlayIcon className="w-4 h-4 mr-2" />
-                {polling ? `Running… ${run?.progress_percent ?? 0}%` : 'Run discovery'}
+                {polling || platformLoading ? `Running… ${run?.progress_percent ?? 0}%` : 'Run schema discovery'}
               </button>
               <p className="mt-2 text-xs text-gray-500">
-                {canRunFabricDiscovery
-                  ? (projectArtifactIds.length > 0
-                      ? `${projectArtifactIds.length} linked artifact(s) available for discovery`
-                      : 'No linked artifacts yet. Discovery will auto-resolve from linked fabric on run.')
-                  : 'No linked source artifacts found for this fabric-linked project yet.'}
+                Expect entities like members / claims / plans with measured FK confidence — not Record / Dataset.
               </p>
               {fabricLinkOrigins.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-2">
@@ -814,32 +945,57 @@ const OntologyWorkspace: React.FC = () => {
         </div>
 
         {/* Discovery history */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-          <h2 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
-            <ClockIcon className="w-4 h-4 text-teal-500" />
+        <div className="ontology-result or-shell p-4">
+          <h2 className="text-sm font-semibold text-[#e8edf4] mb-1 flex items-center gap-2">
+            <ClockIcon className="w-4 h-4 text-[#5ec8f2]" />
             Discovery history
           </h2>
-          <p className="text-xs text-gray-500 mb-3">Past runs for this project. Completed runs can be opened to view the ontology version.</p>
-          <ul className="space-y-2 max-h-40 overflow-y-auto">
+          <p className="text-xs text-[#8b9cb0] mb-3">Past runs for this project. Open a completed run to enter the result studio.</p>
+          <ul className="space-y-2 max-h-44 overflow-y-auto pr-1">
             {runsHistory.length === 0 ? (
-              <li className="text-xs text-gray-500">No runs yet. Run discovery above.</li>
+              <li className="text-xs text-[#8b9cb0] rounded-xl border border-dashed border-[rgba(148,163,184,0.22)] px-3 py-4 text-center">
+                No runs yet. Run discovery above.
+              </li>
             ) : (
               runsHistory.map((r) => (
-                <li key={r.id} className="flex items-center justify-between gap-2 text-sm border border-gray-100 rounded-lg px-2 py-1.5">
-                  <span className="truncate flex-1">
-                    <span className={`font-medium ${r.status === 'completed' ? 'text-green-600' : r.status === 'failed' ? 'text-red-600' : 'text-gray-700'}`}>
+                <li
+                  key={r.id}
+                  className="flex items-center justify-between gap-2 text-sm rounded-xl border border-[rgba(148,163,184,0.12)] bg-white/[0.03] px-3 py-2.5"
+                >
+                  <span className="truncate flex-1 min-w-0">
+                    <span
+                      className={`font-semibold ${
+                        r.status === 'completed'
+                          ? 'text-[#3ecf9b]'
+                          : r.status === 'failed'
+                            ? 'text-[#f08984]'
+                            : 'text-[#5ec8f2]'
+                      }`}
+                    >
                       {r.status}
                     </span>
-                    {r.completed_at && <span className="text-gray-500 ml-1">{(r.completed_at as string).slice(0, 19).replace('T', ' ')}</span>}
-                    {r.started_at && !r.completed_at && <span className="text-gray-500 ml-1">Started {(r.started_at as string).slice(0, 19).replace('T', ' ')}</span>}
+                    {r.completed_at && (
+                      <span className="text-[#8b9cb0] ml-1.5 or-mono text-[11px]">
+                        {(r.completed_at as string).slice(0, 19).replace('T', ' ')}
+                      </span>
+                    )}
+                    {r.started_at && !r.completed_at && (
+                      <span className="text-[#8b9cb0] ml-1.5 or-mono text-[11px]">
+                        Started {(r.started_at as string).slice(0, 19).replace('T', ' ')}
+                      </span>
+                    )}
                   </span>
                   {r.status === 'completed' && r.result_version_id && (
                     <button
                       type="button"
-                      onClick={() => { setVersionId(r.result_version_id!); loadVersion(r.result_version_id!); }}
-                      className="text-xs text-[#5ec8f2] hover:underline shrink-0"
+                      onClick={() => {
+                        setVersionId(r.result_version_id!);
+                        loadVersion(r.result_version_id!);
+                      }}
+                      className="or-view-cta shrink-0"
                     >
                       View result
+                      <span aria-hidden>↗</span>
                     </button>
                   )}
                 </li>
@@ -849,12 +1005,12 @@ const OntologyWorkspace: React.FC = () => {
         </div>
 
         {/* Versions & Export */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-          <h2 className="text-sm font-semibold text-gray-900 mb-3">Versions & Export</h2>
+        <div className="ontology-result or-shell p-4">
+          <h2 className="text-sm font-semibold text-[#e8edf4] mb-3">Versions & Export</h2>
           <select
             value={versionId || ''}
             onChange={e => { const v = e.target.value; setVersionId(v || null); if (v) loadVersion(v); }}
-            className="block w-full rounded-lg border border-[rgba(148,163,184,0.2)] bg-[#10141d]/70 px-3 py-2 text-sm text-[#e8edf4]"
+            className="block w-full rounded-xl border border-[rgba(148,163,184,0.2)] bg-[#0a1018]/80 px-3 py-2 text-sm text-[#e8edf4]"
           >
             <option value="">Select version</option>
             {versions.map(v => (
@@ -865,7 +1021,7 @@ const OntologyWorkspace: React.FC = () => {
             <a
               href={versionId ? ontologyApi.exportCsvUrl(versionId) : undefined}
               download
-              className="inline-flex items-center px-3 py-1.5 rounded-lg border border-[rgba(148,163,184,0.2)] bg-white/[0.03] text-sm text-[#cbd5e1] hover:bg-white/[0.06]"
+              className="inline-flex items-center px-3 py-1.5 rounded-xl border border-[rgba(94,200,242,0.28)] bg-[rgba(94,200,242,0.08)] text-sm text-[#bfeaff] hover:bg-[rgba(94,200,242,0.16)]"
             >
               CSV
             </a>
@@ -873,12 +1029,35 @@ const OntologyWorkspace: React.FC = () => {
               type="button"
               onClick={handleExportJson}
               disabled={!versionId}
-              className="inline-flex items-center px-3 py-1.5 rounded-lg border border-[rgba(148,163,184,0.2)] bg-white/[0.03] text-sm text-[#cbd5e1] hover:bg-white/[0.06] disabled:opacity-50"
+              className="inline-flex items-center px-3 py-1.5 rounded-xl border border-[rgba(62,207,155,0.28)] bg-[rgba(62,207,155,0.08)] text-sm text-[#7ee0b8] hover:bg-[rgba(62,207,155,0.16)] disabled:opacity-50"
             >
               <ArrowDownTrayIcon className="w-4 h-4 mr-1" />
               JSON
             </button>
+            <button
+              type="button"
+              onClick={() => handleExportSemantic('rdf')}
+              disabled={!versionId || platformLoading}
+              className="inline-flex items-center px-3 py-1.5 rounded-xl border border-[rgba(94,200,242,0.32)] bg-[rgba(94,200,242,0.1)] text-sm text-[#bfeaff] hover:bg-[rgba(94,200,242,0.18)] disabled:opacity-50"
+              title="Download RDF Schema as Turtle (.ttl)"
+            >
+              <ArrowDownTrayIcon className="w-4 h-4 mr-1" />
+              RDF
+            </button>
+            <button
+              type="button"
+              onClick={() => handleExportSemantic('owl')}
+              disabled={!versionId || platformLoading}
+              className="inline-flex items-center px-3 py-1.5 rounded-xl border border-[rgba(155,139,212,0.35)] bg-[rgba(155,139,212,0.12)] text-sm text-[#c4b8ef] hover:bg-[rgba(155,139,212,0.2)] disabled:opacity-50"
+              title="Download OWL 2 ontology as Turtle (.owl.ttl)"
+            >
+              <ArrowDownTrayIcon className="w-4 h-4 mr-1" />
+              OWL
+            </button>
           </div>
+          <p className="mt-2 text-[11px] text-[#8b9cb0]">
+            RDF = RDFS Turtle · OWL = OWL 2 Turtle (classes, object/datatype properties)
+          </p>
         </div>
 
         {/* Placeholder for third column */}
@@ -886,64 +1065,74 @@ const OntologyWorkspace: React.FC = () => {
       </div>
 
       {version && (
-        <>
-          <div className="flex gap-2 border-b border-[rgba(148,163,184,0.11)]">
-            {tabs.map(t => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => { setActiveTab(t.id); setSelectedElement(null); }}
-                className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px rounded-t-lg transition-colors ${activeTab === t.id ? tabActiveClass[t.id] : 'border-transparent text-[#8b9cb0] hover:text-[#cbd5e1]'}`}
-              >
-                <t.icon className="w-4 h-4 inline mr-1" />
-                {t.label}
-              </button>
-            ))}
+        <div className="ontology-result space-y-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-[#5ec8f2]/90">Result studio</p>
+              <h2 className="text-xl font-semibold text-[#e8edf4] tracking-tight mt-0.5">
+                Ontology surface
+              </h2>
+              <p className="text-xs text-[#8b9cb0] mt-1">
+                Fluid review of entities, links, attributes, rules, and export models for this draft.
+              </p>
+            </div>
+            <div className="or-tab-rail self-start sm:self-auto">
+              {tabs.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveTab(t.id);
+                    setSelectedElement(null);
+                  }}
+                  className={`or-tab ${activeTab === t.id ? 'is-active' : ''}`}
+                >
+                  <t.icon className="w-3.5 h-3.5" />
+                  {t.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {(activeTab === 'canonical' || activeTab === 'graph') ? (
             <div className="space-y-6">
               {activeTab === 'canonical' && (
-                <div className="bg-white rounded-xl shadow-sm border border-[rgba(148,163,184,0.18)] overflow-hidden">
-                  <div className="px-5 py-4 border-b border-[rgba(148,163,184,0.16)] bg-white/[0.04]">
-                    <h2 className="text-lg font-semibold text-gray-900">Canonical data model</h2>
-                    <p className="text-sm text-gray-500 mt-0.5">Entity catalog, relationship matrix, attributes, and SQL-ready DDL</p>
-                  </div>
+                <div className="or-shell overflow-hidden">
+                  <ResultPanelHeader
+                    icon={TableCellsIcon}
+                    title="Canonical data model"
+                    subtitle="Entity catalog, relationship matrix, attributes, and SQL-ready DDL"
+                    countLabel={`${Array.isArray(canonicalData?.entity_catalog) ? (canonicalData?.entity_catalog as unknown[]).length : '—'} entities`}
+                    tone="slate"
+                  />
                   <div className="p-5 space-y-8">
-                    {loadingCanonical && <p className="text-gray-500">Loading canonical export…</p>}
+                    {loadingCanonical && <p className="text-[#8b9cb0]">Loading canonical export…</p>}
                     {!loadingCanonical && canonicalData && (
                       <>
                         <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                          <div className="rounded-xl border border-[rgba(94,200,242,0.25)] bg-[rgba(94,200,242,0.08)] px-4 py-3">
-                            <p className="text-xs text-[#8b9cb0] uppercase tracking-wide">Entities</p>
-                            <p className="text-xl font-semibold text-[#e8edf4]">{Array.isArray(canonicalData.entity_catalog) ? canonicalData.entity_catalog.length : 0}</p>
-                          </div>
-                          <div className="rounded-xl border border-[rgba(94,200,242,0.25)] bg-[rgba(94,200,242,0.08)] px-4 py-3">
-                            <p className="text-xs text-[#8b9cb0] uppercase tracking-wide">Relationships</p>
-                            <p className="text-xl font-semibold text-[#e8edf4]">{Array.isArray(canonicalData.relationship_matrix) ? canonicalData.relationship_matrix.length : 0}</p>
-                          </div>
-                          <div className="rounded-xl border border-[rgba(155,139,212,0.25)] bg-[rgba(155,139,212,0.08)] px-4 py-3">
-                            <p className="text-xs text-[#8b9cb0] uppercase tracking-wide">Attributes</p>
-                            <p className="text-xl font-semibold text-[#e8edf4]">{Array.isArray(canonicalData.attribute_catalog) ? canonicalData.attribute_catalog.length : 0}</p>
-                          </div>
-                          <div className="rounded-xl border border-[rgba(62,207,155,0.25)] bg-[rgba(62,207,155,0.08)] px-4 py-3">
-                            <p className="text-xs text-[#8b9cb0] uppercase tracking-wide">Suggested tables</p>
-                            <p className="text-xl font-semibold text-[#e8edf4]">{Array.isArray(canonicalData.suggested_relational_tables) ? canonicalData.suggested_relational_tables.length : 0}</p>
-                          </div>
+                          {[
+                            { label: 'Entities', value: Array.isArray(canonicalData.entity_catalog) ? canonicalData.entity_catalog.length : 0, tone: 'text-[#5ec8f2]' },
+                            { label: 'Relationships', value: Array.isArray(canonicalData.relationship_matrix) ? canonicalData.relationship_matrix.length : 0, tone: 'text-[#7ad4ff]' },
+                            { label: 'Attributes', value: Array.isArray(canonicalData.attribute_catalog) ? canonicalData.attribute_catalog.length : 0, tone: 'text-[#c4b8ef]' },
+                            { label: 'Suggested tables', value: Array.isArray(canonicalData.suggested_relational_tables) ? canonicalData.suggested_relational_tables.length : 0, tone: 'text-[#3ecf9b]' },
+                          ].map((s) => (
+                            <div key={s.label} className="or-stat">
+                              <p className="text-[10px] uppercase tracking-[0.16em] text-[#8b9cb0]">{s.label}</p>
+                              <p className={`text-2xl font-semibold mt-1 ${s.tone}`}>{s.value}</p>
+                            </div>
+                          ))}
                         </section>
                         {Array.isArray(canonicalData.entity_catalog) && (canonicalData.entity_catalog as Record<string, unknown>[]).length > 0 && (
                           <section>
-                            <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                              <CubeIcon className="w-4 h-4 text-teal-500" />
+                            <h3 className="text-sm font-semibold text-[#e8edf4] mb-3 flex items-center gap-2">
+                              <CubeIcon className="w-4 h-4 text-[#5ec8f2]" />
                               Entity catalog
                             </h3>
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                               {(canonicalData.entity_catalog as Record<string, unknown>[]).map((e: Record<string, unknown>, i: number) => (
-                                <div key={i} className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
-                                  <>
-                                    <div className="font-medium text-gray-900">{String(e.name ?? e.normalized_name ?? '—')}</div>
-                                    {e.definition ? <div className="text-xs text-gray-600 mt-1 line-clamp-2">{String(e.definition)}</div> : null}
-                                  </>
+                                <div key={i} className="or-card p-4" style={{ animationDelay: `${i * 40}ms` }}>
+                                  <div className="font-medium text-[#e8edf4]">{String(e.name ?? e.normalized_name ?? '—')}</div>
+                                  {e.definition ? <div className="text-xs text-[#8b9cb0] mt-1.5 line-clamp-2">{String(e.definition)}</div> : null}
                                 </div>
                               ))}
                             </div>
@@ -951,53 +1140,47 @@ const OntologyWorkspace: React.FC = () => {
                         )}
                         {Array.isArray(canonicalData.relationship_matrix) && (canonicalData.relationship_matrix as Record<string, unknown>[]).length > 0 && (
                           <section>
-                            <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                              <LinkIcon className="w-4 h-4 text-teal-500" />
+                            <h3 className="text-sm font-semibold text-[#e8edf4] mb-3 flex items-center gap-2">
+                              <LinkIcon className="w-4 h-4 text-[#5ec8f2]" />
                               Relationship matrix
                             </h3>
-                            <div className="overflow-x-auto rounded-lg border border-gray-200">
-                              <table className="min-w-full text-sm">
-                                <thead className="bg-gray-50">
-                                  <tr>
-                                    <th className="px-4 py-2 text-left font-medium text-gray-700">Source</th>
-                                    <th className="px-4 py-2 text-left font-medium text-gray-700">Relationship</th>
-                                    <th className="px-4 py-2 text-left font-medium text-gray-700">Target</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-100">
-                                  {(canonicalData.relationship_matrix as Record<string, unknown>[]).map((r: Record<string, unknown>, i: number) => (
-                                    <tr key={i} className="hover:bg-gray-50">
-                                      <td className="px-4 py-2 text-gray-900">{String(r.source ?? '—')}</td>
-                                      <td className="px-4 py-2 text-teal-600 font-medium">{String(r.relationship ?? r.name ?? '—')}</td>
-                                      <td className="px-4 py-2 text-gray-900">{String(r.target ?? '—')}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
+                            <div className="space-y-2">
+                              {(canonicalData.relationship_matrix as Record<string, unknown>[]).map((r: Record<string, unknown>, i: number) => (
+                                <div key={i} className="or-ribbon" style={{ animationDelay: `${i * 30}ms` }}>
+                                  <span className="px-2.5 py-1 rounded-lg border border-[rgba(94,200,242,0.3)] bg-[rgba(94,200,242,0.1)] text-sm text-[#e8edf4]">
+                                    {String(r.source ?? '—')}
+                                  </span>
+                                  <span className="or-mono text-[11px] text-[#5ec8f2]">{String(r.relationship ?? r.name ?? '—')}</span>
+                                  <span className="text-[#8b9cb0]">→</span>
+                                  <span className="px-2.5 py-1 rounded-lg border border-[rgba(62,207,155,0.3)] bg-[rgba(62,207,155,0.1)] text-sm text-[#d8f4e8]">
+                                    {String(r.target ?? '—')}
+                                  </span>
+                                </div>
+                              ))}
                             </div>
                           </section>
                         )}
                         {Array.isArray(canonicalData.attribute_catalog) && (canonicalData.attribute_catalog as Record<string, unknown>[]).length > 0 && (
                           <section>
-                            <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                              <TagIcon className="w-4 h-4 text-teal-500" />
+                            <h3 className="text-sm font-semibold text-[#e8edf4] mb-3 flex items-center gap-2">
+                              <TagIcon className="w-4 h-4 text-[#9b8bd4]" />
                               Attribute catalog
                             </h3>
-                            <div className="rounded-lg border border-gray-200 overflow-hidden">
+                            <div className="rounded-2xl border border-[rgba(148,163,184,0.14)] overflow-hidden">
                               <table className="min-w-full text-sm">
-                                <thead className="bg-gray-50">
+                                <thead className="bg-white/[0.03]">
                                   <tr>
-                                    <th className="px-4 py-2 text-left font-medium text-gray-700">Entity</th>
-                                    <th className="px-4 py-2 text-left font-medium text-gray-700">Attribute</th>
-                                    <th className="px-4 py-2 text-left font-medium text-gray-700">Type</th>
+                                    <th className="px-4 py-2.5 text-left text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">Entity</th>
+                                    <th className="px-4 py-2.5 text-left text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">Attribute</th>
+                                    <th className="px-4 py-2.5 text-left text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">Type</th>
                                   </tr>
                                 </thead>
-                                <tbody className="divide-y divide-gray-100">
+                                <tbody className="divide-y divide-[rgba(148,163,184,0.08)]">
                                   {(canonicalData.attribute_catalog as Record<string, unknown>[]).map((a: Record<string, unknown>, i: number) => (
-                                    <tr key={i} className="hover:bg-gray-50">
-                                      <td className="px-4 py-2 text-gray-600">{String(a.entity ?? a.class ?? '—')}</td>
-                                      <td className="px-4 py-2 font-medium text-gray-900">{String(a.name ?? a.attribute_name ?? '—')}</td>
-                                      <td className="px-4 py-2 text-gray-500">{String(a.data_type ?? a.type ?? '—')}</td>
+                                    <tr key={i} className="hover:bg-white/[0.03]">
+                                      <td className="px-4 py-2.5 text-[#8b9cb0]">{String(a.entity ?? a.class ?? '—')}</td>
+                                      <td className="px-4 py-2.5 font-medium text-[#e8edf4]">{String(a.name ?? a.attribute_name ?? '—')}</td>
+                                      <td className="px-4 py-2.5 or-mono text-[11px] text-[#5ec8f2]">{String(a.data_type ?? a.type ?? '—')}</td>
                                     </tr>
                                   ))}
                                 </tbody>
@@ -1007,25 +1190,31 @@ const OntologyWorkspace: React.FC = () => {
                         )}
                         {canonicalData.suggested_sql_ddl && (
                           <section>
-                            <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                              <TableCellsIcon className="w-4 h-4 text-teal-500" />
+                            <h3 className="text-sm font-semibold text-[#e8edf4] mb-3 flex items-center gap-2">
+                              <TableCellsIcon className="w-4 h-4 text-[#3ecf9b]" />
                               Suggested SQL DDL
                             </h3>
-                            <pre className="p-4 rounded-xl bg-slate-900 text-slate-100 text-xs overflow-x-auto font-mono">{String(canonicalData.suggested_sql_ddl)}</pre>
+                            <pre className="or-mono p-4 rounded-2xl border border-[rgba(62,207,155,0.22)] bg-[#070b12] text-[#b8f0d6] text-xs overflow-x-auto">
+                              {String(canonicalData.suggested_sql_ddl)}
+                            </pre>
                           </section>
                         )}
                         {(canonicalData.suggested_document_schema ?? canonicalData.document_schema) && (
                           <section>
-                            <h3 className="text-sm font-semibold text-gray-700 mb-3">Document schema (JSON)</h3>
-                            <pre className="p-4 rounded-xl bg-slate-800 text-slate-100 text-xs overflow-x-auto font-mono max-h-64 overflow-y-auto">{typeof (canonicalData.suggested_document_schema ?? canonicalData.document_schema) === 'string' ? String(canonicalData.suggested_document_schema ?? canonicalData.document_schema) : JSON.stringify(canonicalData.suggested_document_schema ?? canonicalData.document_schema, null, 2)}</pre>
+                            <h3 className="text-sm font-semibold text-[#e8edf4] mb-3">Document schema (JSON)</h3>
+                            <pre className="or-mono p-4 rounded-2xl border border-[rgba(148,163,184,0.16)] bg-[#070b12] text-[#cbd5e1] text-xs overflow-x-auto max-h-64 overflow-y-auto">
+                              {typeof (canonicalData.suggested_document_schema ?? canonicalData.document_schema) === 'string'
+                                ? String(canonicalData.suggested_document_schema ?? canonicalData.document_schema)
+                                : JSON.stringify(canonicalData.suggested_document_schema ?? canonicalData.document_schema, null, 2)}
+                            </pre>
                           </section>
                         )}
                         {Array.isArray(canonicalData.suggested_relational_tables) && (canonicalData.suggested_relational_tables as Record<string, unknown>[]).length > 0 && (
                           <section>
-                            <h3 className="text-sm font-semibold text-gray-700 mb-3">Suggested tables</h3>
+                            <h3 className="text-sm font-semibold text-[#e8edf4] mb-3">Suggested tables</h3>
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                               {(canonicalData.suggested_relational_tables as Record<string, unknown>[]).map((t: Record<string, unknown>, i: number) => (
-                                <div key={i} className="px-3 py-2 rounded-lg border border-[rgba(94,200,242,0.25)] bg-[rgba(94,200,242,0.08)] text-sm">
+                                <div key={i} className="or-card px-3 py-3 text-sm">
                                   <p className="font-medium text-[#e8edf4]">{String(t.table_name ?? t.entity_id ?? '—')}</p>
                                   <p className="text-xs text-[#8b9cb0] mt-0.5">Relational table suggestion</p>
                                 </div>
@@ -1035,38 +1224,45 @@ const OntologyWorkspace: React.FC = () => {
                         )}
                       </>
                     )}
-                    {!loadingCanonical && !canonicalData && versionId && <p className="text-gray-500">No canonical data. Run discovery and ensure a version is selected.</p>}
+                    {!loadingCanonical && !canonicalData && versionId && (
+                      <p className="text-[#8b9cb0]">No canonical data. Run discovery and ensure a version is selected.</p>
+                    )}
                   </div>
                 </div>
               )}
               {activeTab === 'graph' && (
-                <div className="bg-white rounded-xl shadow-sm border border-[rgba(148,163,184,0.18)] overflow-hidden">
-                  <div className="px-5 py-5 border-b border-[rgba(148,163,184,0.16)] bg-[radial-gradient(circle_at_top_right,rgba(94,200,242,0.22),transparent_42%),radial-gradient(circle_at_bottom_left,rgba(155,139,212,0.18),transparent_38%)]">
-                    <h2 className="text-lg font-semibold text-gray-900">Graph-ready ontology</h2>
-                    <p className="text-sm text-gray-500 mt-0.5">Node/edge blueprint with Cypher and JSON schema exports</p>
-                  </div>
+                <div className="or-shell overflow-hidden">
+                  <ResultPanelHeader
+                    icon={ShareIcon}
+                    title="Graph-ready ontology"
+                    subtitle="Node/edge blueprint with Cypher and JSON schema exports"
+                    countLabel={`${graphNodeTypes.length} nodes`}
+                    tone="cyan"
+                  />
                   <div className="p-5 space-y-8">
-                    {loadingGraph && <p className="text-gray-500">Loading graph export…</p>}
+                    {loadingGraph && <p className="text-[#8b9cb0]">Loading graph export…</p>}
                     {!loadingGraph && graphData && (
                       <>
                         <section className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          <div className="rounded-xl border border-[rgba(94,200,242,0.25)] bg-[rgba(94,200,242,0.08)] px-4 py-3">
-                            <p className="text-xs text-[#8b9cb0] uppercase tracking-wide">Node types</p>
-                            <p className="text-2xl font-semibold text-[#e8edf4]">{graphNodeTypes.length}</p>
+                          <div className="or-stat">
+                            <p className="text-[10px] uppercase tracking-[0.16em] text-[#8b9cb0]">Node types</p>
+                            <p className="text-2xl font-semibold text-[#5ec8f2] mt-1">{graphNodeTypes.length}</p>
                           </div>
-                          <div className="rounded-xl border border-[rgba(155,139,212,0.25)] bg-[rgba(155,139,212,0.08)] px-4 py-3">
-                            <p className="text-xs text-[#8b9cb0] uppercase tracking-wide">Edge types</p>
-                            <p className="text-2xl font-semibold text-[#e8edf4]">{graphEdgeTypes.length}</p>
+                          <div className="or-stat">
+                            <p className="text-[10px] uppercase tracking-[0.16em] text-[#8b9cb0]">Edge types</p>
+                            <p className="text-2xl font-semibold text-[#c4b8ef] mt-1">{graphEdgeTypes.length}</p>
                           </div>
-                          <div className="rounded-xl border border-[rgba(62,207,155,0.25)] bg-[rgba(62,207,155,0.08)] px-4 py-3">
-                            <p className="text-xs text-[#8b9cb0] uppercase tracking-wide">Graph schema</p>
-                            <p className="text-sm font-semibold text-[#e8edf4] mt-1">{graphData.graph_json_schema ? 'Available' : 'Not available'}</p>
+                          <div className="or-stat">
+                            <p className="text-[10px] uppercase tracking-[0.16em] text-[#8b9cb0]">Graph schema</p>
+                            <p className="text-sm font-semibold text-[#3ecf9b] mt-2">
+                              {graphData.graph_json_schema ? 'Available' : 'Not available'}
+                            </p>
                           </div>
                         </section>
                         {graphNodeTypes.length > 0 && (
                           <section>
-                            <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                              <CubeIcon className="w-4 h-4 text-indigo-500" />
+                            <h3 className="text-sm font-semibold text-[#e8edf4] mb-3 flex items-center gap-2">
+                              <CubeIcon className="w-4 h-4 text-[#5ec8f2]" />
                               Node types
                             </h3>
                             <div className="flex flex-wrap gap-2">
@@ -1080,10 +1276,10 @@ const OntologyWorkspace: React.FC = () => {
                                     key={i}
                                     type="button"
                                     onClick={() => setActiveGraphNode(isActive ? null : label)}
-                                    className={`group relative px-3 py-1.5 rounded-full border text-sm font-medium shadow-[0_0_0_1px_rgba(255,255,255,0.03)_inset] transition-all ${
+                                    className={`group relative px-3 py-1.5 rounded-xl border text-sm font-medium transition-all ${
                                       isActive
-                                        ? 'border-[rgba(62,207,155,0.6)] bg-[linear-gradient(120deg,rgba(62,207,155,0.28),rgba(94,200,242,0.22))] text-[#ecfff6] shadow-[0_0_20px_rgba(62,207,155,0.25)]'
-                                        : 'border-[rgba(94,200,242,0.35)] bg-[linear-gradient(120deg,rgba(94,200,242,0.2),rgba(155,139,212,0.18))] text-[#e8edf4] hover:scale-[1.02]'
+                                        ? 'border-[rgba(62,207,155,0.55)] bg-[linear-gradient(120deg,rgba(62,207,155,0.24),rgba(94,200,242,0.16))] text-[#ecfff6]'
+                                        : 'border-[rgba(94,200,242,0.28)] bg-white/[0.03] text-[#e8edf4] hover:border-[rgba(94,200,242,0.5)]'
                                     }`}
                                     title={description}
                                   >
@@ -1091,7 +1287,7 @@ const OntologyWorkspace: React.FC = () => {
                                     <span className="pointer-events-none absolute z-20 left-1/2 -translate-x-1/2 top-full mt-2 w-72 rounded-xl border border-[rgba(148,163,184,0.28)] bg-[#070b12]/95 px-3 py-2 text-left opacity-0 group-hover:opacity-100 transition-opacity shadow-xl">
                                       <span className="block text-[11px] font-semibold text-[#bfeaff]">What it does</span>
                                       <span className="block text-[11px] text-[#cbd5e1] mt-1">{description}</span>
-                                      <span className="block text-[11px] font-semibold text-[#d9d6f2] mt-2">Path preview</span>
+                                      <span className="block text-[11px] font-semibold text-[#7ad4c0] mt-2">Path preview</span>
                                       <span className="block text-[11px] text-[#9fb0c5] mt-1">{pathHint}</span>
                                     </span>
                                   </button>
@@ -1108,11 +1304,11 @@ const OntologyWorkspace: React.FC = () => {
                         )}
                         {graphEdgeTypes.length > 0 && (
                           <section>
-                            <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                              <LinkIcon className="w-4 h-4 text-indigo-500" />
+                            <h3 className="text-sm font-semibold text-[#e8edf4] mb-3 flex items-center gap-2">
+                              <LinkIcon className="w-4 h-4 text-[#5ec8f2]" />
                               Edge types
                             </h3>
-                            <div className="space-y-3">
+                            <div className="space-y-2.5">
                               {graphEdgeTypes.map((e: Record<string, unknown>, i: number) => {
                                 const source = String(e.source_type ?? e.from ?? '?');
                                 const edgeLabel = String(e.edge_label ?? e.type ?? 'RELATES_TO');
@@ -1121,25 +1317,16 @@ const OntologyWorkspace: React.FC = () => {
                                 return (
                                   <div
                                     key={i}
-                                    className={`rounded-xl border p-3 transition-all ${
-                                      connected
-                                        ? 'border-[rgba(94,200,242,0.28)] bg-[linear-gradient(135deg,rgba(16,20,29,0.94),rgba(20,27,39,0.85))] shadow-[0_0_22px_rgba(94,200,242,0.1)]'
-                                        : 'border-[rgba(148,163,184,0.18)] bg-[rgba(16,20,29,0.45)] opacity-45'
-                                    }`}
+                                    className={`or-ribbon transition-opacity ${connected ? 'opacity-100' : 'opacity-35'}`}
                                   >
-                                    <div className="flex items-center gap-2 text-sm">
-                                      <span className="inline-flex items-center px-2.5 py-1 rounded-md border border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.15)] font-medium text-[#e8edf4]">
-                                        {source}
-                                      </span>
-                                      <span className="text-[#8b9cb0]">→</span>
-                                      <span className="inline-flex items-center px-2.5 py-1 rounded-md border border-[rgba(155,139,212,0.35)] bg-[rgba(155,139,212,0.15)] text-[#d5cdf1] font-medium">
-                                        {edgeLabel}
-                                      </span>
-                                      <span className="text-[#8b9cb0]">→</span>
-                                      <span className="inline-flex items-center px-2.5 py-1 rounded-md border border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.15)] font-medium text-[#d8f4e8]">
-                                        {target}
-                                      </span>
-                                    </div>
+                                    <span className="px-2.5 py-1 rounded-lg border border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.12)] text-sm text-[#e8edf4]">
+                                      {source}
+                                    </span>
+                                    <span className="or-mono text-[11px] text-[#c4b8ef]">{edgeLabel}</span>
+                                    <span className="text-[#8b9cb0]">→</span>
+                                    <span className="px-2.5 py-1 rounded-lg border border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.12)] text-sm text-[#d8f4e8]">
+                                      {target}
+                                    </span>
                                   </div>
                                 );
                               })}
@@ -1148,13 +1335,15 @@ const OntologyWorkspace: React.FC = () => {
                         )}
                         {graphData.graph_cypher_snippet && (
                           <section>
-                            <h3 className="text-sm font-semibold text-gray-700 mb-3">Cypher snippet</h3>
-                            <pre className="p-4 rounded-xl border border-[rgba(94,200,242,0.22)] bg-[#070b12] text-[#bfeaff] text-xs overflow-x-auto font-mono shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">{String(graphData.graph_cypher_snippet)}</pre>
+                            <h3 className="text-sm font-semibold text-[#e8edf4] mb-3">Cypher snippet</h3>
+                            <pre className="or-mono p-4 rounded-2xl border border-[rgba(94,200,242,0.22)] bg-[#070b12] text-[#bfeaff] text-xs overflow-x-auto">
+                              {String(graphData.graph_cypher_snippet)}
+                            </pre>
                           </section>
                         )}
                         {graphData.graph_json_schema && (
                           <section>
-                            <h3 className="text-sm font-semibold text-gray-700 mb-3">Graph JSON schema cards</h3>
+                            <h3 className="text-sm font-semibold text-[#e8edf4] mb-3">Graph JSON schema cards</h3>
                             {graphSchemaCardNodes.length > 0 ? (
                               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
                                 {graphSchemaCardNodes.map((node) => (
@@ -1162,14 +1351,10 @@ const OntologyWorkspace: React.FC = () => {
                                     key={node.key}
                                     type="button"
                                     onClick={() => setActiveGraphNode(activeGraphNode === node.label ? null : node.label)}
-                                    className={`text-left rounded-xl border p-3 transition-all ${
-                                      activeGraphNode === node.label
-                                        ? 'border-[rgba(62,207,155,0.55)] bg-[linear-gradient(140deg,rgba(62,207,155,0.16),rgba(94,200,242,0.12))] shadow-[0_0_22px_rgba(62,207,155,0.2)]'
-                                        : 'border-[rgba(155,139,212,0.24)] bg-[linear-gradient(140deg,rgba(12,16,24,0.88),rgba(18,23,33,0.75))] hover:border-[rgba(94,200,242,0.45)] hover:shadow-[0_0_20px_rgba(94,200,242,0.14)]'
-                                    }`}
+                                    className={`or-card text-left p-3 ${activeGraphNode === node.label ? 'is-selected' : ''}`}
                                     title={node.description}
                                   >
-                                    <p className="text-xs text-[#8b9cb0] uppercase tracking-wide">Schema node</p>
+                                    <p className="text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">Schema node</p>
                                     <p className="text-base font-semibold text-[#e8edf4] mt-1">{node.label}</p>
                                     <p className="text-xs text-[#cbd5e1] mt-2">{node.description}</p>
                                     <p className="text-[11px] text-[#9fb0c5] mt-2 truncate" title={node.path}>
@@ -1179,82 +1364,86 @@ const OntologyWorkspace: React.FC = () => {
                                 ))}
                               </div>
                             ) : (
-                              <p className="text-sm text-gray-500">Schema node cards are not available for this result.</p>
+                              <p className="text-sm text-[#8b9cb0]">Schema node cards are not available for this result.</p>
                             )}
-                            <details className="mt-4 rounded-xl border border-[rgba(155,139,212,0.22)] bg-[#0b0f16]">
-                              <summary className="cursor-pointer px-4 py-2 text-xs font-medium text-[#d9d6f2]">
+                            <details className="mt-4 rounded-2xl border border-[rgba(148,163,184,0.16)] bg-[#0b0f16]">
+                              <summary className="cursor-pointer px-4 py-2.5 text-xs font-medium text-[#8b9cb0]">
                                 View raw Graph JSON schema
                               </summary>
-                              <pre className="px-4 pb-4 text-xs overflow-x-auto font-mono max-h-72 overflow-y-auto text-[#d9d6f2]">
-                                {typeof graphData.graph_json_schema === 'string' ? graphData.graph_json_schema : JSON.stringify(graphData.graph_json_schema, null, 2)}
+                              <pre className="or-mono px-4 pb-4 text-xs overflow-x-auto max-h-72 overflow-y-auto text-[#cbd5e1]">
+                                {typeof graphData.graph_json_schema === 'string'
+                                  ? graphData.graph_json_schema
+                                  : JSON.stringify(graphData.graph_json_schema, null, 2)}
                               </pre>
                             </details>
                           </section>
                         )}
-                        {(Array.isArray(graphData.node_types) && (graphData.node_types as Record<string, unknown>[]).length > 0) || (Array.isArray(graphData.edge_types) && (graphData.edge_types as Record<string, unknown>[]).length > 0) ? (
+                        {(Array.isArray(graphData.node_types) && (graphData.node_types as Record<string, unknown>[]).length > 0) ||
+                        (Array.isArray(graphData.edge_types) && (graphData.edge_types as Record<string, unknown>[]).length > 0) ? (
                           <section>
                             <EntityConnectionsList
                               key={`connections-${versionId}`}
                               nodeTypes={(graphData.node_types as Record<string, unknown>[]) ?? []}
                               edgeTypes={(graphData.edge_types as Record<string, unknown>[]) ?? []}
-                              graphJsonSchema={graphData.graph_json_schema as { nodes?: Array<{ id: string; label?: string }>; edges?: Array<{ from: string; to: string; label?: string }> } | undefined}
+                              graphJsonSchema={
+                                graphData.graph_json_schema as
+                                  | { nodes?: Array<{ id: string; label?: string }>; edges?: Array<{ from: string; to: string; label?: string }> }
+                                  | undefined
+                              }
                             />
                           </section>
                         ) : null}
                       </>
                     )}
-                    {!loadingGraph && !graphData && versionId && <p className="text-gray-500">No graph data. Run discovery and ensure a version is selected.</p>}
+                    {!loadingGraph && !graphData && versionId && (
+                      <p className="text-[#8b9cb0]">No graph data. Run discovery and ensure a version is selected.</p>
+                    )}
                   </div>
                 </div>
               )}
             </div>
           ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-[rgba(148,163,184,0.18)] overflow-hidden">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            <div className="lg:col-span-2 or-shell overflow-hidden">
               {activeTab === 'entities' && (
                 <div className="p-0">
                   <ResultPanelHeader
                     icon={CubeIcon}
                     title="Entity catalog"
-                    subtitle="Concept classes extracted from source artifacts"
+                    subtitle="Concept classes extracted from measured schema / artifacts"
                     countLabel={`${version.classes.length} entities`}
                     tone="teal"
                   />
-                  <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {version.classes.length === 0 && (
-                      <div className="sm:col-span-2 rounded-xl border border-[rgba(148,163,184,0.2)] bg-white/[0.03] p-6 text-center text-sm text-gray-500">
+                      <div className="sm:col-span-2 rounded-2xl border border-dashed border-[rgba(148,163,184,0.22)] p-8 text-center text-sm text-[#8b9cb0]">
                         No entities available in this discovery result.
                       </div>
                     )}
-                    {version.classes.map(c => {
-                      const pct = Math.round(c.confidence_score * 100);
-                      const confidenceColor = pct >= 70 ? 'bg-emerald-500' : pct >= 40 ? 'bg-amber-500' : 'bg-rose-400';
-                      const statusColor = c.status === 'approved' ? 'bg-emerald-100 text-emerald-800' : c.status === 'rejected' ? 'bg-gray-100 text-gray-600' : 'bg-amber-100 text-amber-800';
-                      return (
-                        <div
-                          key={c.id}
-                          onClick={() => setSelectedElement(c)}
-                          className={`relative overflow-hidden rounded-xl border cursor-pointer transition-all duration-200 ${selectedElement?.id === c.id ? 'ring-2 ring-[#5ec8f2] border-[rgba(94,200,242,0.55)] shadow-[0_0_24px_rgba(94,200,242,0.2)] bg-[linear-gradient(140deg,rgba(94,200,242,0.16),rgba(17,26,38,0.9))]' : 'border-gray-200 hover:border-teal-200 hover:shadow-sm bg-white'}`}
-                        >
-                          <div className={`absolute left-0 top-0 bottom-0 w-1 ${confidenceColor}`} />
-                          <div className="pl-4 pr-4 py-4">
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="min-w-0 flex-1">
-                                <div className="font-semibold text-gray-900 truncate">{c.normalized_name}</div>
-                                {c.definition && <div className="text-xs text-gray-600 mt-1 line-clamp-2">{c.definition}</div>}
-                              </div>
-                              <span className={`shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${statusColor}`}>{c.status}</span>
+                    {version.classes.map((c, idx) => (
+                      <div
+                        key={c.id}
+                        onClick={() => setSelectedElement(c)}
+                        className={`or-card cursor-pointer p-4 ${selectedElement?.id === c.id ? 'is-selected' : ''}`}
+                        style={{ animationDelay: `${idx * 35}ms` }}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.12)] text-[10px] font-bold text-[#bfeaff]">
+                                {(c.normalized_name || '?').slice(0, 2).toUpperCase()}
+                              </span>
+                              <div className="font-semibold text-[#e8edf4] truncate">{c.normalized_name}</div>
                             </div>
-                            <div className="mt-3 flex items-center gap-2">
-                              <div className="flex-1 h-1.5 rounded-full bg-gray-200 overflow-hidden">
-                                <div className={`h-full rounded-full ${confidenceColor}`} style={{ width: `${pct}%` }} />
-                              </div>
-                              <span className="text-xs font-medium text-gray-500 tabular-nums">{pct}%</span>
-                            </div>
+                            {c.definition && <div className="text-xs text-[#8b9cb0] mt-2 line-clamp-2">{c.definition}</div>}
                           </div>
+                          <StatusChip status={c.status} />
                         </div>
-                      );
-                    })}
+                        <div className="mt-3">
+                          <ConfidenceMeter value={c.confidence_score} />
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -1267,36 +1456,34 @@ const OntologyWorkspace: React.FC = () => {
                     countLabel={`${version.relationships.length} relations`}
                     tone="cyan"
                   />
-                  <div className="p-4 space-y-3">
+                  <div className="p-4 space-y-2.5">
                     {version.relationships.length === 0 && (
-                      <div className="rounded-xl border border-[rgba(148,163,184,0.2)] bg-white/[0.03] p-6 text-center text-sm text-gray-500">
+                      <div className="rounded-2xl border border-dashed border-[rgba(148,163,184,0.22)] p-8 text-center text-sm text-[#8b9cb0]">
                         No relationships available in this discovery result.
                       </div>
                     )}
-                    {version.relationships.map(r => {
-                      const src = version.classes.find(c => c.id === r.source_class_id)?.normalized_name || r.source_class_id;
-                      const tgt = version.classes.find(c => c.id === r.target_class_id)?.normalized_name || r.target_class_id;
-                      const pct = Math.round(r.confidence_score * 100);
-                      const statusColor = r.status === 'approved' ? 'bg-emerald-100 text-emerald-800' : r.status === 'rejected' ? 'bg-gray-100 text-gray-600' : 'bg-amber-100 text-amber-800';
+                    {version.relationships.map((r, idx) => {
+                      const src = version.classes.find((c) => c.id === r.source_class_id)?.normalized_name || r.source_class_id;
+                      const tgt = version.classes.find((c) => c.id === r.target_class_id)?.normalized_name || r.target_class_id;
                       return (
                         <div
                           key={r.id}
                           onClick={() => setSelectedElement(r)}
-                          className={`rounded-xl border cursor-pointer transition-all duration-200 ${selectedElement?.id === r.id ? 'ring-2 ring-[#67d7ff] border-[rgba(103,215,255,0.55)] shadow-[0_0_24px_rgba(103,215,255,0.2)] bg-[linear-gradient(140deg,rgba(103,215,255,0.14),rgba(14,25,34,0.9))]' : 'border-gray-200 hover:border-cyan-200 hover:shadow-sm bg-white'}`}
+                          className={`or-ribbon cursor-pointer ${selectedElement?.id === r.id ? 'ring-1 ring-[#5ec8f2]/60' : ''}`}
+                          style={{ animationDelay: `${idx * 30}ms` }}
                         >
-                          <div className="px-4 py-3 flex flex-wrap items-center gap-2 sm:gap-3">
-                            <span className="inline-flex items-center px-3 py-1 rounded-lg bg-slate-100 text-slate-800 text-sm font-medium">{src}</span>
-                            <span className="flex items-center gap-1 text-cyan-600 font-semibold text-sm">
-                              <span className="hidden sm:inline">—</span>
-                              <span className="px-2 py-0.5 rounded bg-cyan-100">{r.relationship_name}</span>
-                              <span className="text-gray-400">→</span>
-                            </span>
-                            <span className="inline-flex items-center px-3 py-1 rounded-lg bg-slate-100 text-slate-800 text-sm font-medium">{tgt}</span>
-                            <span className="ml-auto flex items-center gap-2">
-                              <span className="text-xs font-medium text-gray-500 tabular-nums">{pct}%</span>
-                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${statusColor}`}>{r.status}</span>
-                            </span>
-                          </div>
+                          <span className="px-2.5 py-1 rounded-lg border border-[rgba(94,200,242,0.3)] bg-[rgba(94,200,242,0.1)] text-sm text-[#e8edf4]">
+                            {src}
+                          </span>
+                          <span className="or-mono text-[11px] text-[#5ec8f2]">{r.relationship_name}</span>
+                          <span className="text-[#8b9cb0]">→</span>
+                          <span className="px-2.5 py-1 rounded-lg border border-[rgba(62,207,155,0.3)] bg-[rgba(62,207,155,0.1)] text-sm text-[#d8f4e8]">
+                            {tgt}
+                          </span>
+                          <span className="ml-auto flex items-center gap-2">
+                            <ConfidenceMeter value={r.confidence_score} />
+                            <StatusChip status={r.status} />
+                          </span>
                         </div>
                       );
                     })}
@@ -1312,34 +1499,39 @@ const OntologyWorkspace: React.FC = () => {
                     countLabel={`${version.attributes.length} attributes`}
                     tone="violet"
                   />
-                  <div className="p-4 space-y-3">
+                  <div className="p-4 space-y-2.5">
                     {version.attributes.length === 0 && (
-                      <div className="rounded-xl border border-[rgba(148,163,184,0.2)] bg-white/[0.03] p-6 text-center text-sm text-gray-500">
+                      <div className="rounded-2xl border border-dashed border-[rgba(148,163,184,0.22)] p-8 text-center text-sm text-[#8b9cb0]">
                         No attributes available in this discovery result.
                       </div>
                     )}
-                    {version.attributes.map(a => {
-                      const cls = version.classes.find(c => c.id === a.class_id)?.normalized_name || a.class_id;
-                      const pct = Math.round(a.confidence_score * 100);
-                      const statusColor = a.status === 'approved' ? 'bg-emerald-100 text-emerald-800' : a.status === 'rejected' ? 'bg-gray-100 text-gray-600' : 'bg-amber-100 text-amber-800';
+                    {version.attributes.map((a, idx) => {
+                      const cls = version.classes.find((c) => c.id === a.class_id)?.normalized_name || a.class_id;
                       const typeLabel = (a.data_type_guess || 'string').toLowerCase();
                       return (
                         <div
                           key={a.id}
                           onClick={() => setSelectedElement(a)}
-                          className={`rounded-xl border cursor-pointer transition-all duration-200 ${selectedElement?.id === a.id ? 'ring-2 ring-[#b8a9ff] border-[rgba(184,169,255,0.55)] shadow-[0_0_24px_rgba(184,169,255,0.22)] bg-[linear-gradient(140deg,rgba(184,169,255,0.16),rgba(20,18,35,0.9))]' : 'border-gray-200 hover:border-violet-200 hover:shadow-sm bg-white'}`}
+                          className={`or-card cursor-pointer px-4 py-3 ${selectedElement?.id === a.id ? 'is-selected' : ''}`}
+                          style={{ animationDelay: `${idx * 25}ms` }}
                         >
-                          <div className="px-4 py-3 flex flex-wrap items-center gap-2">
-                            <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">{cls}</span>
-                            <span className="text-gray-300">/</span>
-                            <span className="font-semibold text-gray-900">{a.attribute_name}</span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8b9cb0]">{cls}</span>
+                            <span className="text-[#3a4556]">/</span>
+                            <span className="font-semibold text-[#e8edf4]">{a.attribute_name}</span>
                             {a.data_type_guess && (
-                              <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-xs font-mono">{typeLabel}</span>
+                              <span className="or-mono px-2 py-0.5 rounded-md border border-[rgba(155,139,212,0.3)] bg-[rgba(155,139,212,0.1)] text-[#c4b8ef] text-[11px]">
+                                {typeLabel}
+                              </span>
                             )}
-                            {a.required_flag_guess && <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-700 text-xs font-medium">required</span>}
+                            {a.required_flag_guess && (
+                              <span className="px-2 py-0.5 rounded-md border border-[rgba(240,137,132,0.35)] bg-[rgba(240,137,132,0.12)] text-[#f08984] text-[10px] font-semibold uppercase tracking-wide">
+                                required
+                              </span>
+                            )}
                             <span className="ml-auto flex items-center gap-2">
-                              <span className="text-xs font-medium text-gray-500 tabular-nums">{pct}%</span>
-                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${statusColor}`}>{a.status}</span>
+                              <ConfidenceMeter value={a.confidence_score} tone="lilac" />
+                              <StatusChip status={a.status} />
                             </span>
                           </div>
                         </div>
@@ -1357,21 +1549,20 @@ const OntologyWorkspace: React.FC = () => {
                     countLabel={`${version.constraints.length} rules`}
                     tone="emerald"
                   />
-                  <div className="p-4 space-y-4">
+                  <div className="p-4 space-y-3">
                     {version.constraints.length === 0 && (
-                      <div className="rounded-xl border border-[rgba(148,163,184,0.2)] bg-white/[0.03] p-6 text-center text-sm text-gray-500">
+                      <div className="rounded-2xl border border-dashed border-[rgba(148,163,184,0.22)] p-8 text-center text-sm text-[#8b9cb0]">
                         No business rules detected in this discovery result.
                       </div>
                     )}
-                    {version.constraints.map(c => (
-                      <div
-                        key={c.id}
-                        className="rounded-xl border border-[rgba(98,232,183,0.28)] bg-[linear-gradient(140deg,rgba(98,232,183,0.08),rgba(16,22,24,0.88))] overflow-hidden hover:shadow-[0_0_20px_rgba(98,232,183,0.14)] transition-shadow"
-                      >
-                        <div className="px-4 py-2 bg-[rgba(98,232,183,0.12)] border-b border-[rgba(98,232,183,0.25)] flex items-center gap-2">
-                          <span className="text-xs font-semibold uppercase tracking-wider text-[#62e8b7]">{c.constraint_type}</span>
+                    {version.constraints.map((c) => (
+                      <div key={c.id} className="or-card overflow-hidden">
+                        <div className="px-4 py-2 border-b border-[rgba(62,207,155,0.2)] bg-[rgba(62,207,155,0.08)] flex items-center gap-2">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#7ee0b8]">
+                            {c.constraint_type}
+                          </span>
                         </div>
-                        <div className="px-4 py-3 font-mono text-sm text-[#d8f7eb] bg-[#0a1113]/65 overflow-x-auto">
+                        <div className="or-mono px-4 py-3 text-sm text-[#d8f7eb] bg-[#070b12]/50 overflow-x-auto">
                           {c.expression}
                         </div>
                       </div>
@@ -1381,142 +1572,139 @@ const OntologyWorkspace: React.FC = () => {
               )}
             </div>
 
-            {/* Side panel: sticky so query input stays in view without scrolling the page */}
+            {/* Side panel */}
             <div className="flex flex-col gap-4 min-h-0 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)] lg:overflow-hidden lg:flex-1">
-              {/* Evidence & actions — compact, scrollable */}
-              <div className="bg-white rounded-xl shadow-sm border border-[rgba(148,163,184,0.18)] overflow-hidden flex-shrink-0">
-                <div className="px-4 py-3 border-b border-[rgba(148,163,184,0.16)] bg-white/[0.04]">
-                  <h3 className="text-sm font-semibold text-gray-900">Evidence & actions</h3>
-                  <p className="text-xs text-gray-500 mt-0.5">Source references and approve</p>
+              <div className="or-shell overflow-hidden flex-shrink-0">
+                <div className="px-4 py-3 border-b border-[rgba(148,163,184,0.12)]">
+                  <p className="text-[10px] uppercase tracking-[0.16em] text-[#8b9cb0]">Inspector</p>
+                  <h3 className="text-sm font-semibold text-[#e8edf4] mt-0.5">Evidence & actions</h3>
                 </div>
                 <div className="p-4 max-h-64 overflow-y-auto">
                   {selectedElement && (
                     <>
-                      {/* Title */}
                       {'normalized_name' in selectedElement && (
-                        <p className="text-sm font-semibold text-gray-900">{(selectedElement as OntologyClass).normalized_name}</p>
+                        <p className="text-sm font-semibold text-[#e8edf4]">{(selectedElement as OntologyClass).normalized_name}</p>
                       )}
                       {'relationship_name' in selectedElement && (
-                        <p className="text-sm font-semibold text-gray-900">{(selectedElement as OntologyRelationship).relationship_name}</p>
+                        <p className="text-sm font-semibold text-[#e8edf4]">{(selectedElement as OntologyRelationship).relationship_name}</p>
                       )}
                       {'attribute_name' in selectedElement && (
-                        <p className="text-sm font-semibold text-gray-900">{(selectedElement as OntologyAttribute).attribute_name}</p>
+                        <p className="text-sm font-semibold text-[#e8edf4]">{(selectedElement as OntologyAttribute).attribute_name}</p>
                       )}
-                      {/* Metadata: confidence, status, extraction source */}
                       <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <span className="text-xs text-gray-500 tabular-nums">
-                          Confidence: {Math.round((selectedElement.confidence_score ?? 0) * 100)}%
-                        </span>
-                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${selectedElement.status === 'approved' ? 'bg-emerald-100 text-emerald-800' : selectedElement.status === 'rejected' ? 'bg-gray-100 text-gray-600' : 'bg-amber-100 text-amber-800'}`}>
-                          {selectedElement.status}
-                        </span>
+                        <ConfidenceMeter value={selectedElement.confidence_score ?? 0} />
+                        <StatusChip status={selectedElement.status} />
                         {(() => {
                           const src = (selectedElement as { extraction_source?: string }).extraction_source;
-                          return src ? <span className="text-xs text-gray-400 capitalize">{src.replace('_', ' ')}</span> : null;
+                          return src ? (
+                            <span className="text-[10px] uppercase tracking-wide text-[#8b9cb0]">{src.replace('_', ' ')}</span>
+                          ) : null;
                         })()}
                       </div>
-                      {/* Entity: definition, aliases */}
                       {'normalized_name' in selectedElement && (selectedElement as OntologyClass).definition && (
-                        <div className="mt-2">
-                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Definition</p>
-                          <p className="text-xs text-gray-700 mt-0.5 line-clamp-3">{(selectedElement as OntologyClass).definition}</p>
+                        <div className="mt-3">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8b9cb0]">Definition</p>
+                          <p className="text-xs text-[#cbd5e1] mt-1 line-clamp-3">{(selectedElement as OntologyClass).definition}</p>
                         </div>
                       )}
                       {'normalized_name' in selectedElement && (selectedElement as OntologyClass).aliases?.length ? (
-                        <div className="mt-2">
-                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Aliases</p>
-                          <div className="flex flex-wrap gap-1 mt-0.5">
+                        <div className="mt-3">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8b9cb0]">Aliases</p>
+                          <div className="flex flex-wrap gap-1 mt-1">
                             {((selectedElement as OntologyClass).aliases ?? []).map((a, i) => (
-                              <span key={i} className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-xs">{a}</span>
+                              <span key={i} className="px-1.5 py-0.5 rounded-md border border-[rgba(148,163,184,0.2)] bg-white/[0.04] text-[#8b9cb0] text-[11px]">
+                                {a}
+                              </span>
                             ))}
                           </div>
                         </div>
                       ) : null}
-                      {/* Relationship: definition, cardinality, source → target */}
                       {'relationship_name' in selectedElement && (
                         <>
                           {(selectedElement as OntologyRelationship).definition && (
-                            <div className="mt-2">
-                              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Definition</p>
-                              <p className="text-xs text-gray-700 mt-0.5 line-clamp-2">{(selectedElement as OntologyRelationship).definition}</p>
+                            <div className="mt-3">
+                              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8b9cb0]">Definition</p>
+                              <p className="text-xs text-[#cbd5e1] mt-1 line-clamp-2">
+                                {(selectedElement as OntologyRelationship).definition}
+                              </p>
                             </div>
                           )}
-                          <div className="mt-2 flex flex-wrap items-center gap-1 text-xs">
-                            <span className="font-medium text-gray-700">{version?.classes.find(c => c.id === (selectedElement as OntologyRelationship).source_class_id)?.normalized_name ?? (selectedElement as OntologyRelationship).source_class_id}</span>
-                            <span className="text-gray-400">→</span>
-                            <span className="font-medium text-gray-700">{(selectedElement as OntologyRelationship).relationship_name}</span>
-                            <span className="text-gray-400">→</span>
-                            <span className="font-medium text-gray-700">{version?.classes.find(c => c.id === (selectedElement as OntologyRelationship).target_class_id)?.normalized_name ?? (selectedElement as OntologyRelationship).target_class_id}</span>
-                            {(selectedElement as OntologyRelationship).cardinality_if_detected && (
-                              <span className="ml-1 text-gray-500">({(selectedElement as OntologyRelationship).cardinality_if_detected})</span>
-                            )}
+                          <div className="mt-3 or-ribbon text-xs">
+                            <span className="text-[#e8edf4]">
+                              {version?.classes.find((c) => c.id === (selectedElement as OntologyRelationship).source_class_id)?.normalized_name ??
+                                (selectedElement as OntologyRelationship).source_class_id}
+                            </span>
+                            <span className="text-[#5ec8f2] or-mono">{(selectedElement as OntologyRelationship).relationship_name}</span>
+                            <span className="text-[#d8f4e8]">
+                              {version?.classes.find((c) => c.id === (selectedElement as OntologyRelationship).target_class_id)?.normalized_name ??
+                                (selectedElement as OntologyRelationship).target_class_id}
+                            </span>
                           </div>
                         </>
                       )}
-                      {/* Attribute: description, type, required, owning entity */}
                       {'attribute_name' in selectedElement && (
-                        <div className="mt-2 space-y-1 text-xs">
-                          <p className="text-gray-500">
-                            <span className="font-medium text-gray-600">Entity:</span> {version?.classes.find(c => c.id === (selectedElement as OntologyAttribute).class_id)?.normalized_name ?? (selectedElement as OntologyAttribute).class_id}
+                        <div className="mt-3 space-y-1 text-xs text-[#8b9cb0]">
+                          <p>
+                            <span className="text-[#cbd5e1]">Entity:</span>{' '}
+                            {version?.classes.find((c) => c.id === (selectedElement as OntologyAttribute).class_id)?.normalized_name ??
+                              (selectedElement as OntologyAttribute).class_id}
                           </p>
                           {(selectedElement as OntologyAttribute).data_type_guess && (
-                            <p className="text-gray-500"><span className="font-medium text-gray-600">Type:</span> {(selectedElement as OntologyAttribute).data_type_guess}</p>
-                          )}
-                          {(selectedElement as OntologyAttribute).required_flag_guess && (
-                            <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-xs">Required</span>
+                            <p>
+                              <span className="text-[#cbd5e1]">Type:</span> {(selectedElement as OntologyAttribute).data_type_guess}
+                            </p>
                           )}
                           {(selectedElement as OntologyAttribute).description && (
-                            <p className="text-gray-700 mt-1 line-clamp-2">{(selectedElement as OntologyAttribute).description}</p>
+                            <p className="text-[#cbd5e1] mt-1 line-clamp-2">{(selectedElement as OntologyAttribute).description}</p>
                           )}
                         </div>
                       )}
-                      {/* Source evidence (entities) */}
                       {'source_evidence' in selectedElement && (selectedElement as OntologyClass).source_evidence?.length > 0 && (
                         <div className="mt-3 space-y-2">
-                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Source evidence</p>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8b9cb0]">Source evidence</p>
                           {(selectedElement as OntologyClass).source_evidence.slice(0, 3).map((ev, i) => (
-                            <div key={i} className="p-2.5 rounded-lg border border-gray-100 bg-gray-50 text-xs text-gray-600">
-                              <div className="flex flex-wrap gap-x-2 gap-y-0.5 mb-1">
-                                {(ev as { artifact_type?: string }).artifact_type && <span className="font-medium text-gray-500 uppercase">{(ev as { artifact_type?: string }).artifact_type}</span>}
-                                {(ev as { extraction_stage?: string }).extraction_stage && <span className="text-gray-400">{(ev as { extraction_stage?: string }).extraction_stage}</span>}
-                                {ev.page_number != null && <span>Page {ev.page_number}</span>}
-                                {ev.xml_path && <span className="text-gray-400 truncate">{ev.xml_path}</span>}
-                              </div>
-                              {ev.text_snippet && <p className="line-clamp-3">{ev.text_snippet}</p>}
+                            <div key={i} className="p-2.5 rounded-xl border border-[rgba(148,163,184,0.14)] bg-white/[0.03] text-xs text-[#8b9cb0]">
+                              {ev.text_snippet && <p className="line-clamp-3 text-[#cbd5e1]">{ev.text_snippet}</p>}
                             </div>
                           ))}
                         </div>
                       )}
-                      {/* Evidence (relationships & attributes) */}
                       {'evidence' in selectedElement && ((selectedElement as OntologyRelationship).evidence?.length ?? 0) > 0 && (
                         <div className="mt-3 space-y-2">
-                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Evidence</p>
-                          {((selectedElement as OntologyRelationship).evidence ?? []).slice(0, 3).map((ev: { text_snippet?: string; xml_path?: string; artifact_type?: string; extraction_stage?: string }, i: number) => (
-                            <div key={i} className="p-2.5 rounded-lg border border-gray-100 bg-gray-50 text-xs text-gray-600">
-                              <div className="flex flex-wrap gap-x-2 gap-y-0.5 mb-1">
-                                {ev.artifact_type && <span className="font-medium text-gray-500 uppercase">{ev.artifact_type}</span>}
-                                {ev.extraction_stage && <span className="text-gray-400">{ev.extraction_stage}</span>}
-                                {ev.xml_path && <span className="text-gray-400 truncate">{ev.xml_path}</span>}
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8b9cb0]">Evidence</p>
+                          {((selectedElement as OntologyRelationship).evidence ?? [])
+                            .slice(0, 3)
+                            .map((ev: { text_snippet?: string }, i: number) => (
+                              <div key={i} className="p-2.5 rounded-xl border border-[rgba(148,163,184,0.14)] bg-white/[0.03] text-xs text-[#8b9cb0]">
+                                {ev.text_snippet && <p className="line-clamp-3 text-[#cbd5e1]">{ev.text_snippet}</p>}
                               </div>
-                              {ev.text_snippet && <p className="line-clamp-3">{ev.text_snippet}</p>}
-                            </div>
-                          ))}
+                            ))}
                         </div>
                       )}
                       {versionId && (
-                        <div className="mt-4 pt-3 border-t border-gray-100 flex gap-2">
+                        <div className="mt-4 pt-3 border-t border-[rgba(148,163,184,0.12)] flex gap-2">
                           <button
                             type="button"
-                            onClick={() => handleApprove(activeTab === 'entities' ? 'class' : activeTab === 'relationships' ? 'relationship' : 'attribute', [selectedElement.id])}
-                            className="inline-flex items-center px-3 py-2 rounded-lg bg-emerald-100 text-emerald-800 text-sm font-medium hover:bg-emerald-200 transition-colors"
+                            onClick={() =>
+                              handleApprove(
+                                activeTab === 'entities' ? 'class' : activeTab === 'relationships' ? 'relationship' : 'attribute',
+                                [selectedElement.id],
+                              )
+                            }
+                            className="inline-flex items-center px-3 py-2 rounded-xl border border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.14)] text-[#3ecf9b] text-sm font-medium hover:bg-[rgba(62,207,155,0.22)] transition-colors"
                           >
                             <CheckIcon className="w-4 h-4 mr-1.5" />
                             Approve
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleReject(activeTab === 'entities' ? 'class' : activeTab === 'relationships' ? 'relationship' : 'attribute', [selectedElement.id])}
-                            className="inline-flex items-center px-3 py-2 rounded-lg bg-gray-100 text-gray-700 text-sm font-medium hover:bg-gray-200 transition-colors"
+                            onClick={() =>
+                              handleReject(
+                                activeTab === 'entities' ? 'class' : activeTab === 'relationships' ? 'relationship' : 'attribute',
+                                [selectedElement.id],
+                              )
+                            }
+                            className="inline-flex items-center px-3 py-2 rounded-xl border border-[rgba(148,163,184,0.22)] bg-white/[0.03] text-[#8b9cb0] text-sm font-medium hover:text-[#f08984] transition-colors"
                           >
                             <XMarkIcon className="w-4 h-4 mr-1.5" />
                             Reject
@@ -1526,22 +1714,21 @@ const OntologyWorkspace: React.FC = () => {
                     </>
                   )}
                   {!selectedElement && (
-                    <p className="text-sm text-gray-500">Select an entity, relationship, or attribute to view evidence and approve.</p>
+                    <p className="text-sm text-[#8b9cb0]">Select an entity, relationship, or attribute to inspect evidence.</p>
                   )}
                 </div>
               </div>
 
-              {/* Real-time conversation AI — visible when user has selected a result (version) */}
               {version && (
-                <div className="bg-white rounded-xl shadow-sm border border-[rgba(148,163,184,0.18)] overflow-hidden flex-1 flex flex-col min-h-[280px]">
-                  <div className="px-4 py-3 border-b border-[rgba(148,163,184,0.16)] bg-white/[0.04] flex-shrink-0">
+                <div className="or-shell overflow-hidden flex-1 flex flex-col min-h-[280px]">
+                  <div className="px-4 py-3 border-b border-[rgba(148,163,184,0.12)] flex-shrink-0">
                     <div className="flex items-center gap-2">
-                      <div className="p-1.5 rounded-lg bg-[rgba(155,139,212,0.18)] border border-[rgba(155,139,212,0.3)]">
-                        <ChatBubbleLeftRightIcon className="w-4 h-4 text-indigo-600" />
+                      <div className="p-1.5 rounded-xl border border-[rgba(94,200,242,0.3)] bg-[rgba(94,200,242,0.12)]">
+                        <ChatBubbleLeftRightIcon className="w-4 h-4 text-[#5ec8f2]" />
                       </div>
                       <div>
-                        <h3 className="text-sm font-semibold text-gray-900">Real-time queries</h3>
-                        <p className="text-xs text-gray-500 mt-0.5">Ask about this ontology</p>
+                        <h3 className="text-sm font-semibold text-[#e8edf4]">Real-time queries</h3>
+                        <p className="text-xs text-[#8b9cb0] mt-0.5">Ask about this ontology</p>
                       </div>
                     </div>
                   </div>
@@ -1549,20 +1736,27 @@ const OntologyWorkspace: React.FC = () => {
                     <div className="flex-1 overflow-y-auto space-y-3 mb-3 min-h-[120px]">
                       {chatMessages.length === 0 && (
                         <div className="text-center py-6 px-3">
-                          <p className="text-sm text-gray-500">Ask anything about the discovery result: entities, relationships, attributes, or evidence.</p>
-                          <p className="text-xs text-gray-400 mt-2">e.g. &quot;What does this entity represent?&quot;</p>
+                          <p className="text-sm text-[#8b9cb0]">
+                            Ask anything about entities, relationships, attributes, or evidence.
+                          </p>
                         </div>
                       )}
                       {chatMessages.map((msg, i) => (
                         <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                          <div className={`max-w-[90%] rounded-xl px-3 py-2 text-sm ${msg.role === 'user' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-800 border border-gray-200'}`}>
+                          <div
+                            className={`max-w-[90%] rounded-2xl px-3 py-2 text-sm ${
+                              msg.role === 'user'
+                                ? 'bg-gradient-to-br from-[#5ec8f2] to-[#3ecf9b] text-[#061018]'
+                                : 'border border-[rgba(148,163,184,0.16)] bg-white/[0.04] text-[#cbd5e1]'
+                            }`}
+                          >
                             {msg.content}
                           </div>
                         </div>
                       ))}
                       {chatLoading && (
                         <div className="flex justify-start">
-                          <div className="rounded-xl px-3 py-2 text-sm bg-gray-100 text-gray-500 border border-gray-200 animate-pulse">
+                          <div className="rounded-2xl px-3 py-2 text-sm border border-[rgba(148,163,184,0.16)] bg-white/[0.04] text-[#8b9cb0] animate-pulse">
                             Thinking…
                           </div>
                         </div>
@@ -1572,16 +1766,21 @@ const OntologyWorkspace: React.FC = () => {
                       <input
                         type="text"
                         value={chatInput}
-                        onChange={e => setChatInput(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChatSend(); } }}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            handleChatSend();
+                          }
+                        }}
                         placeholder="Ask about this ontology…"
-                        className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                        className="flex-1 rounded-xl border border-[rgba(148,163,184,0.2)] bg-[#0a1018]/80 px-3 py-2 text-sm text-[#e8edf4] placeholder:text-[#8b9cb0] focus:outline-none focus:ring-1 focus:ring-[#5ec8f2]/50"
                       />
                       <button
                         type="button"
                         onClick={handleChatSend}
                         disabled={!chatInput.trim() || chatLoading}
-                        className="p-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        className="p-2 rounded-xl border border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.16)] text-[#5ec8f2] hover:bg-[rgba(94,200,242,0.28)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                         title="Send"
                       >
                         <PaperAirplaneIcon className="w-5 h-5" />
@@ -1593,7 +1792,7 @@ const OntologyWorkspace: React.FC = () => {
             </div>
           </div>
           )}
-        </>
+        </div>
       )}
 
       {!version && versionId && <p className="text-gray-500">Loading version…</p>}

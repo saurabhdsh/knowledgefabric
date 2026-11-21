@@ -11,19 +11,37 @@ RUN apt-get update && apt-get install -y \
     git \
     curl \
     openssh-client \
+    tesseract-ocr \
+    tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
+
+# Embedding model (all-MiniLM-L6-v2, ONNX) baked into the image so the first
+# fabric does not depend on a download at runtime. Checksum-verified.
+RUN mkdir -p /opt/weave/embeddings/all-MiniLM-L6-v2 \
+    && curl -fsSL --retry 5 --retry-delay 5 \
+        https://chroma-onnx-models.s3.amazonaws.com/all-MiniLM-L6-v2/onnx.tar.gz \
+        -o /tmp/onnx.tar.gz \
+    && echo "913d7300ceae3b2dbc2c50d1de4baacab4be7b9380491c27fab7418616a16ec3  /tmp/onnx.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/onnx.tar.gz -C /opt/weave/embeddings/all-MiniLM-L6-v2 \
+    && rm -f /tmp/onnx.tar.gz \
+    && test -f /opt/weave/embeddings/all-MiniLM-L6-v2/onnx/model.onnx
 
 # Copy requirements first for better caching
 COPY requirements.txt .
 
 # CPU-only Torch first (EC2 has no GPU). Installing plain torch==2.1.0 from PyPI
 # pulls ~GB of nvidia_* CUDA wheels and often fails mid-download (Broken pipe).
+# x86_64 wheels on the CPU index are tagged "+cpu"; arm64 (Apple Silicon Docker)
+# wheels are not, so fall back to the untagged version from the same index.
 RUN pip install --upgrade pip \
-    && pip install --no-cache-dir --default-timeout=600 \
-        torch==2.1.0+cpu \
-        --index-url https://download.pytorch.org/whl/cpu \
+    && (pip install --no-cache-dir --default-timeout=600 \
+            torch==2.1.0+cpu \
+            --index-url https://download.pytorch.org/whl/cpu \
+        || pip install --no-cache-dir --default-timeout=600 \
+            torch==2.1.0 \
+            --index-url https://download.pytorch.org/whl/cpu) \
     && grep -v -E '^torch==' requirements.txt > /tmp/requirements.no-torch.txt \
-    && printf '%s\n' 'torch==2.1.0+cpu' > /tmp/constraints.txt \
+    && printf 'torch==%s\n' "$(python -c 'import torch; print(torch.__version__)')" > /tmp/constraints.txt \
     && pip install --no-cache-dir --default-timeout=600 \
         -c /tmp/constraints.txt \
         -r /tmp/requirements.no-torch.txt \

@@ -102,6 +102,10 @@ class OntologyRelationship(BaseModel):
     confidence_score: float = Field(ge=0.0, le=1.0, default=0.0)
     status: OntologyElementStatus = OntologyElementStatus.DRAFT
     extraction_source: ExtractionSourceType = ExtractionSourceType.COMBINED
+    # Phase 2 — measured tabular bindings (profile FKs)
+    source_columns: List[str] = Field(default_factory=list)
+    target_columns: List[str] = Field(default_factory=list)
+    tabular_binding: Optional[Dict[str, Any]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

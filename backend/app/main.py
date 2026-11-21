@@ -23,6 +23,9 @@ async def lifespan(app: FastAPI):
     auth_service.ensure_seed_users()
     fabric_store.initialize()
     migrate_legacy_data_to_primary_admin()
+    # Fabric builds run in this process; any still marked running were cut off.
+    from app.services.fabric_pipeline.runner import reconcile_interrupted_runs
+    reconcile_interrupted_runs()
     job_worker.start()
     yield
     job_worker.stop()

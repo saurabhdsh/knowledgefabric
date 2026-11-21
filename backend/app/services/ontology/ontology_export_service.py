@@ -1,7 +1,7 @@
-"""Export ontology to JSON, CSV, and graph-ready formats; canonical model generation."""
+"""Export ontology to JSON, CSV, RDF/Turtle, OWL, and graph-ready formats."""
 import csv
 import io
-import json
+import re
 from typing import Any, Dict, List, Optional
 
 from app.models.ontology import (
@@ -11,6 +11,8 @@ from app.models.ontology import (
     OntologyAttribute,
     OntologyConstraint,
 )
+
+WEAVE_ONT_NS = "http://weave.ai/ontology/"
 
 
 class OntologyExportService:
@@ -59,6 +61,143 @@ class OntologyExportService:
                 a.data_type_guess or "", a.required_flag_guess, a.confidence_score, a.status.value,
             ])
         return buf.getvalue()
+
+    def export_rdf_turtle(self, version: OntologyVersion) -> str:
+        """Export ontology as RDF Schema Turtle (.ttl)."""
+        base = f"{WEAVE_ONT_NS}{version.project_id}/"
+        lines = [
+            f"@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .",
+            f"@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
+            f"@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .",
+            f"@prefix weave: <{base}> .",
+            "",
+            f"<{base}> a rdfs:Class ;",
+            f'  rdfs:label "{self._ttl_esc(version.version_label or "ontology")}" ;',
+            f'  rdfs:comment "Knowledge Fabric ontology export ({version.id})" .',
+            "",
+        ]
+        class_local: Dict[str, str] = {}
+        for c in version.classes:
+            local = self._safe_local(c.normalized_name or c.name or c.id)
+            class_local[c.id] = local
+            lines.append(f"weave:{local} a rdfs:Class ;")
+            lines.append(f'  rdfs:label "{self._ttl_esc(c.name or c.normalized_name)}" ;')
+            if c.definition:
+                lines.append(f'  rdfs:comment "{self._ttl_esc(c.definition)}" ;')
+            lines.append(f'  weave:confidence "{c.confidence_score:.4f}"^^xsd:decimal ;')
+            lines.append(f'  weave:status "{self._ttl_esc(getattr(c.status, "value", str(c.status)))}" .')
+            lines.append("")
+
+        for r in version.relationships:
+            pred = self._safe_local(r.relationship_name or r.id)
+            src = class_local.get(r.source_class_id) or self._safe_local(r.source_class_id)
+            tgt = class_local.get(r.target_class_id) or self._safe_local(r.target_class_id)
+            lines.append(f"weave:{pred} a rdf:Property ;")
+            lines.append(f'  rdfs:label "{self._ttl_esc(r.relationship_name)}" ;')
+            lines.append(f"  rdfs:domain weave:{src} ;")
+            lines.append(f"  rdfs:range weave:{tgt} ;")
+            if r.cardinality_if_detected:
+                lines.append(f'  weave:cardinality "{self._ttl_esc(r.cardinality_if_detected)}" ;')
+            lines.append(f'  weave:confidence "{r.confidence_score:.4f}"^^xsd:decimal .')
+            lines.append("")
+
+        for a in version.attributes:
+            local = self._safe_local(f"{a.class_id}_{a.attribute_name or a.normalized_name or a.id}")
+            domain = class_local.get(a.class_id) or self._safe_local(a.class_id)
+            xsd_t = self._xsd_type(a.data_type_guess)
+            lines.append(f"weave:{local} a rdf:Property ;")
+            lines.append(f'  rdfs:label "{self._ttl_esc(a.attribute_name or a.normalized_name)}" ;')
+            lines.append(f"  rdfs:domain weave:{domain} ;")
+            lines.append(f"  rdfs:range {xsd_t} ;")
+            if a.required_flag_guess:
+                lines.append('  weave:required "true"^^xsd:boolean ;')
+            lines.append(f'  weave:confidence "{a.confidence_score:.4f}"^^xsd:decimal .')
+            lines.append("")
+
+        return "\n".join(lines).rstrip() + "\n"
+
+    def export_owl(self, version: OntologyVersion) -> str:
+        """Export ontology as OWL 2 Turtle (.owl.ttl / .owl)."""
+        base = f"{WEAVE_ONT_NS}{version.project_id}/"
+        ont_iri = f"{base}ontology"
+        lines = [
+            f"@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .",
+            f"@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
+            f"@prefix owl: <http://www.w3.org/2002/07/owl#> .",
+            f"@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .",
+            f"@prefix weave: <{base}> .",
+            "",
+            f"<{ont_iri}> a owl:Ontology ;",
+            f'  rdfs:label "{self._ttl_esc(version.version_label or "Ontology")}" ;',
+            f'  owl:versionInfo "{self._ttl_esc(version.id)}" ;',
+            f'  rdfs:comment "OWL export of Knowledge Fabric ontology project {self._ttl_esc(version.project_id)}" .',
+            "",
+        ]
+        class_local: Dict[str, str] = {}
+        for c in version.classes:
+            local = self._safe_local(c.normalized_name or c.name or c.id)
+            class_local[c.id] = local
+            lines.append(f"weave:{local} a owl:Class ;")
+            lines.append(f'  rdfs:label "{self._ttl_esc(c.name or c.normalized_name)}" ;')
+            if c.definition:
+                lines.append(f'  rdfs:comment "{self._ttl_esc(c.definition)}" ;')
+            for alias in (c.aliases or [])[:8]:
+                if alias and alias != c.name:
+                    lines.append(f'  rdfs:label "{self._ttl_esc(alias)}" ;')
+            lines.append(f'  weave:confidence "{c.confidence_score:.4f}"^^xsd:decimal ;')
+            lines.append(f'  weave:status "{self._ttl_esc(getattr(c.status, "value", str(c.status)))}" .')
+            lines.append("")
+
+        used_preds: Dict[str, int] = {}
+        for r in version.relationships:
+            base_pred = self._safe_local(r.relationship_name or r.id)
+            n = used_preds.get(base_pred, 0)
+            used_preds[base_pred] = n + 1
+            pred = base_pred if n == 0 else f"{base_pred}_{n + 1}"
+            src = class_local.get(r.source_class_id) or self._safe_local(r.source_class_id)
+            tgt = class_local.get(r.target_class_id) or self._safe_local(r.target_class_id)
+            prop_types = ["owl:ObjectProperty"]
+            card = (r.cardinality_if_detected or "").lower()
+            if card in ("1:1", "1-1", "one-to-one"):
+                prop_types.extend(["owl:FunctionalProperty", "owl:InverseFunctionalProperty"])
+            elif card.startswith("1:") or card in ("1:n", "1-n", "one-to-many"):
+                prop_types.append("owl:FunctionalProperty")
+            lines.append(f"weave:{pred} a {', '.join(prop_types)} ;")
+            lines.append(f'  rdfs:label "{self._ttl_esc(r.relationship_name)}" ;')
+            if r.definition:
+                lines.append(f'  rdfs:comment "{self._ttl_esc(r.definition)}" ;')
+            lines.append(f"  rdfs:domain weave:{src} ;")
+            lines.append(f"  rdfs:range weave:{tgt} ;")
+            if r.cardinality_if_detected:
+                lines.append(f'  weave:cardinality "{self._ttl_esc(r.cardinality_if_detected)}" ;')
+            lines.append(f'  weave:confidence "{r.confidence_score:.4f}"^^xsd:decimal .')
+            lines.append("")
+
+        for a in version.attributes:
+            local = self._safe_local(
+                f"{class_local.get(a.class_id, a.class_id)}_{a.attribute_name or a.normalized_name or a.id}"
+            )
+            domain = class_local.get(a.class_id) or self._safe_local(a.class_id)
+            xsd_t = self._xsd_type(a.data_type_guess)
+            lines.append(f"weave:{local} a owl:DatatypeProperty ;")
+            lines.append(f'  rdfs:label "{self._ttl_esc(a.attribute_name or a.normalized_name)}" ;')
+            if a.description:
+                lines.append(f'  rdfs:comment "{self._ttl_esc(a.description)}" ;')
+            lines.append(f"  rdfs:domain weave:{domain} ;")
+            lines.append(f"  rdfs:range {xsd_t} ;")
+            if a.required_flag_guess:
+                lines.append('  weave:required "true"^^xsd:boolean ;')
+            lines.append(f'  weave:confidence "{a.confidence_score:.4f}"^^xsd:decimal .')
+            lines.append("")
+
+        for c in version.constraints:
+            local = self._safe_local(f"constraint_{c.id}")
+            lines.append(f"weave:{local} a owl:Axiom ;")
+            lines.append(f'  rdfs:label "{self._ttl_esc(getattr(c.constraint_type, "value", str(c.constraint_type)))}" ;')
+            lines.append(f'  rdfs:comment "{self._ttl_esc(c.expression)}" .')
+            lines.append("")
+
+        return "\n".join(lines).rstrip() + "\n"
 
     def export_graph(self, version: OntologyVersion) -> Dict[str, Any]:
         """Graph-ready payload: node types, edge types, properties, validation rules, Neo4j-style snippet."""
@@ -221,3 +360,43 @@ class OntologyExportService:
             if c.id == class_id:
                 return c.normalized_name
         return class_id
+
+    def _safe_local(self, name: str) -> str:
+        raw = (name or "thing").strip()
+        safe = re.sub(r"[^A-Za-z0-9_\-]+", "_", raw)
+        safe = re.sub(r"_+", "_", safe).strip("_")
+        if not safe:
+            safe = "thing"
+        if safe[0].isdigit():
+            safe = f"n_{safe}"
+        return safe
+
+    def _ttl_esc(self, value: Optional[str]) -> str:
+        text = (value or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "")
+        return text[:2000]
+
+    def _xsd_type(self, data_type_guess: Optional[str]) -> str:
+        t = (data_type_guess or "string").strip().lower()
+        mapping = {
+            "string": "xsd:string",
+            "str": "xsd:string",
+            "text": "xsd:string",
+            "varchar": "xsd:string",
+            "int": "xsd:integer",
+            "integer": "xsd:integer",
+            "bigint": "xsd:long",
+            "long": "xsd:long",
+            "float": "xsd:float",
+            "double": "xsd:double",
+            "decimal": "xsd:decimal",
+            "number": "xsd:decimal",
+            "bool": "xsd:boolean",
+            "boolean": "xsd:boolean",
+            "date": "xsd:date",
+            "datetime": "xsd:dateTime",
+            "timestamp": "xsd:dateTime",
+        }
+        for key, xsd in mapping.items():
+            if key in t:
+                return xsd
+        return "xsd:string"

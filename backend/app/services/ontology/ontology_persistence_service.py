@@ -151,6 +151,7 @@ class OntologyPersistenceService:
                     "is_draft": data.get("is_draft", True),
                     "created_at": data.get("created_at"),
                 })
+        result.sort(key=lambda v: str(v.get("created_at") or ""), reverse=True)
         return result
 
     # --- Runs ---

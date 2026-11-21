@@ -10,7 +10,7 @@ import {
 } from '@heroicons/react/24/outline';
 
 interface PDFUploadProps {
-  onUploadComplete: (files: File[]) => void;
+  onUploadComplete: (files: File[], storedNames: string[]) => void;
   onCancel: () => void;
 }
 
@@ -105,8 +105,14 @@ const PDFUpload: React.FC<PDFUploadProps> = ({ onUploadComplete, onCancel }) => 
             progress: 100
           })));
 
-          // Call the completion callback
-          onUploadComplete(uploadFiles.map(uf => uf.file));
+          const storedNames = (result.data?.results || [])
+            .filter((r: any) => r.status === 'success' && r.stored_name)
+            .map((r: any) => String(r.stored_name));
+          // Prefer stored names so create-pdf-fabric binds to exactly these uploads.
+          onUploadComplete(
+            uploadFiles.map(uf => uf.file),
+            storedNames.length ? storedNames : uploadFiles.map(uf => uf.file.name),
+          );
         }
       } else {
         const errorData = await response.json();

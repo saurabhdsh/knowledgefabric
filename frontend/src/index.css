@@ -4,6 +4,7 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
 html {
   /* Slightly tighter global type scale for sleek UI density */
@@ -127,4 +128,200 @@ code {
 
 .badge-danger {
   @apply bg-red-100 text-red-800;
+}
+
+/* ── Ontology discovery result: fluid chrome ───────────────────────── */
+.ontology-result {
+  --or-ink: #e8edf4;
+  --or-mute: #8b9cb0;
+  --or-line: rgba(148, 163, 184, 0.14);
+  --or-cyan: #5ec8f2;
+  --or-mint: #3ecf9b;
+  --or-lilac: #9b8bd4;
+  --or-surface: rgba(12, 17, 26, 0.72);
+  font-family: 'Outfit', 'Plus Jakarta Sans', system-ui, sans-serif;
+}
+
+.ontology-result .or-mono {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+@keyframes or-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.55; }
+  50% { transform: translate3d(2%, -3%, 0) scale(1.08); opacity: 0.85; }
+}
+
+@keyframes or-rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes or-shimmer-line {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+@keyframes or-pulse-soft {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(94, 200, 242, 0.0); }
+  50% { box-shadow: 0 0 28px 0 rgba(94, 200, 242, 0.18); }
+}
+
+.ontology-result .or-shell {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: 1.35rem;
+  border: 1px solid var(--or-line);
+  background:
+    linear-gradient(155deg, rgba(16, 22, 34, 0.92), rgba(10, 14, 22, 0.88));
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 24px 60px -28px rgba(0, 0, 0, 0.65);
+}
+
+.ontology-result .or-shell::before {
+  content: '';
+  position: absolute;
+  inset: -40% -20% auto auto;
+  width: 55%;
+  height: 70%;
+  background: radial-gradient(circle, rgba(94, 200, 242, 0.18), transparent 68%);
+  animation: or-drift 14s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ontology-result .or-shell::after {
+  content: '';
+  position: absolute;
+  inset: auto auto -35% -15%;
+  width: 50%;
+  height: 65%;
+  background: radial-gradient(circle, rgba(62, 207, 155, 0.12), transparent 70%);
+  animation: or-drift 18s ease-in-out infinite reverse;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ontology-result .or-shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+.ontology-result .or-tab-rail {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.4rem;
+  border-radius: 999px;
+  background: rgba(8, 12, 20, 0.65);
+  border: 1px solid var(--or-line);
+  backdrop-filter: blur(12px);
+  overflow-x: auto;
+}
+
+.ontology-result .or-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.55rem 1rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  color: var(--or-mute);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  transition: color 0.25s ease, background 0.25s ease, border-color 0.25s ease, transform 0.25s ease;
+}
+
+.ontology-result .or-tab:hover {
+  color: var(--or-ink);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.ontology-result .or-tab.is-active {
+  color: #061018;
+  background: linear-gradient(120deg, #5ec8f2 0%, #7ad4c0 55%, #3ecf9b 100%);
+  border-color: transparent;
+  box-shadow: 0 8px 24px -12px rgba(94, 200, 242, 0.7);
+  transform: translateY(-1px);
+}
+
+.ontology-result .or-card {
+  animation: or-rise 0.45s ease both;
+  border-radius: 1.1rem;
+  border: 1px solid var(--or-line);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01));
+  transition: border-color 0.25s ease, transform 0.25s ease, background 0.25s ease;
+}
+
+.ontology-result .or-card:hover {
+  border-color: rgba(94, 200, 242, 0.35);
+  transform: translateY(-2px);
+  background:
+    linear-gradient(145deg, rgba(94, 200, 242, 0.1), rgba(255, 255, 255, 0.02));
+}
+
+.ontology-result .or-card.is-selected {
+  border-color: rgba(94, 200, 242, 0.55);
+  background:
+    linear-gradient(145deg, rgba(94, 200, 242, 0.16), rgba(16, 22, 34, 0.9));
+  box-shadow: 0 0 0 1px rgba(94, 200, 242, 0.2), 0 18px 40px -24px rgba(94, 200, 242, 0.45);
+}
+
+.ontology-result .or-flow-line {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(94, 200, 242, 0.55),
+    rgba(62, 207, 155, 0.55),
+    transparent
+  );
+  background-size: 200% 100%;
+  animation: or-shimmer-line 4.5s linear infinite;
+}
+
+.ontology-result .or-view-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid rgba(94, 200, 242, 0.4);
+  background: linear-gradient(120deg, rgba(94, 200, 242, 0.22), rgba(62, 207, 155, 0.14));
+  color: #bfeaff;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  animation: or-pulse-soft 3.2s ease-in-out infinite;
+}
+
+.ontology-result .or-view-cta:hover {
+  transform: translateY(-1px) scale(1.02);
+  background: linear-gradient(120deg, rgba(94, 200, 242, 0.35), rgba(62, 207, 155, 0.22));
+  box-shadow: 0 10px 28px -14px rgba(94, 200, 242, 0.7);
+}
+
+.ontology-result .or-stat {
+  border-radius: 1rem;
+  border: 1px solid var(--or-line);
+  padding: 0.9rem 1rem;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
+}
+
+.ontology-result .or-ribbon {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--or-line);
+  background:
+    linear-gradient(105deg, rgba(94, 200, 242, 0.06), transparent 40%, rgba(62, 207, 155, 0.06));
 } 

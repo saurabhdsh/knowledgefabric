@@ -259,6 +259,24 @@ export const ontologyApi = {
   exportCsvUrl: (versionId: string) => getApiUrl(`${ONTOLOGY_BASE}/export/${versionId}?format=csv`),
   exportGraph: (versionId: string) =>
     fetch(getApiUrl(`${ONTOLOGY_BASE}/export/${versionId}?format=graph`), { headers: getAuthHeaders() }).then(r => r.json()),
+  /** Download RDF Turtle or OWL Turtle text with auth headers. */
+  exportSemanticText: async (versionId: string, format: 'rdf' | 'owl'): Promise<{ text: string; filename: string; mime: string }> => {
+    const res = await fetch(
+      getApiUrl(`${ONTOLOGY_BASE}/export/${versionId}?format=${format}`),
+      { headers: getAuthHeaders() },
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.detail || err?.message || `Export failed (${res.status})`);
+    }
+    const text = await res.text();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const match = cd.match(/filename="?([^"]+)"?/i);
+    const filename =
+      match?.[1] ||
+      (format === 'owl' ? `ontology_${versionId}.owl.ttl` : `ontology_${versionId}.ttl`);
+    return { text, filename, mime: 'text/turtle' };
+  },
   exportCanonical: (versionId: string) =>
     apiGet<{ success: boolean; data: object }>(`/export/${versionId}/canonical`).then(r => r.data),
   /** Real-time Q&A using OpenAI. context = selected element summary for the model. */

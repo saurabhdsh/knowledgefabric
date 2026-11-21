@@ -18,6 +18,7 @@ JOB_TYPES = (
     "graph_build",
     "graph_export",
     "codebase_analysis",
+    "embedding_reindex",
 )
 
 
@@ -42,6 +43,40 @@ class JobService:
             )
         logger.info("Enqueued job %s type=%s fabric=%s", job_id, job_type, fabric_id)
         return job_id
+
+    def start_running(
+        self,
+        job_type: str,
+        fabric_id: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Record a job that runs in the caller (not picked up by the worker)."""
+        job_id = f"job_{uuid.uuid4().hex[:12]}"
+        with db_session() as session:
+            session.add(
+                FabricJobRecord(
+                    id=job_id,
+                    fabric_id=fabric_id,
+                    job_type=job_type,
+                    status="running",
+                    progress_percent=0.0,
+                    config=config or {},
+                    started_at=datetime.utcnow(),
+                )
+            )
+        return job_id
+
+    def list_running(self, job_type: str) -> List[Dict[str, Any]]:
+        session = get_session_factory()()
+        try:
+            jobs = (
+                session.query(FabricJobRecord)
+                .filter(FabricJobRecord.status == "running", FabricJobRecord.job_type == job_type)
+                .all()
+            )
+            return [self._to_dict(j) for j in jobs]
+        finally:
+            session.close()
 
     def claim_next(self) -> Optional[Dict[str, Any]]:
         session = get_session_factory()()

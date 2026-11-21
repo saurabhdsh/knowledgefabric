@@ -53,6 +53,7 @@ class JobWorker:
             "graph_build": self._handle_graph_build,
             "graph_export": self._handle_graph_export,
             "codebase_analysis": self._handle_codebase_analysis,
+            "embedding_reindex": self._handle_embedding_reindex,
         }
         handler = handlers.get(job["job_type"])
         if not handler:
@@ -88,6 +89,8 @@ class JobWorker:
         schema_profile = config.get("schema_profile")
         if not schema_profile and fabric_id:
             fabric = fabric_store.get(fabric_id)
+            # build_profile_from_fabric prefers the full measured table-store profile
+            # (Phase 2), then falls back to thinned connection_info.
             schema_profile = schema_analyzer.build_profile_from_fabric(fabric)
 
         run_id = ontology_db_repository.create_discovery_run(project_id, config)
@@ -164,6 +167,32 @@ class JobWorker:
             if "stardog" in targets:
                 exports["stardog"] = rdf_adapter.push_to_stardog(fabric_id, version_id)
         job_service.update(job["id"], status="ready", progress_percent=100.0, result=exports)
+
+    def _handle_embedding_reindex(self, job: Dict[str, Any]) -> None:
+        from app.services.platform.reindex import reindex_fabrics
+
+        config = job.get("config") or {}
+        last = {"pct": -1.0}
+
+        def on_progress(pct: float, _message: str) -> None:
+            if pct - last["pct"] >= 1.0:
+                last["pct"] = pct
+                job_service.update(job["id"], progress_percent=min(pct, 99.0))
+
+        summary = reindex_fabrics(
+            config.get("fabric_ids") or None,
+            include_orphans=bool(config.get("include_orphans", False)),
+            purge_legacy=bool(config.get("purge_legacy", False)),
+            progress=on_progress,
+        )
+        failed = summary.get("failed") or []
+        job_service.update(
+            job["id"],
+            status="failed" if failed else "ready",
+            progress_percent=100.0,
+            result={k: v for k, v in summary.items() if k != "results"},
+            error_payload={"message": f"{len(failed)} fabric(s) failed to re-index"} if failed else None,
+        )
 
     def _handle_codebase_analysis(self, job: Dict[str, Any]) -> None:
         from app.api.v1.endpoints import knowledge as knowledge_endpoints

@@ -63,7 +63,7 @@ const Dashboard: React.FC = () => {
   const stats = useMemo(() => {
     const totalDocs = fabrics.reduce((sum, item) => sum + (item.document_count || 0), 0);
     const totalChunks = fabrics.reduce((sum, item) => sum + (item.total_chunks || 0), 0);
-    const trainedModels = fabrics.filter((item) => item.model_status === 'trained').length;
+    const trainedModels = fabrics.filter((item) => item.model_status === 'trained' || item.model_status === 'indexed').length;
     const activeFabrics = fabrics.filter((item) => item.status === 'active').length;
 
     return [
@@ -80,7 +80,7 @@ const Dashboard: React.FC = () => {
       .slice(0, 5)
       .map((item, index) => ({
         id: `${item.id}-${index}`,
-        action: item.model_status === 'trained' ? 'Model ready' : item.status === 'training' ? 'Training in progress' : 'Fabric updated',
+        action: (item.model_status === 'trained' || item.model_status === 'indexed') ? 'Index ready' : item.status === 'building' || item.status === 'training' || item.model_status === 'indexing' ? 'Build in progress' : item.status === 'failed' ? 'Build failed' : 'Fabric updated',
         document: item.name,
         time: new Date(item.updated_at).toLocaleString(),
       }));
@@ -181,11 +181,11 @@ const Dashboard: React.FC = () => {
           </div>
           <div className="flex items-center">
             <div className="flex-shrink-0">
-              <div className={`h-3 w-3 rounded-full ${fabrics.some(f => f.model_status === 'trained') ? 'bg-[#3ecf9b]' : 'bg-[#e8b84a]'}`}></div>
+              <div className={`h-3 w-3 rounded-full ${fabrics.some(f => f.model_status === 'trained' || f.model_status === 'indexed') ? 'bg-[#3ecf9b]' : 'bg-[#e8b84a]'}`}></div>
             </div>
             <div className="ml-3">
               <p className="text-sm font-medium text-[#e8edf4]">BERT Model</p>
-              <p className="text-sm text-[#8b9cb0]">{fabrics.some(f => f.model_status === 'trained') ? 'Active' : 'Training pending'}</p>
+              <p className="text-sm text-[#8b9cb0]">{fabrics.some(f => f.model_status === 'trained' || f.model_status === 'indexed') ? 'Active' : 'Indexing pending'}</p>
             </div>
           </div>
           <div className="flex items-center">

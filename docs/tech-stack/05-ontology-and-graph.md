@@ -74,9 +74,16 @@ Pipeline stages:
 
 Orchestrator entry: `run_discovery`
 
-### 3.3 Layer 3 — Domain packs (optional)
+### 3.3 Layer 3 — Domain packs (Phase 2)
 
-Pluggable rule boosters for healthcare, ITSM, pharma. Rules augment but do not replace Layer 1 LLM schema analysis in the production target state.
+Pluggable rule boosters under `backend/app/services/domain_packs/`:
+
+| Pack | Module |
+|------|--------|
+| Healthcare Cost of Care / CSNP | `healthcare_cost_of_care.py` |
+| ITSM ServiceNow | `itsm_servicenow.py` |
+
+Registry auto-detects from column names / tags. Packs supply logical collections, label fields, and id hints for legacy graph enrichment. They augment measured profile FKs; they do not replace Layer 1 evidence.
 
 ---
 
@@ -130,16 +137,18 @@ PostgreSQL is the authoritative graph store for Weave operations:
 
 ### 6.2 Graph model
 
-Schema-level graph (Phase 3 v1):
+Schema-level graph:
 
-- One node per approved ontology class
-- One edge per approved relationship
-- Properties JSON holds attribute type map from ontology attributes
+- One node per approved ontology class (`properties.node_kind=class`)
+- One edge per approved relationship with `confidence` + `evidence_refs`
+- Properties JSON holds attribute type map and tabular column bindings
 
-Instance-level graph (roadmap P3-12):
+Instance-level graph (Phase 2):
 
-- Row-level nodes (e.g. Member M000375)
-- Higher volume; deferred until schema graph is stable
+- Sampled row-level nodes persisted on graph build (`node_kind=instance`)
+- Linked to classes via `instance_of` and to each other via measured FK `references`
+- Cap controlled by `INSTANCE_GRAPH_PER_TABLE_LIMIT` (default 20 per table)
+- Live Data view still builds from the table-store profile; Ontology view loads the persisted graph
 
 ### 6.3 Traversal API
 

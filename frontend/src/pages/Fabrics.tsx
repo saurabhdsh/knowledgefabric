@@ -120,8 +120,10 @@ const Fabrics: React.FC = () => {
     switch (status) {
       case 'active':
         return 'border border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.14)] text-[#3ecf9b]';
+      case 'building':
       case 'training':
         return 'border border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.14)] text-[#5ec8f2]';
+      case 'failed':
       case 'error':
         return 'border border-[rgba(240,137,132,0.35)] bg-[rgba(240,137,132,0.14)] text-[#f08984]';
       default:
@@ -131,8 +133,10 @@ const Fabrics: React.FC = () => {
 
   const getModelStatusColor = (status?: string) => {
     switch (status) {
+      case 'indexed':
       case 'trained':
         return 'border border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.14)] text-[#3ecf9b]';
+      case 'indexing':
       case 'training':
         return 'border border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.14)] text-[#5ec8f2]';
       case 'failed':
@@ -399,7 +403,7 @@ const Fabrics: React.FC = () => {
             <div className="ml-4">
               <p className="text-xs uppercase tracking-[0.18em] text-[#8b9cb0]">Trained Models</p>
               <p className="text-xl font-semibold text-[#e8edf4]">
-                {fabrics.filter(f => f.model_status === 'trained').length}
+                {fabrics.filter(f => f.model_status === 'trained' || f.model_status === 'indexed').length}
               </p>
             </div>
           </div>
@@ -540,10 +544,10 @@ const Fabrics: React.FC = () => {
 
               {/* Status */}
               <div className="flex items-center justify-between mb-4">
-                <span className="text-xs uppercase tracking-[0.16em] text-[#8b9cb0]">Model Status</span>
+                <span className="text-xs uppercase tracking-[0.16em] text-[#8b9cb0]">Index Status</span>
                 {fabric.model_status && (
                   <span className={`px-3 py-1 text-xs font-medium rounded-full ${getModelStatusColor(fabric.model_status)}`}>
-                    {fabric.model_status}
+                    {fabric.model_status === 'trained' ? 'indexed' : fabric.model_status}
                   </span>
                 )}
               </div>

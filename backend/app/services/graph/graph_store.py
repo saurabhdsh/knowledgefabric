@@ -62,7 +62,10 @@ class GraphStore:
             for e in edges:
                 src = str(e.get("source_node_id") or "")
                 tgt = str(e.get("target_node_id") or "")
-                if src not in node_ids or tgt not in node_ids:
+                # Drop missing endpoints and accidental self-loops (FK-style
+                # "references_X" often points a class at itself when source/target
+                # class ids were resolved incorrectly).
+                if src not in node_ids or tgt not in node_ids or src == tgt:
                     continue
                 session.add(
                     GraphEdgeRecord(
@@ -154,6 +157,7 @@ class GraphStore:
                         "relationship_type": e.relationship_type,
                         "confidence": e.confidence,
                         "evidence_refs": e.evidence_refs,
+                        "properties": e.properties or {},
                     }
                     for e in edges
                 ],
@@ -170,28 +174,40 @@ class GraphStore:
         hops: int = 1,
         ontology_version_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """Undirected BFS over stored edges (outgoing and incoming)."""
         hops = max(1, min(hops, 3))
         session = get_session_factory()()
         try:
             visited: Set[str] = {node_id}
             frontier: Set[str] = {node_id}
             all_edges: List[GraphEdgeRecord] = []
+            seen_edge_ids: Set[str] = set()
             for _ in range(hops):
                 if not frontier:
                     break
-                q = session.query(GraphEdgeRecord).filter(
+                frontier_list = list(frontier)
+                q_out = session.query(GraphEdgeRecord).filter(
                     GraphEdgeRecord.fabric_id == fabric_id,
-                    GraphEdgeRecord.source_node_id.in_(list(frontier)),
+                    GraphEdgeRecord.source_node_id.in_(frontier_list),
+                )
+                q_in = session.query(GraphEdgeRecord).filter(
+                    GraphEdgeRecord.fabric_id == fabric_id,
+                    GraphEdgeRecord.target_node_id.in_(frontier_list),
                 )
                 if ontology_version_id:
-                    q = q.filter(GraphEdgeRecord.ontology_version_id == ontology_version_id)
-                edges = q.all()
-                all_edges.extend(edges)
+                    q_out = q_out.filter(GraphEdgeRecord.ontology_version_id == ontology_version_id)
+                    q_in = q_in.filter(GraphEdgeRecord.ontology_version_id == ontology_version_id)
+                edges = q_out.all() + q_in.all()
                 next_frontier: Set[str] = set()
                 for e in edges:
-                    if e.target_node_id not in visited:
-                        next_frontier.add(e.target_node_id)
-                        visited.add(e.target_node_id)
+                    if e.id in seen_edge_ids:
+                        continue
+                    seen_edge_ids.add(e.id)
+                    all_edges.append(e)
+                    for endpoint in (e.source_node_id, e.target_node_id):
+                        if endpoint not in visited:
+                            next_frontier.add(endpoint)
+                            visited.add(endpoint)
                 frontier = next_frontier
 
             node_recs = (
@@ -203,7 +219,13 @@ class GraphStore:
                 "root_node_id": node_id,
                 "hops": hops,
                 "nodes": [
-                    {"id": n.id, "label": n.label, "normalized_name": n.normalized_name}
+                    {
+                        "id": n.id,
+                        "label": n.label,
+                        "normalized_name": n.normalized_name,
+                        "properties": n.properties or {},
+                        "source_table": n.source_table,
+                    }
                     for n in node_recs
                 ],
                 "edges": [
@@ -212,6 +234,9 @@ class GraphStore:
                         "source": e.source_node_id,
                         "target": e.target_node_id,
                         "relationship_type": e.relationship_type,
+                        "confidence": e.confidence,
+                        "evidence_refs": e.evidence_refs,
+                        "properties": e.properties or {},
                     }
                     for e in all_edges
                 ],
@@ -239,6 +264,8 @@ class GraphStore:
                         "id": n.id,
                         "label": n.label,
                         "normalized_name": n.normalized_name,
+                        "properties": n.properties or {},
+                        "source_table": n.source_table,
                     })
                 if len(matches) >= limit:
                     break

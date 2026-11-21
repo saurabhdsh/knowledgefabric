@@ -58,6 +58,7 @@ const Knowledge: React.FC = () => {
   const [showServiceNowFabric, setShowServiceNowFabric] = useState(false);
   const [showCodebaseFabric, setShowCodebaseFabric] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
+  const [uploadedStoredNames, setUploadedStoredNames] = useState<string[]>([]);
   const [showProgress, setShowProgress] = useState(false);
   const [availableFabrics, setAvailableFabrics] = useState<any[]>([]);
   const [loadingAvailableFabrics, setLoadingAvailableFabrics] = useState(false);
@@ -307,11 +308,10 @@ const Knowledge: React.FC = () => {
     }, 2000);
   };
 
-  const handlePDFUploadComplete = async (files: File[]) => {
+  const handlePDFUploadComplete = async (files: File[], storedNames: string[] = []) => {
     setUploadedFiles(files);
+    setUploadedStoredNames(storedNames.length ? storedNames : files.map((f) => f.name));
     setShowPDFUpload(false);
-    
-    // Show the progress tracking
     setShowProgress(true);
   };
 
@@ -330,13 +330,12 @@ const Knowledge: React.FC = () => {
 
 Fabric ID: ${fabricId}
 Status: Active
-Training: Completed
 
 You can now view your fabric in the "Available Fabrics" tab with real statistics including:
 • Document count
 • Chunks count  
 • Embedding count
-• Training status
+• Index status
 • Creation date`;
     
     const openNow = window.confirm(`${successMessage}\n\nOpen Knowledge Graph now?`);
@@ -376,13 +375,12 @@ You can now view your fabric in the "Available Fabrics" tab with real statistics
 
 Fabric ID: ${fabricId}
 Status: Active
-Training: Completed
 
 You can now view your fabric in the "Available Fabrics" tab with real statistics including:
 • Document count
 • Chunks count  
 • Embedding count
-• Training status
+• Index status
 • Creation date`;
     
     const openNow = window.confirm(`${successMessage}\n\nOpen Knowledge Graph now?`);
@@ -418,13 +416,12 @@ You can now view your fabric in the "Available Fabrics" tab with real statistics
 
 Fabric ID: ${fabricId}
 Status: Active
-Training: Completed
 
 You can now view your fabric in the "Available Fabrics" tab with real statistics including:
 • ServiceNow data count
 • Chunks count  
 • Embedding count
-• Training status
+• Index status
 • Creation date`;
     
     const openNow = window.confirm(`${successMessage}\n\nOpen Knowledge Graph now?`);
@@ -546,7 +543,7 @@ You can now view your fabric in the "Available Fabrics" tab with real statistics
         isVisible={showProgress}
         onComplete={handleProgressComplete}
         onError={handleProgressError}
-        uploadedFiles={uploadedFiles.map(f => f.name)}
+        uploadedFiles={uploadedStoredNames.length ? uploadedStoredNames : uploadedFiles.map(f => f.name)}
         weaveDomain={weaveDomain}
         connectorProfile={connectorProfile}
         guardrails={guardrails}

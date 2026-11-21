@@ -53,6 +53,7 @@ from app.services.ontology.llm_ontology_service import LLMOntologyService
 from app.services.vector_service import vector_service
 from app.core.config import settings
 from app.services.platform.fabric_store import fabric_store
+from app.services.platform.job_service import job_service
 from app.services.ontology.ontology_access import (
     allowed_project_ids,
     register_project_owner,
@@ -358,7 +359,12 @@ async def create_project(request: CreateProjectRequest):
 
 @router.post("/projects/from-fabric", response_model=APIResponse)
 async def create_project_from_fabric(request: CreateProjectFromFabricRequest):
-    """Create ontology project from an existing knowledge fabric."""
+    """Create ontology project from an existing knowledge fabric.
+
+    Release 2.0 tabular fabrics (table store / profile) are linked for
+    measured-profile schema discovery — vector docs are NOT materialized to XML
+    for discovery (that path produced bogus Record/Dataset entities).
+    """
     try:
         fabric_store.initialize()
         fabric = fabric_store.get(request.fabric_id)
@@ -382,62 +388,109 @@ async def create_project_from_fabric(request: CreateProjectFromFabricRequest):
             domain=request.domain,
         )
         register_project_owner(proj.id, proj.name)
+
+        # Prefer schema discovery for Release 2.0 tabular / composite fabrics.
+        from app.services.fabric_pipeline.table_store import table_store
+
+        has_profile = table_store.exists(str(request.fabric_id))
+        is_tabular = str(fabric.get("source_type") or "").lower() in (
+            "database", "csv", "csv_upload", "composite",
+        ) or int(fabric.get("pipeline_version") or 0) >= 2
+
+        discovery_job_id = None
+        discovery_mode = "artifacts"
         linked_artifacts: List[SourceArtifact] = []
-        processed_files = fabric.get("processed_files") if isinstance(fabric.get("processed_files"), list) else []
-        candidate_roots = [
-            getattr(settings, "ONTOLOGY_UPLOAD_DIR", None) or os.path.join(settings.ONTOLOGY_DATA_DIR, "uploads"),
-            settings.UPLOAD_DIR,
-        ]
-        for item in processed_files:
-            if not isinstance(item, dict):
-                continue
-            file_name = str(item.get("filename") or "").strip()
-            if not file_name:
-                continue
-            for root in candidate_roots:
-                if not root:
-                    continue
-                file_path = os.path.join(root, file_name)
-                if not os.path.isfile(file_path):
-                    continue
-                linked_artifacts.append(
-                    SourceArtifact(
-                        id=f"art_{uuid.uuid4().hex[:12]}",
-                        file_name=file_name,
-                        file_path=os.path.abspath(file_path),
-                        source_type=_source_type_from_name(file_name, fallback="xml"),
-                        project_id=proj.id,
-                        ingestion_time=datetime.utcnow(),
-                        metadata={"fabric_id": request.fabric_id, "linked_from": "processed_files"},
-                    )
-                )
-                break
 
-        if not linked_artifacts:
-            materialized_path = _materialize_fabric_documents_to_xml(request.fabric_id)
-            if materialized_path and os.path.isfile(materialized_path):
-                file_name = os.path.basename(materialized_path)
-                linked_artifacts.append(
-                    SourceArtifact(
-                        id=f"art_{uuid.uuid4().hex[:12]}",
-                        file_name=file_name,
-                        file_path=os.path.abspath(materialized_path),
-                        source_type="xml",
-                        project_id=proj.id,
-                        ingestion_time=datetime.utcnow(),
-                        metadata={"fabric_id": request.fabric_id, "linked_from": "vector_documents"},
-                    )
+        if has_profile or (is_tabular and int(fabric.get("pipeline_version") or 0) >= 2):
+            discovery_mode = "schema_profile"
+            fabric["ontology_project_id"] = proj.id
+            fabric_store.save(fabric)
+            # Placeholder artifact so the UI knows the fabric linkage + fabric_id.
+            linked_artifacts.append(
+                SourceArtifact(
+                    id=f"art_{uuid.uuid4().hex[:12]}",
+                    file_name=f"{request.fabric_id}.profile.json",
+                    file_path=f"profile://{request.fabric_id}",
+                    source_type="xml",
+                    project_id=proj.id,
+                    ingestion_time=datetime.utcnow(),
+                    metadata={
+                        "fabric_id": request.fabric_id,
+                        "linked_from": "data_profile",
+                        "discovery_mode": "schema_profile",
+                    },
                 )
-
-        if linked_artifacts:
+            )
             persistence.add_artifacts_to_project(proj.id, linked_artifacts)
-            refreshed = persistence.get_project(proj.id)
-            if refreshed is not None:
-                proj = refreshed
+            discovery_job_id = job_service.enqueue(
+                "ontology_discovery",
+                request.fabric_id,
+                {
+                    "project_id": proj.id,
+                    "project_name": project_name,
+                    "use_llm": False,
+                },
+            )
+        else:
+            processed_files = fabric.get("processed_files") if isinstance(fabric.get("processed_files"), list) else []
+            candidate_roots = [
+                getattr(settings, "ONTOLOGY_UPLOAD_DIR", None) or os.path.join(settings.ONTOLOGY_DATA_DIR, "uploads"),
+                settings.UPLOAD_DIR,
+            ]
+            for item in processed_files:
+                if not isinstance(item, dict):
+                    continue
+                file_name = str(item.get("filename") or "").strip()
+                if not file_name:
+                    continue
+                for root in candidate_roots:
+                    if not root:
+                        continue
+                    file_path = os.path.join(root, file_name)
+                    if not os.path.isfile(file_path):
+                        continue
+                    linked_artifacts.append(
+                        SourceArtifact(
+                            id=f"art_{uuid.uuid4().hex[:12]}",
+                            file_name=file_name,
+                            file_path=os.path.abspath(file_path),
+                            source_type=_source_type_from_name(file_name, fallback="xml"),
+                            project_id=proj.id,
+                            ingestion_time=datetime.utcnow(),
+                            metadata={"fabric_id": request.fabric_id, "linked_from": "processed_files"},
+                        )
+                    )
+                    break
+
+            if not linked_artifacts:
+                materialized_path = _materialize_fabric_documents_to_xml(request.fabric_id)
+                if materialized_path and os.path.isfile(materialized_path):
+                    file_name = os.path.basename(materialized_path)
+                    linked_artifacts.append(
+                        SourceArtifact(
+                            id=f"art_{uuid.uuid4().hex[:12]}",
+                            file_name=file_name,
+                            file_path=os.path.abspath(materialized_path),
+                            source_type="xml",
+                            project_id=proj.id,
+                            ingestion_time=datetime.utcnow(),
+                            metadata={"fabric_id": request.fabric_id, "linked_from": "vector_documents"},
+                        )
+                    )
+
+            if linked_artifacts:
+                persistence.add_artifacts_to_project(proj.id, linked_artifacts)
+
+        refreshed = persistence.get_project(proj.id)
+        if refreshed is not None:
+            proj = refreshed
 
         return APIResponse(
             success=True,
-            message="Project created from knowledge fabric",
+            message=(
+                "Project created from knowledge fabric"
+                + (" — schema discovery queued from measured profile" if discovery_job_id else "")
+            ),
             data={
                 **proj.model_dump(),
                 "fabric_reference": {
@@ -445,6 +498,8 @@ async def create_project_from_fabric(request: CreateProjectFromFabricRequest):
                     "fabric_name": fabric_name,
                     "source_type": fabric.get("source_type"),
                     "document_count": fabric.get("document_count"),
+                    "discovery_mode": discovery_mode,
+                    "discovery_job_id": discovery_job_id,
                 },
             },
         )
@@ -812,21 +867,38 @@ async def export_ontology(
     version_id: str,
     format: str = Query("json", alias="format"),
 ):
-    """Export ontology version as JSON, CSV, or graph schema."""
+    """Export ontology version as JSON, CSV, RDF/Turtle, OWL, or graph schema."""
     version = persistence.get_version(version_id)
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
-    if format == "json":
+    fmt = (format or "json").strip().lower()
+    if fmt == "json":
         return APIResponse(success=True, message="OK", data=export_service.export_json(version))
-    if format == "csv":
+    if fmt == "csv":
         return PlainTextResponse(
             export_service.export_csv(version),
             media_type="text/csv",
             headers={"Content-Disposition": f"attachment; filename=ontology_{version_id}.csv"},
         )
-    if format == "graph":
+    if fmt in ("rdf", "ttl", "turtle"):
+        return PlainTextResponse(
+            export_service.export_rdf_turtle(version),
+            media_type="text/turtle",
+            headers={"Content-Disposition": f"attachment; filename=ontology_{version_id}.ttl"},
+        )
+    if fmt in ("owl", "owl-ttl", "owx"):
+        # OWL 2 serialized as Turtle (widely tool-compatible).
+        return PlainTextResponse(
+            export_service.export_owl(version),
+            media_type="text/turtle",
+            headers={"Content-Disposition": f"attachment; filename=ontology_{version_id}.owl.ttl"},
+        )
+    if fmt == "graph":
         return APIResponse(success=True, message="OK", data=export_service.export_graph(version))
-    raise HTTPException(status_code=400, detail="format must be json, csv, or graph")
+    raise HTTPException(
+        status_code=400,
+        detail="format must be json, csv, rdf, ttl, owl, or graph",
+    )
 
 
 @router.get("/export/{version_id}/canonical", response_model=APIResponse)

@@ -27,6 +27,26 @@ class SchemaAnalyzer:
     def build_profile_from_fabric(self, fabric: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not fabric:
             return None
+        # Prefer the full Release 2.0 measured profile from the table-store manifest.
+        fabric_id = str(fabric.get("id") or "")
+        if fabric_id:
+            try:
+                from app.services.fabric_pipeline.runner import load_profile
+                from app.services.fabric_pipeline.table_store import table_store
+                from app.services.fabric_pipeline.pipelines import _schema_tables
+
+                if table_store.exists(fabric_id):
+                    full = load_profile(fabric_id)
+                    if full and full.get("tables"):
+                        return {
+                            "tables": _schema_tables(full),
+                            "foreign_keys": full.get("foreign_keys") or [],
+                            "summary": full.get("summary") or {},
+                            "source": "data_profile",
+                        }
+            except Exception as exc:
+                logger.warning("Could not load measured profile for %s: %s", fabric_id, exc)
+
         conn = fabric.get("connection_info") or {}
         tables = conn.get("tables") or conn.get("schema_tables")
         if tables:
@@ -43,8 +63,16 @@ class SchemaAnalyzer:
         return None
 
     def analyze(self, schema_profile: Dict[str, Any]) -> Dict[str, Any]:
-        llm_result = self._llm_analyze(schema_profile)
         rule_result = self._rule_analyze(schema_profile)
+        # Measured profile FKs already carry evidence + confidence — skip LLM
+        # to avoid truncating the full profile and inventing duplicate edges.
+        has_measured = (
+            schema_profile.get("source") == "data_profile"
+            or any(isinstance(t.get("foreign_keys"), list) for t in (schema_profile.get("tables") or []))
+        )
+        if has_measured and rule_result.get("relationships"):
+            return rule_result
+        llm_result = self._llm_analyze(schema_profile)
         return self._merge(llm_result, rule_result)
 
     def _rule_analyze(self, profile: Dict[str, Any]) -> Dict[str, Any]:
@@ -61,8 +89,15 @@ class SchemaAnalyzer:
                 col_objs = [{"name": c, "type": "string"} for c in cols]
             else:
                 col_objs = cols
-            pk_cols = [c["name"] for c in col_objs if self._looks_like_pk(c["name"])]
-            entities.append({
+            # Release 2.0 fabrics carry a measured profile: the key was verified
+            # unique on the data and foreign keys were found by value overlap.
+            # Older fabrics have column names only, so those are still guessed.
+            profiled = isinstance(table.get("foreign_keys"), list)
+            if profiled:
+                pk_cols = [str(c) for c in (table.get("primary_key") or [])]
+            else:
+                pk_cols = [c["name"] for c in col_objs if self._looks_like_pk(c["name"])]
+            entity: Dict[str, Any] = {
                 "id": f"ent_{uuid.uuid4().hex[:8]}",
                 "name": tname,
                 "normalized_name": norm,
@@ -71,7 +106,57 @@ class SchemaAnalyzer:
                 "confidence": 0.75,
                 "extraction_source": "rule_based",
                 "source_table": tname,
-            })
+            }
+            if profiled:
+                rows = table.get("row_count")
+                entity["definition"] = (
+                    f"{str(table.get('kind') or 'table').capitalize()} table {tname}"
+                    + (f" ({rows:,} rows)" if isinstance(rows, int) else "")
+                    + (f"; key {', '.join(pk_cols)} verified unique" if pk_cols else "; no unique key found")
+                )
+                entity["confidence"] = 0.95 if pk_cols else 0.7
+                entity["evidence"] = {"basis": "data_profile", "row_count": rows, "kind": table.get("kind")}
+            entities.append(entity)
+            if profiled:
+                for fk in table.get("foreign_keys") or []:
+                    target = str(fk.get("references_table") or "")
+                    if not target:
+                        continue
+                    card_raw = str(fk.get("cardinality") or "")
+                    if card_raw in ("1:1", "1:n", "n:1", "n:m"):
+                        card = card_raw
+                    elif card_raw in ("one-to-one", "1-1"):
+                        card = "1:1"
+                    else:
+                        card = "n:1"
+                    overlap = fk.get("overlap")
+                    evidence_basis = fk.get("evidence") or "value-inclusion"
+                    detail = (
+                        f"{float(overlap or 0):.0%} of the distinct values of "
+                        f"{tname}.{fk.get('column')} exist in {target}.{fk.get('references_column')}"
+                        + (f" ({evidence_basis})" if evidence_basis else "")
+                    )
+                    relationships.append({
+                        "id": f"rel_{uuid.uuid4().hex[:8]}",
+                        "name": f"references_{target}",
+                        "source_entity": norm,
+                        "target_entity": self._normalize(target),
+                        "source_columns": [c for c in [fk.get("column")] if c],
+                        "target_columns": [c for c in [fk.get("references_column")] if c],
+                        "cardinality": card,
+                        "confidence": float(fk.get("confidence") or 0.0),
+                        "extraction_source": "rule_based",
+                        "tabular_binding": True,
+                        "evidence_snippet": detail,
+                        "evidence": {
+                            "basis": evidence_basis if isinstance(evidence_basis, str) else "value_overlap",
+                            "overlap": overlap,
+                            "matched_values": fk.get("matched_values"),
+                            "orphan_values": fk.get("orphan_values"),
+                            "name_affinity": fk.get("name_affinity"),
+                            "detail": detail,
+                        },
+                    })
             for col in col_objs:
                 cname = col.get("name") or ""
                 attributes.append({
@@ -86,7 +171,7 @@ class SchemaAnalyzer:
                     "source_table": tname,
                     "source_column": cname,
                 })
-                fk_target = self._fk_target(cname, [t.get("name") for t in tables])
+                fk_target = None if profiled else self._fk_target(cname, [t.get("name") for t in tables])
                 if fk_target:
                     relationships.append({
                         "id": f"rel_{uuid.uuid4().hex[:8]}",

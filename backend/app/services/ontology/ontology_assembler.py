@@ -58,19 +58,37 @@ class OntologyAssembler:
         for r in relationships:
             if not r.get("relationship_name"):
                 continue
+            src_id = r.get("source_class_id") or (classes[0].id if classes else "")
+            tgt_id = r.get("target_class_id") or (
+                classes[1].id if len(classes) > 1 else (classes[0].id if classes else "")
+            )
+            if src_id and tgt_id and src_id == tgt_id:
+                continue
             ev_list = self._evidence_for(r, evidence_pool)
+            card = r.get("cardinality_if_detected") or r.get("cardinality")
+            binding = r.get("tabular_binding")
+            if binding is True:
+                binding = {
+                    "source_columns": r.get("source_columns") or [],
+                    "target_columns": r.get("target_columns") or [],
+                }
+            elif not isinstance(binding, dict):
+                binding = None
             rels.append(
                 OntologyRelationship(
                     id=r.get("id") or f"rel_{uuid.uuid4().hex[:8]}",
-                    source_class_id=r.get("source_class_id") or (classes[0].id if classes else ""),
+                    source_class_id=src_id,
                     relationship_name=r.get("relationship_name", ""),
-                    target_class_id=r.get("target_class_id") or (classes[1].id if len(classes) > 1 else (classes[0].id if classes else "")),
+                    target_class_id=tgt_id,
                     definition=r.get("definition"),
                     evidence=ev_list,
-                    cardinality_if_detected=r.get("cardinality_if_detected"),
+                    cardinality_if_detected=card,
                     confidence_score=float(r.get("confidence", 0.5)),
                     status=OntologyElementStatus.DRAFT,
                     extraction_source=r.get("extraction_source", ExtractionSourceType.COMBINED),
+                    source_columns=[str(c) for c in (r.get("source_columns") or []) if c],
+                    target_columns=[str(c) for c in (r.get("target_columns") or []) if c],
+                    tabular_binding=binding,
                     created_at=now,
                     updated_at=now,
                 )
@@ -98,12 +116,33 @@ class OntologyAssembler:
             )
 
         constraints: List[OntologyConstraint] = []
+        type_map = {
+            "business_rule": OntologyConstraintType.BUSINESS_RULE,
+            "required": OntologyConstraintType.REQUIRED,
+            "unique": OntologyConstraintType.UNIQUE,
+            "range": OntologyConstraintType.RANGE,
+            "pattern": OntologyConstraintType.PATTERN,
+            "reference": OntologyConstraintType.REFERENCE,
+            "cardinality": OntologyConstraintType.CARDINALITY,
+        }
+        class_by_norm = {
+            "".join(ch for ch in (c.normalized_name or c.name or "").lower() if ch.isalnum()): c.id
+            for c in classes
+        }
         for br in business_rules:
+            related_raw = str(br.get("related_entity") or br.get("related_class") or "").lower()
+            related_key = "".join(ch for ch in related_raw if ch.isalnum())
+            related_id = class_by_norm.get(related_key)
+            ctype = type_map.get(
+                str(br.get("constraint_type") or "business_rule").lower(),
+                OntologyConstraintType.BUSINESS_RULE,
+            )
             constraints.append(
                 OntologyConstraint(
                     id=f"con_{uuid.uuid4().hex[:8]}",
-                    constraint_type=OntologyConstraintType.BUSINESS_RULE,
-                    expression=br.get("expression", br.get("evidence_snippet", "")[:500]),
+                    constraint_type=ctype,
+                    expression=br.get("expression", br.get("evidence_snippet", ""))[:500],
+                    related_class_id=related_id,
                     evidence=self._evidence_for(br, evidence_pool),
                     confidence_score=float(br.get("confidence", 0.5)),
                     status=OntologyElementStatus.DRAFT,
@@ -121,18 +160,22 @@ class OntologyAssembler:
 
     def _evidence_for(self, item: Dict[str, Any], pool: List[OntologyEvidence]) -> List[OntologyEvidence]:
         snippet = item.get("evidence_snippet") or (item.get("evidence_snippets") or [""])[0]
+        evidence_meta = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
+        if not snippet and evidence_meta.get("detail"):
+            snippet = evidence_meta["detail"]
         if not snippet and not item.get("xml_path"):
             return []
-        # Create a minimal evidence if we have snippet and no pool match
         for ev in pool:
-            if ev.text_snippet and snippet and ev.text_snippet[:100] in snippet or (snippet and snippet[:100] in ev.text_snippet):
+            if ev.text_snippet and snippet and (
+                ev.text_snippet[:100] in snippet or snippet[:100] in ev.text_snippet
+            ):
                 return [ev]
         if snippet:
             return [
                 OntologyEvidence(
                     id=f"evt_asm_{uuid.uuid4().hex[:6]}",
-                    artifact_id=item.get("artifact_id", ""),
-                    artifact_type=item.get("artifact_type", "unknown"),
+                    artifact_id=str(item.get("artifact_id") or evidence_meta.get("basis") or ""),
+                    artifact_type=str(item.get("artifact_type") or "profile"),
                     page_number=item.get("page_number"),
                     xml_path=item.get("xml_path"),
                     text_snippet=str(snippet)[:500],

@@ -83,18 +83,37 @@ class RelationInferenceEngine:
             tn = (r.get("target_entity_normalized") or "").strip()
             sid = by_display.get(sn.lower())
             tid = by_display.get(tn.lower())
-            if not sid or not tid:
+            if not sid or not tid or sid == tid:
                 continue
             nm = r.get("relationship_name") or r.get("name") or "references"
+            evidence = r.get("evidence") if isinstance(r.get("evidence"), dict) else {}
+            snippet = r.get("evidence_snippet") or evidence.get("detail") or ""
+            card = r.get("cardinality_if_detected") or r.get("cardinality")
+            src_cols = [str(c) for c in (r.get("source_columns") or []) if c]
+            tgt_cols = [str(c) for c in (r.get("target_columns") or []) if c]
             result.append({
                 "id": r.get("id") or f"rel_tab_{uuid.uuid4().hex[:8]}",
                 "source_class_id": sid,
                 "relationship_name": nm,
                 "target_class_id": tid,
                 "definition": None,
-                "evidence_snippet": (r.get("evidence_snippet") or "")[:300],
+                "evidence_snippet": str(snippet)[:500],
+                "evidence": evidence or None,
                 "confidence": float(r.get("confidence", 0.8)),
                 "extraction_source": ExtractionSourceType.COMBINED,
+                "cardinality_if_detected": card,
+                "source_columns": src_cols,
+                "target_columns": tgt_cols,
+                "tabular_binding": {
+                    "source_entity": sn,
+                    "target_entity": tn,
+                    "source_columns": src_cols,
+                    "target_columns": tgt_cols,
+                    "overlap": evidence.get("overlap") if evidence else r.get("overlap"),
+                    "basis": evidence.get("basis") if evidence else "tabular_fk",
+                },
+                "artifact_type": "profile",
+                "artifact_id": f"profile:{sn}->{tn}",
             })
         return result
 

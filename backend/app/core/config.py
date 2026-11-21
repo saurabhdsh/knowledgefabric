@@ -45,6 +45,11 @@ class Settings(BaseSettings):
         "1", "true", "yes",
     )
     GRAPH_STORAGE_BACKEND: str = os.environ.get("GRAPH_STORAGE_BACKEND", "postgres")
+    # Phase 2 — sampled instance nodes persisted with the canonical graph
+    INSTANCE_GRAPH_PER_TABLE_LIMIT: int = int(os.environ.get("INSTANCE_GRAPH_PER_TABLE_LIMIT", "20"))
+    INSTANCE_GRAPH_ENABLED: bool = os.environ.get("INSTANCE_GRAPH_ENABLED", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
     NEO4J_URI: Optional[str] = os.environ.get("NEO4J_URI")
     NEO4J_USER: Optional[str] = os.environ.get("NEO4J_USER", "neo4j")
     NEO4J_PASSWORD: Optional[str] = os.environ.get("NEO4J_PASSWORD")
@@ -71,6 +76,52 @@ class Settings(BaseSettings):
     DATA_DIR: str = _resolve_dir("KF_DATA_DIR", "data")
     # Trained / fine-tuned model artifacts.
     MODELS_DIR: str = _resolve_dir("KF_MODELS_DIR", "models")
+
+    # ----- Embeddings (Release 2.0) -----
+    # onnx-minilm (default, semantic) | sentence-transformers | hash (lexical, tests only).
+    EMBEDDING_PROVIDER: str = os.environ.get("EMBEDDING_PROVIDER", "onnx-minilm")
+    # Where embedding model files are kept so they survive container recreation.
+    EMBEDDING_MODEL_DIR: str = os.environ.get(
+        "EMBEDDING_MODEL_DIR",
+        os.path.join(_resolve_dir("KF_MODELS_DIR", "models"), "embeddings"),
+    )
+    EMBEDDING_AUTO_DOWNLOAD: bool = os.environ.get("EMBEDDING_AUTO_DOWNLOAD", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
+    EMBEDDING_BATCH_SIZE: int = int(os.environ.get("EMBEDDING_BATCH_SIZE", "64"))
+
+    # ----- Enterprise operations (Release 2.0 Phase 5) -----
+    # Each fabric's vectors live in their own Chroma collection.
+    ISOLATE_FABRIC_INDEX: bool = os.environ.get("ISOLATE_FABRIC_INDEX", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
+    # Per-fabric table stores (SQLite) and pipeline manifests.
+    FABRIC_TABLES_DIR: str = os.environ.get(
+        "KF_FABRIC_TABLES_DIR",
+        os.path.join(_resolve_dir("KF_DATA_DIR", "data"), "fabric_tables"),
+    )
+    FABRIC_MANIFEST_DIR: str = os.environ.get(
+        "KF_FABRIC_MANIFEST_DIR",
+        os.path.join(_resolve_dir("KF_DATA_DIR", "data"), "fabric_manifests"),
+    )
+    # Entity-like tables get one embedded summary per row, up to this many rows per table.
+    FABRIC_MAX_TEXT_CHUNKS_PER_TABLE: int = int(os.environ.get("FABRIC_MAX_TEXT_CHUNKS_PER_TABLE", "20000"))
+    FABRIC_MAX_ENTITY_SUMMARIES_PER_TABLE: int = int(
+        os.environ.get("FABRIC_MAX_ENTITY_SUMMARIES_PER_TABLE", "5000")
+    )
+    # A column is treated as a foreign key when at least this share of its
+    # distinct values exist in the referenced key column.
+    FABRIC_FK_MIN_OVERLAP: float = float(os.environ.get("FABRIC_FK_MIN_OVERLAP", "0.9"))
+    # Text-to-SQL guard rails for analytics answered from the table store.
+    FABRIC_SQL_MAX_ROWS: int = int(os.environ.get("FABRIC_SQL_MAX_ROWS", "200"))
+    FABRIC_SQL_TIMEOUT_SECONDS: float = float(os.environ.get("FABRIC_SQL_TIMEOUT_SECONDS", "10"))
+    # OCR scanned PDF pages when the page has almost no extractable text.
+    PDF_OCR_ENABLED: bool = os.environ.get("PDF_OCR_ENABLED", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
+    PDF_OCR_MIN_TEXT_CHARS: int = int(os.environ.get("PDF_OCR_MIN_TEXT_CHARS", "40"))
+    PDF_OCR_RESOLUTION: int = int(os.environ.get("PDF_OCR_RESOLUTION", "200"))
+    FABRIC_CHUNK_MAX_CHARS: int = int(os.environ.get("FABRIC_CHUNK_MAX_CHARS", "1100"))
 
     # File Upload Configuration
     UPLOAD_DIR: str = _resolve_dir("KF_UPLOAD_DIR", "uploads")
@@ -129,12 +180,15 @@ class Settings(BaseSettings):
     ONTOLOGY_LLM_PROVIDER: Optional[str] = os.environ.get("ONTOLOGY_LLM_PROVIDER")
     OPENAI_QUERY_MODEL: str = os.environ.get("OPENAI_QUERY_MODEL", "gpt-4o")
     # Test LLM /query: retrieve the full fabric by default (no tiny top_k window).
-    QUERY_RETRIEVE_ALL: bool = os.environ.get("QUERY_RETRIEVE_ALL", "true").lower() in (
+    # Phase 4: default is hybrid top-k + token budget, not retrieve-everything.
+    QUERY_RETRIEVE_ALL: bool = os.environ.get("QUERY_RETRIEVE_ALL", "false").lower() in (
         "1", "true", "yes", "on",
     )
     # Soft pack limit so huge fabrics still fit model context (~200k tokens).
     # Retrieval itself is not capped; only prompt packing may truncate with a notice.
     QUERY_MAX_CONTEXT_CHARS: int = int(os.environ.get("QUERY_MAX_CONTEXT_CHARS", str(350_000)))
+    # Packed evidence budget for Phase 4 hybrid answers (chars ≈ tokens * 4).
+    QUERY_TOKEN_BUDGET_CHARS: int = int(os.environ.get("QUERY_TOKEN_BUDGET_CHARS", "12000"))
     QUERY_MAX_COMPLETION_TOKENS: int = int(os.environ.get("QUERY_MAX_COMPLETION_TOKENS", "4000"))
     AGENT_SESSION_TTL_HOURS: int = int(os.environ.get("AGENT_SESSION_TTL_HOURS", "24"))
     AGENT_SESSION_MAX_TURNS: int = int(os.environ.get("AGENT_SESSION_MAX_TURNS", "40"))

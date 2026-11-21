@@ -47,21 +47,43 @@ async def enqueue_job(body: EnqueueJobRequest):
 
 
 @router.post("/fabrics/{fabric_id}/discover-ontology", response_model=APIResponse)
-async def trigger_ontology_discovery(fabric_id: str, use_llm: bool = True):
+async def trigger_ontology_discovery(
+    fabric_id: str,
+    use_llm: bool = True,
+    project_id: Optional[str] = None,
+):
+    """Enqueue ontology discovery for a fabric.
+
+    Tabular Release 2.0 fabrics use measured-profile schema discovery.
+    Optional ``project_id`` writes the draft into the Ontology Discovery
+    project the user has open (Create-from-Fabric), instead of only the
+    fabric's default ``ontology_project_id``.
+    """
     fabric = fabric_store.get(fabric_id)
     if not fabric:
         raise HTTPException(status_code=404, detail="Fabric not found")
-    project_id = fabric.get("ontology_project_id") or f"proj_{fabric_id[-12:]}"
+    resolved_project = (
+        (project_id or "").strip()
+        or fabric.get("ontology_project_id")
+        or f"proj_{fabric_id[-12:]}"
+    )
+    # Keep fabric → project linkage consistent with the project being discovered into.
+    fabric["ontology_project_id"] = resolved_project
+    fabric_store.save(fabric)
     job_id = job_service.enqueue(
         "ontology_discovery",
         fabric_id,
         {
-            "project_id": project_id,
+            "project_id": resolved_project,
             "project_name": f"Ontology for {fabric.get('name', fabric_id)}",
             "use_llm": use_llm,
         },
     )
-    return APIResponse(success=True, message="Ontology discovery enqueued", data={"job_id": job_id})
+    return APIResponse(
+        success=True,
+        message="Ontology discovery enqueued",
+        data={"job_id": job_id, "project_id": resolved_project},
+    )
 
 
 @router.post("/fabrics/{fabric_id}/link-ontology", response_model=APIResponse)

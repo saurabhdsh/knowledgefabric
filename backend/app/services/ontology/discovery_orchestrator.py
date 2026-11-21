@@ -1,5 +1,6 @@
 """Orchestrate the full ontology discovery pipeline (artifact -> version)."""
 import logging
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional  # noqa: F401
 
@@ -304,13 +305,28 @@ class DiscoveryOrchestrator:
         analyzed = schema_analyzer.analyze(schema_profile)
         entities = analyzed.get("entities") or []
         rel_candidates = []
+        evidence_pool: List[OntologyEvidence] = []
         for r in analyzed.get("relationships") or []:
+            evidence = r.get("evidence") if isinstance(r.get("evidence"), dict) else {}
+            snippet = r.get("evidence_snippet") or evidence.get("detail") or ""
+            if snippet:
+                evidence_pool.append(
+                    OntologyEvidence(
+                        id=f"evt_prof_{uuid.uuid4().hex[:8]}",
+                        artifact_id=f"profile:{(r.get('source_entity') or '')}->{(r.get('target_entity') or '')}",
+                        artifact_type="profile",
+                        text_snippet=str(snippet)[:500],
+                        extraction_stage="schema_analyzer",
+                    )
+                )
             rel_candidates.append({
                 **r,
                 "relationship_name": r.get("name") or "references",
                 "source_entity_normalized": r.get("source_entity") or r.get("source"),
                 "target_entity_normalized": r.get("target_entity") or r.get("target"),
                 "tabular_binding": True,
+                "evidence_snippet": snippet,
+                "artifact_type": "profile",
             })
 
         log(DiscoveryRunStage.RELATION_INFERENCE.value, "Binding tabular relationships", 50.0)
@@ -328,6 +344,22 @@ class DiscoveryOrchestrator:
                 "attribute_name": a.get("name"),
             })
 
+        # Domain-pack business rules (e.g. Cost of Care) enrich schema-first drafts.
+        domain_rules: List[Dict[str, Any]] = []
+        try:
+            from app.services.domain_packs import detect_primary_pack
+
+            col_names: List[str] = []
+            for ent in entities:
+                col_names.append(str(ent.get("normalized_name") or ent.get("name") or ""))
+            for a in attrs:
+                col_names.append(str(a.get("attribute_name") or a.get("name") or ""))
+            pack = detect_primary_pack(col_names)
+            if pack:
+                domain_rules = list(pack.business_rules() or [])
+        except Exception:
+            domain_rules = []
+
         log(DiscoveryRunStage.ONTOLOGY_ASSEMBLE.value, "Assembling ontology", 75.0)
         assembled = self.assembler.assemble(
             project_id=project_id,
@@ -335,8 +367,8 @@ class DiscoveryOrchestrator:
             entities=entities,
             relationships=rel_list,
             attributes=attrs,
-            business_rules=[],
-            evidence_pool=[],
+            business_rules=domain_rules,
+            evidence_pool=evidence_pool,
         )
 
         log(DiscoveryRunStage.ONTOLOGY_VALIDATE.value, "Validating", 85.0)
