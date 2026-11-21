@@ -86,8 +86,8 @@ update_env "ONTOLOGY_LLM_PROVIDER" "openai"
 update_env "BEDROCK_ENABLED" "false"
 update_env "ENABLED_LLM_PROVIDERS" "openai"
 update_env "WEAVE_DOMAIN" "cuweave.com"
-update_env "REACT_APP_API_URL" "https://cuweave.com"
-update_env "KF_CORS_ORIGINS" "https://cuweave.com,https://www.cuweave.com"
+update_env "REACT_APP_API_URL" "http://cuweave.com:8080"
+update_env "KF_CORS_ORIGINS" "http://cuweave.com:8080,http://www.cuweave.com:8080"
 unset KEY
 
 VM_IP="$(public_ip)"
@@ -113,11 +113,11 @@ for name in cuweave.com www.cuweave.com; do
 done
 log "DNS for cuweave.com points here"
 
-if ss -ltn | awk '{print $4}' | grep -Eq '(^|:)80$|(:443)$'; then
+if ss -ltn | awk '{print $4}' | grep -Eq ':8080$'; then
   ours="$(docker ps --filter name=weave-azure-caddy --format '{{.Names}}' || true)"
   if [[ -z "${ours}" ]]; then
-    log "Port 80 or 443 is already in use by another process. Free it, then run this again."
-    ss -ltnp | grep -E ':80 |:443 ' || true
+    log "Port 8080 is already in use. Free it, then run this again."
+    ss -ltnp | grep -E ':8080' || true
     exit 1
   fi
 fi
@@ -125,10 +125,10 @@ fi
 log "Building and starting Weave. The first build takes several minutes."
 docker compose -f docker-compose.azure.yml up -d --build
 
-log "Waiting for https://cuweave.com/health"
+log "Waiting for http://127.0.0.1:8080/health"
 ready=0
 for _ in $(seq 1 36); do
-  if curl -fsS --max-time 10 https://cuweave.com/health >/dev/null 2>&1; then
+  if curl -fsS --max-time 10 http://127.0.0.1:8080/health >/dev/null 2>&1; then
     ready=1
     break
   fi
@@ -136,12 +136,12 @@ for _ in $(seq 1 36); do
 done
 
 if [[ "${ready}" -ne 1 ]]; then
-  log "The site did not answer yet. Certificate issuance can take a minute."
+  log "The site did not answer yet."
   log "Check: docker compose -f docker-compose.azure.yml logs --tail=40 caddy"
   exit 1
 fi
 
 log "Weave is up."
-log "  https://cuweave.com"
+log "  http://cuweave.com:8080"
 log "  Login: Saurabh / admin123"
 log "Change that password after the first sign-in."

@@ -1,0 +1,16 @@
+{
+	auto_https off
+}
+
+# SciNova already owns ports 80 and 443 on this VM. Weave is on 8080.
+http://{$WEAVE_DOMAIN}:8080, http://www.{$WEAVE_DOMAIN}:8080 {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	reverse_proxy {$WEAVE_UPSTREAM:web:80}
+}

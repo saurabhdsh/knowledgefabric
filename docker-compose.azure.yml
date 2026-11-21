@@ -1,5 +1,5 @@
 # Weave on the shared Azure VM (rapid-build-dev-server).
-# Caddy publishes 80 and 443 for cuweave.com. Postgres and the API stay private.
+# Caddy publishes 8080. Ports 80 and 443 stay with SciNova. Postgres and the API stay private.
 # Do not use ports 22, 3000, 5173, or 8000 — those belong to SSH, SEAL, and SciNova.
 #
 # Point GoDaddy at this VM, then on the VM run:
@@ -72,7 +72,7 @@ services:
       context: .
       dockerfile: frontend/Dockerfile.prod
       args:
-        REACT_APP_API_URL: ${REACT_APP_API_URL:-https://cuweave.com}
+        REACT_APP_API_URL: ${REACT_APP_API_URL:-http://cuweave.com:8080}
     restart: unless-stopped
     expose:
       - "80"
@@ -86,14 +86,12 @@ services:
     image: caddy:2.10-alpine
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+      - "8080:8080"
     environment:
       - WEAVE_DOMAIN=${WEAVE_DOMAIN:-cuweave.com}
       - WEAVE_UPSTREAM=${WEAVE_UPSTREAM:-web:80}
     volumes:
-      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/caddy/Caddyfile.azure:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
