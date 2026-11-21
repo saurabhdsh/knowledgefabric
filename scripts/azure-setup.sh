@@ -61,14 +61,12 @@ DEFAULT_ENDPOINT="https://exxondemofdr.cognitiveservices.azure.com/openai/v1"
 KEY="${OPENAI_API_KEY:-$(env_value OPENAI_API_KEY)}"
 ENDPOINT="${OPENAI_BASE_URL:-$(env_value OPENAI_BASE_URL)}"
 if [[ -z "${KEY}" ]]; then
-  read -r -p "Paste the Azure OpenAI endpoint [${DEFAULT_ENDPOINT}]: " ENDPOINT
-  echo
+  read -r -p "Paste the Azure OpenAI endpoint, or press Enter for ${DEFAULT_ENDPOINT}: " ENDPOINT
   read -r -s -p "Paste the Azure OpenAI key: " KEY
   echo
 fi
 ENDPOINT="${ENDPOINT:-${DEFAULT_ENDPOINT}}"
-ENDPOINT="${ENDPOINT#"${ENDPOINT%%[![:space:]]*}"}"
-ENDPOINT="${ENDPOINT%"${ENDPOINT##*[![:space:]]}"}"
+ENDPOINT="${ENDPOINT//[[:space:]\[\]\"\']/}"
 ENDPOINT="${ENDPOINT%/}"
 if [[ "${ENDPOINT}" != */openai/v1 ]]; then
   ENDPOINT="${ENDPOINT}/openai/v1"
