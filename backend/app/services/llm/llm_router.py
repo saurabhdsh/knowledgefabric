@@ -68,11 +68,30 @@ class LLMRouter:
         return any(hint in text for hint in _CREDENTIAL_HINTS)
 
     @staticmethod
+    def _clean_key(value: Optional[str]) -> str:
+        text = (value or "").strip().strip("\"'[]")
+        return "".join(text.split())
+
+    @staticmethod
+    def _clean_base(value: Optional[str]) -> str:
+        text = (value or "").strip().strip("\"'[]").rstrip("/")
+        if not text:
+            return "https://api.openai.com/v1"
+        lowered = text.lower()
+        if "cognitiveservices.azure.com" in lowered or "openai.azure.com" in lowered:
+            if not lowered.endswith("/openai/v1"):
+                if lowered.endswith("/openai"):
+                    text = f"{text}/v1"
+                elif "/openai/" not in lowered:
+                    text = f"{text}/openai/v1"
+        return text
+
+    @staticmethod
     def _openai_model(model: Optional[str]) -> str:
         """Azure hosts one chat deployment. Do not send a public OpenAI model name there."""
         configured = settings.OPENAI_QUERY_MODEL
-        base = (settings.OPENAI_BASE_URL or "").lower()
-        if base and "api.openai.com" not in base:
+        base = LLMRouter._clean_base(settings.OPENAI_BASE_URL).lower()
+        if "api.openai.com" not in base:
             return configured
         return model or configured
 
@@ -95,11 +114,14 @@ class LLMRouter:
     def _post_chat(self, body: Dict, api_key: str, *, allow_retry: bool = True) -> str:
         import httpx
 
-        base = (settings.OPENAI_BASE_URL or "https://api.openai.com/v1").rstrip("/")
+        base = self._clean_base(settings.OPENAI_BASE_URL)
+        # Azure Cognitive Services checks the api-key header. Bearer alone
+        # returns 401 "invalid subscription key or wrong API endpoint".
         response = httpx.post(
             f"{base}/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key}",
+                "api-key": api_key,
                 "Content-Type": "application/json",
             },
             json=body,
@@ -135,7 +157,7 @@ class LLMRouter:
         temperature: float,
         api_key: Optional[str],
     ) -> str:
-        key = api_key or settings.OPENAI_API_KEY
+        key = self._clean_key(api_key or settings.OPENAI_API_KEY)
         if not key:
             raise RuntimeError("OPENAI_API_KEY is not configured")
         openai_model = self._openai_model(model)
