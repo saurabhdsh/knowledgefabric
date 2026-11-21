@@ -2,10 +2,8 @@
 # Caddy publishes 80 and 443 for cuweave.com. Postgres and the API stay private.
 # Do not use ports 22, 3000, 5173, or 8000 — those belong to SSH, SEAL, and SciNova.
 #
-# Point GoDaddy at 20.127.186.132 before the first start so Let's Encrypt can issue.
-#   cp env.azure.example .env
-#   # paste OPENAI_API_KEY into .env on the VM only
-#   sudo docker compose -f docker-compose.azure.yml up -d --build
+# Point GoDaddy at this VM, then on the VM run:
+#   sudo bash scripts/azure-setup.sh
 
 name: weave-azure
 

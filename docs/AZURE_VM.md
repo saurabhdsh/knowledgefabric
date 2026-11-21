@@ -55,37 +55,15 @@ dig +short A www.cuweave.com
 
 Both should print `20.127.186.132` before the first Caddy start. Let's Encrypt uses that path on port 80.
 
-## 3. Start Weave on the VM
+## 3. Run the setup on the VM
 
 ```bash
 ssh azureuser@20.127.186.132
 git clone https://github.com/saurabhdsh/knowledgefabric.git weave
 cd weave
-cp env.azure.example .env
-# Paste the Azure OpenAI key as OPENAI_API_KEY. Do not commit .env.
-sudo docker compose -f docker-compose.azure.yml up -d --build
+sudo bash scripts/azure-setup.sh
 ```
 
-After any `.env` change, recreate the containers:
+The script writes `.env`, generates the app secret and database password, asks for the Azure OpenAI key, and starts the stack. It does not print the key. Run the same command again after a later `git pull`.
 
-```bash
-sudo docker compose -f docker-compose.azure.yml up -d
-```
-
-A frontend URL change also needs a rebuild:
-
-```bash
-sudo docker compose -f docker-compose.azure.yml up -d --build web
-```
-
-Check the chat key before relying on the UI. Do not print the key:
-
-```bash
-KEY="$(grep '^OPENAI_API_KEY=' .env | cut -d= -f2-)"
-curl -sS "https://exxondemofdr.cognitiveservices.azure.com/openai/v1/chat/completions" \
-  -H "Authorization: Bearer ${KEY}" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-5-mini","messages":[{"role":"user","content":"Reply with exactly: PONG"}]}'
-```
-
-A working call returns `PONG`. Then open `https://cuweave.com`.
+Then open `https://cuweave.com`. The first login is **Saurabh** / **admin123**. Change that password after signing in.
