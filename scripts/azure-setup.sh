@@ -96,8 +96,15 @@ if [[ -z "${VM_IP}" ]]; then
 fi
 log "This VM address: ${VM_IP}"
 
+# Ask public DNS. The VM resolver can keep the old EC2 address after GoDaddy has changed.
+resolve_public() {
+  local name="$1"
+  curl -fsS --max-time 10 "https://dns.google/resolve?name=${name}&type=A" \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(a.get("data","") for a in d.get("Answer",[]) if a.get("type")==1))'
+}
+
 for name in cuweave.com www.cuweave.com; do
-  resolved="$(getent ahostsv4 "${name}" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)"
+  resolved="$(resolve_public "${name}" 2>/dev/null || true)"
   if [[ "${resolved}" != *"${VM_IP}"* ]]; then
     log "${name} resolves to '${resolved:-nothing}', not ${VM_IP}."
     log "In GoDaddy, set an A record for ${name} to ${VM_IP}, wait, then run this again."
