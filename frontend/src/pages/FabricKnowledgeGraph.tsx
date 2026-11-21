@@ -1370,19 +1370,18 @@ const FabricKnowledgeGraph: React.FC = () => {
 
           <section className="relative mt-4 overflow-hidden rounded-[28px] border border-white/15 bg-white/[0.06] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.2)] backdrop-blur-2xl">
             <div className="pointer-events-none absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
-            <p className="text-[10px] uppercase tracking-[0.22em] text-[#8b9cb0]">Release 2.0</p>
-            <h3 className="mt-1 text-[18px] font-semibold tracking-[-0.03em] text-[#e8edf4]">How this graph is built</h3>
+            <h3 className="text-[18px] font-semibold tracking-[-0.03em] text-[#e8edf4]">How this graph is built</h3>
             <p className="mt-2 max-w-3xl text-[13px] leading-relaxed text-[#cbd5e1]">
-              Release 2.0 stopped drawing the graph from word co-occurrence. Every fabric now runs the same six stages, and every edge you see is a measured fact with a source, a target, evidence, and a confidence.
+              Weave reads the fabric and records what is in it. An edge is drawn when it can name the two things being connected, the evidence that tied them together, and how sure that tie is. The six steps below are that path, from the raw source to the canvas in front of you.
             </p>
             <ol className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {[
-                ['01 Profile', 'Types, null rates, key candidates, and foreign keys are measured from the data. A foreign key is kept when the values actually overlap, not because two column names look alike.'],
-                ['02 Parse', 'Documents are read by layout. Headings, tables, and real page numbers are kept. Scanned pages go through OCR. Chunks remember the section path so a citation can point back to the page.'],
-                ['03 Model', 'The ontology is built from the full profile, not a thin sample. Each relationship records its source, target, evidence snippet, cardinality, and the columns that bind it. Domain rules live in packs, not in one-off endpoint code.'],
-                ['04 Index', 'Rows stay in a queryable table store. Only text and entity summaries are embedded, with the model name stamped on the fabric. Each fabric gets its own vector index, so one fabric cannot leak into another.'],
-                ['05 Validate', 'The build fails unless search uses that embedding index. Counts are answered from the table store. The graph is not published if the measurements do not hold.'],
-                ['06 Publish', 'The class graph and a sample of real instances are saved together. Foreign-key edges connect those instances. A later question can expand a node into facts — values and confidence — rather than a list of type names.'],
+                ['01 Profile', 'Tables are measured first. Each column gets a type, a null rate, and a check for whether its values could be a key. A link between two tables is kept when the values really overlap, and that overlap becomes the confidence on the edge.'],
+                ['02 Parse', 'Documents are read the way they are laid out. Headings, tables, and page numbers stay with the text. A scanned page is read with OCR. Each piece remembers its section and page, so a later citation can point back to the exact place it came from.'],
+                ['03 Model', 'Those measurements become the ontology. Entities come from the tables and the sections. Each relationship stores its source, its target, the columns or passage that bind them, and the evidence snippet. Domain rules are applied from the matching pack for this kind of data.'],
+                ['04 Index', 'The rows stay in a table store, so a count is answered from the rows themselves. Text and short entity summaries are embedded, and the embedding model is stamped on the fabric. This fabric keeps its own index, separate from every other fabric.'],
+                ['05 Validate', 'Search is checked against that index before anything is shown. If the index is not the one just built, the fabric is held back. Counts are checked against the table store. The graph is published when those measurements still hold.'],
+                ['06 Publish', 'What you see here is that published graph: the classes, plus a sample of real records, joined by the links found above. Selecting a node opens the values behind it. Selecting an edge opens the evidence and the confidence.'],
               ].map(([title, copy]) => (
                 <li key={title} className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                   <p className="text-[12px] font-semibold tracking-[-0.01em] text-[#e8edf4]">{title}</p>
@@ -1391,7 +1390,7 @@ const FabricKnowledgeGraph: React.FC = () => {
               ))}
             </ol>
             <p className="mt-4 max-w-3xl text-[13px] leading-relaxed text-[#cbd5e1]">
-              A composite fabric joins those graphs instead of pasting them side by side. A person named in a document is linked to the matching row, and the sources share one ontology. Questions are routed: counts go to the table store, narrative questions go to the documents, and mixed questions use both. Retrieval is keyword plus vector search, reranked into a token budget, and the confidence on an answer comes from those measurements.
+              When a fabric is made from more than one source, the same steps run on the combined profile. A person named in a document is matched to the row that carries the same identity, and both sources share one ontology. A question about a count goes to the table store. A question about what a document says goes to the indexed text. A question that needs both uses the rows and the passages together, and the confidence you see is the confidence measured while the graph was built.
             </p>
           </section>
         </>
