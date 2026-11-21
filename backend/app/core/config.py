@@ -162,6 +162,8 @@ class Settings(BaseSettings):
     
     # API Keys Configuration
     OPENAI_API_KEY: Optional[str] = None
+    # Public OpenAI or an Azure OpenAI v1 base (…/openai/v1). The key stays in the host .env.
+    OPENAI_BASE_URL: str = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
     GEMINI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
 

@@ -67,6 +67,65 @@ class LLMRouter:
         text = f"{type(exc).__name__}: {exc}".lower()
         return any(hint in text for hint in _CREDENTIAL_HINTS)
 
+    @staticmethod
+    def _openai_model(model: Optional[str]) -> str:
+        """Azure hosts one chat deployment. Do not send a public OpenAI model name there."""
+        configured = settings.OPENAI_QUERY_MODEL
+        base = (settings.OPENAI_BASE_URL or "").lower()
+        if base and "api.openai.com" not in base:
+            return configured
+        return model or configured
+
+    @staticmethod
+    def _completion_body(
+        model: str,
+        messages: List[Dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+    ) -> Dict:
+        body: Dict = {"model": model, "messages": messages}
+        # gpt-5 deployments reject temperature and expect max_completion_tokens.
+        if model.lower().startswith(("gpt-5", "o1", "o3", "o4")):
+            body["max_completion_tokens"] = max(max_tokens, 2048)
+            return body
+        body["max_tokens"] = max_tokens
+        body["temperature"] = temperature
+        return body
+
+    def _post_chat(self, body: Dict, api_key: str, *, allow_retry: bool = True) -> str:
+        import httpx
+
+        base = (settings.OPENAI_BASE_URL or "https://api.openai.com/v1").rstrip("/")
+        response = httpx.post(
+            f"{base}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=180,
+        )
+        if response.status_code >= 400:
+            detail = response.text[:500]
+            if allow_retry and "temperature" in detail.lower() and "temperature" in body:
+                retried = dict(body)
+                retried.pop("temperature", None)
+                return self._post_chat(retried, api_key, allow_retry=False)
+            if allow_retry and "max_tokens" in detail.lower() and "max_tokens" in body:
+                retried = dict(body)
+                retried["max_completion_tokens"] = retried.pop("max_tokens")
+                retried.pop("temperature", None)
+                return self._post_chat(retried, api_key, allow_retry=False)
+            raise RuntimeError(f"OpenAI chat failed ({response.status_code}): {detail}")
+        message = (response.json().get("choices") or [{}])[0].get("message") or {}
+        content = message.get("content") or ""
+        if isinstance(content, list):
+            content = "".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in content
+            )
+        return str(content).strip()
+
     def _openai_completion(
         self,
         *,
@@ -76,19 +135,12 @@ class LLMRouter:
         temperature: float,
         api_key: Optional[str],
     ) -> str:
-        import openai
-
-        openai_model = model or settings.OPENAI_QUERY_MODEL
-        kwargs = {
-            "model": openai_model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        if api_key:
-            kwargs["api_key"] = api_key
-        response = openai.ChatCompletion.create(**kwargs)
-        return (response.choices[0].message.content or "").strip()
+        key = api_key or settings.OPENAI_API_KEY
+        if not key:
+            raise RuntimeError("OPENAI_API_KEY is not configured")
+        openai_model = self._openai_model(model)
+        body = self._completion_body(openai_model, messages, max_tokens, temperature)
+        return self._post_chat(body, key)
 
     def chat_completion(
         self,
