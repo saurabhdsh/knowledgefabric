@@ -57,10 +57,21 @@ if [[ -z "$(env_value POSTGRES_PASSWORD)" || "$(env_value POSTGRES_PASSWORD)" ==
   log "Generated POSTGRES_PASSWORD"
 fi
 
+DEFAULT_ENDPOINT="https://exxondemofdr.cognitiveservices.azure.com/openai/v1"
 KEY="${OPENAI_API_KEY:-$(env_value OPENAI_API_KEY)}"
+ENDPOINT="${OPENAI_BASE_URL:-$(env_value OPENAI_BASE_URL)}"
 if [[ -z "${KEY}" ]]; then
+  read -r -p "Paste the Azure OpenAI endpoint [${DEFAULT_ENDPOINT}]: " ENDPOINT
+  echo
   read -r -s -p "Paste the Azure OpenAI key: " KEY
   echo
+fi
+ENDPOINT="${ENDPOINT:-${DEFAULT_ENDPOINT}}"
+ENDPOINT="${ENDPOINT#"${ENDPOINT%%[![:space:]]*}"}"
+ENDPOINT="${ENDPOINT%"${ENDPOINT##*[![:space:]]}"}"
+ENDPOINT="${ENDPOINT%/}"
+if [[ "${ENDPOINT}" != */openai/v1 ]]; then
+  ENDPOINT="${ENDPOINT}/openai/v1"
 fi
 if [[ -z "${KEY}" ]]; then
   log "OPENAI_API_KEY is required. Paste the key from the Azure OpenAI resource."
@@ -68,7 +79,8 @@ if [[ -z "${KEY}" ]]; then
 fi
 
 update_env "OPENAI_API_KEY" "${KEY}"
-update_env "OPENAI_BASE_URL" "https://exxondemofdr.cognitiveservices.azure.com/openai/v1"
+update_env "OPENAI_BASE_URL" "${ENDPOINT}"
+log "Chat endpoint: ${ENDPOINT}"
 update_env "OPENAI_QUERY_MODEL" "gpt-5-mini"
 update_env "ONTOLOGY_LLM_MODEL" "gpt-5-mini"
 update_env "DEFAULT_LLM_PROVIDER" "openai"

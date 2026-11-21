@@ -64,6 +64,6 @@ cd weave
 sudo bash scripts/azure-setup.sh
 ```
 
-The script writes `.env`, generates the app secret and database password, asks for the Azure OpenAI key, and starts the stack. It does not print the key. Run the same command again after a later `git pull`.
+The script writes `.env`, generates the app secret and database password, and asks you to paste the Azure OpenAI endpoint and key. Press Enter on the endpoint to keep `https://exxondemofdr.cognitiveservices.azure.com/openai/v1`. It does not print the key. Run the same command again after a later `git pull`.
 
 Then open `https://cuweave.com`. The first login is **Saurabh** / **admin123**. Change that password after signing in.
