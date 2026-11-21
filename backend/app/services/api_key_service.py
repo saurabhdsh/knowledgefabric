@@ -13,7 +13,7 @@ class APIKeyService:
         self._providers = {
             "openai": {
                 "name": "OpenAI GPT-4",
-                "api_key": settings.OPENAI_API_KEY,
+                "api_key": settings.chat_api_key() or None,
                 "enabled": "openai" in settings.ENABLED_LLM_PROVIDERS,
                 "description": "OpenAI direct API (GPT-4)",
                 "models": [settings.OPENAI_QUERY_MODEL, "gpt-3.5-turbo"],

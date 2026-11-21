@@ -90,7 +90,7 @@ class LLMRouter:
     def _openai_model(model: Optional[str]) -> str:
         """Azure hosts one chat deployment. Do not send a public OpenAI model name there."""
         configured = settings.OPENAI_QUERY_MODEL
-        base = LLMRouter._clean_base(settings.OPENAI_BASE_URL).lower()
+        base = LLMRouter._clean_base(settings.chat_base_url()).lower()
         if "api.openai.com" not in base:
             return configured
         return model or configured
@@ -142,7 +142,7 @@ class LLMRouter:
     def _post_chat(self, body: Dict, api_key: str) -> str:
         import httpx
 
-        base = self._clean_base(settings.OPENAI_BASE_URL)
+        base = self._clean_base(settings.chat_base_url())
         azure = "azure.com" in base.lower()
         if azure and api_key.startswith("sk-"):
             raise RuntimeError(
@@ -212,9 +212,9 @@ class LLMRouter:
         temperature: float,
         api_key: Optional[str],
     ) -> str:
-        key = self._clean_key(api_key or settings.OPENAI_API_KEY)
+        key = self._clean_key(api_key or settings.chat_api_key())
         if not key:
-            raise RuntimeError("OPENAI_API_KEY is not configured")
+            raise RuntimeError("AZURE_OPENAI_API_KEY is not configured")
         openai_model = self._openai_model(model)
         body = self._completion_body(openai_model, messages, max_tokens, temperature)
         return self._post_chat(body, key)

@@ -48,7 +48,9 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
       - KF_CORS_ORIGINS=${KF_CORS_ORIGINS}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-https://exxondemofdr.cognitiveservices.azure.com}
+      - OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://exxondemofdr.cognitiveservices.azure.com/openai/v1}
       - OPENAI_QUERY_MODEL=${OPENAI_QUERY_MODEL:-gpt-5-mini}
       - ONTOLOGY_LLM_MODEL=${ONTOLOGY_LLM_MODEL:-gpt-5-mini}

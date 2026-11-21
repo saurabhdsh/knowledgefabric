@@ -164,6 +164,9 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     # Public OpenAI or an Azure OpenAI v1 base (…/openai/v1). The key stays in the host .env.
     OPENAI_BASE_URL: str = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    # Azure OpenAI on the VM. These names are the ones Azure resources use.
+    AZURE_OPENAI_API_KEY: Optional[str] = None
+    AZURE_OPENAI_ENDPOINT: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
 
@@ -203,6 +206,13 @@ class Settings(BaseSettings):
     @property
     def ENABLED_LLM_PROVIDERS(self) -> list[str]:
         return [part.strip() for part in self.ENABLED_LLM_PROVIDERS_RAW.split(",") if part.strip()]
+
+    def chat_api_key(self) -> str:
+        """Azure key wins when this VM is pointed at Azure OpenAI."""
+        return (self.AZURE_OPENAI_API_KEY or self.OPENAI_API_KEY or "").strip()
+
+    def chat_base_url(self) -> str:
+        return (self.AZURE_OPENAI_ENDPOINT or self.OPENAI_BASE_URL or "https://api.openai.com/v1").strip()
 
     class Config:
         env_file = ".env"

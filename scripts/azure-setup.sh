@@ -11,7 +11,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
 if [[ "${EUID}" -ne 0 ]]; then
-  exec sudo bash "$0" "$@"
+  exec sudo --preserve-env=AZURE_OPENAI_API_KEY,AZURE_OPENAI_ENDPOINT bash "$0" "$@"
 fi
 
 log() { echo "[azure-setup] $*"; }
@@ -57,28 +57,29 @@ if [[ -z "$(env_value POSTGRES_PASSWORD)" || "$(env_value POSTGRES_PASSWORD)" ==
   log "Generated POSTGRES_PASSWORD"
 fi
 
-DEFAULT_ENDPOINT="https://exxondemofdr.cognitiveservices.azure.com/openai/v1"
-KEY="${OPENAI_API_KEY:-$(env_value OPENAI_API_KEY)}"
-ENDPOINT="${OPENAI_BASE_URL:-$(env_value OPENAI_BASE_URL)}"
+DEFAULT_ENDPOINT="https://exxondemofdr.cognitiveservices.azure.com"
+KEY="${AZURE_OPENAI_API_KEY:-$(env_value AZURE_OPENAI_API_KEY)}"
+ENDPOINT="${AZURE_OPENAI_ENDPOINT:-$(env_value AZURE_OPENAI_ENDPOINT)}"
 if [[ -z "${KEY}" ]]; then
-  read -r -p "Paste the Azure OpenAI endpoint, or press Enter for ${DEFAULT_ENDPOINT}: " ENDPOINT
-  read -r -s -p "Paste the Azure OpenAI key: " KEY
+  read -r -p "Paste AZURE_OPENAI_ENDPOINT, or press Enter for ${DEFAULT_ENDPOINT}: " ENDPOINT
+  read -r -p "Paste AZURE_OPENAI_API_KEY: " KEY
   echo
 fi
 ENDPOINT="${ENDPOINT:-${DEFAULT_ENDPOINT}}"
 ENDPOINT="${ENDPOINT//[[:space:]\[\]\"\']/}"
 ENDPOINT="${ENDPOINT%/}"
-if [[ "${ENDPOINT}" != */openai/v1 ]]; then
-  ENDPOINT="${ENDPOINT}/openai/v1"
-fi
+ENDPOINT="${ENDPOINT%/openai/v1}"
+ENDPOINT="${ENDPOINT%/openai}"
 if [[ -z "${KEY}" ]]; then
-  log "OPENAI_API_KEY is required. Paste the key from the Azure OpenAI resource."
+  log "AZURE_OPENAI_API_KEY is required. Paste the key from the Azure resource."
   exit 1
 fi
 
+update_env "AZURE_OPENAI_API_KEY" "${KEY}"
+update_env "AZURE_OPENAI_ENDPOINT" "${ENDPOINT}"
 update_env "OPENAI_API_KEY" "${KEY}"
-update_env "OPENAI_BASE_URL" "${ENDPOINT}"
-log "Chat endpoint: ${ENDPOINT}"
+update_env "OPENAI_BASE_URL" "${ENDPOINT}/openai/v1"
+log "Chat endpoint: ${ENDPOINT}/openai/v1"
 update_env "OPENAI_QUERY_MODEL" "gpt-5-mini"
 update_env "ONTOLOGY_LLM_MODEL" "gpt-5-mini"
 update_env "DEFAULT_LLM_PROVIDER" "openai"

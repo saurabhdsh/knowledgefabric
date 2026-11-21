@@ -192,8 +192,8 @@ def _resolve_llm_key(fastapi_request: Optional[Request]) -> str:
 
     # Local callers (frontend, scripts on the same machine) fall back to the
     # server's configured key.
-    if settings.OPENAI_API_KEY:
-        return settings.OPENAI_API_KEY
+    if settings.chat_api_key():
+        return settings.chat_api_key()
     raise HTTPException(
         status_code=503,
         detail=(
