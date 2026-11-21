@@ -111,35 +111,90 @@ class LLMRouter:
         body["temperature"] = temperature
         return body
 
-    def _post_chat(self, body: Dict, api_key: str, *, allow_retry: bool = True) -> str:
+    @staticmethod
+    def _chat_targets(base: str, model: str) -> List[str]:
+        targets = [f"{base}/chat/completions"]
+        if "azure.com" not in base.lower():
+            return targets
+        root = base
+        for suffix in ("/openai/v1", "/openai"):
+            if root.lower().endswith(suffix):
+                root = root[: -len(suffix)]
+                break
+        root = root.rstrip("/")
+        for version in ("2024-10-21", "2025-04-01-preview"):
+            targets.append(
+                f"{root}/openai/deployments/{model}/chat/completions?api-version={version}"
+            )
+        return targets
+
+    @staticmethod
+    def _auth_headers(api_key: str, azure: bool) -> List[Dict[str, str]]:
+        # Sending Bearer and api-key together makes this gateway reject the call.
+        # Try the subscription key first, then bearer, as separate requests.
+        if azure:
+            return [
+                {"api-key": api_key, "Content-Type": "application/json"},
+                {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            ]
+        return [{"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}]
+
+    def _post_chat(self, body: Dict, api_key: str) -> str:
         import httpx
 
         base = self._clean_base(settings.OPENAI_BASE_URL)
-        # Azure Cognitive Services checks the api-key header. Bearer alone
-        # returns 401 "invalid subscription key or wrong API endpoint".
-        response = httpx.post(
-            f"{base}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "api-key": api_key,
-                "Content-Type": "application/json",
-            },
-            json=body,
-            timeout=180,
-        )
-        if response.status_code >= 400:
-            detail = response.text[:500]
-            if allow_retry and "temperature" in detail.lower() and "temperature" in body:
-                retried = dict(body)
-                retried.pop("temperature", None)
-                return self._post_chat(retried, api_key, allow_retry=False)
-            if allow_retry and "max_tokens" in detail.lower() and "max_tokens" in body:
-                retried = dict(body)
-                retried["max_completion_tokens"] = retried.pop("max_tokens")
-                retried.pop("temperature", None)
-                return self._post_chat(retried, api_key, allow_retry=False)
-            raise RuntimeError(f"OpenAI chat failed ({response.status_code}): {detail}")
-        message = (response.json().get("choices") or [{}])[0].get("message") or {}
+        azure = "azure.com" in base.lower()
+        if azure and api_key.startswith("sk-"):
+            raise RuntimeError(
+                "The configured key is an OpenAI platform key. "
+                "This VM needs the key from the Azure resource exxondemofdr, "
+                "on its Keys and Endpoint page."
+            )
+        targets = self._chat_targets(base, str(body.get("model") or settings.OPENAI_QUERY_MODEL))
+        header_sets = self._auth_headers(api_key, azure)
+        last_detail = "Azure rejected the key"
+        last_status = 401
+
+        for url in targets:
+            for headers in header_sets:
+                payload = dict(body)
+                response = httpx.post(url, headers=headers, json=payload, timeout=180)
+                if response.status_code < 400:
+                    return self._message_text(response.json())
+                detail = response.text[:500]
+                last_detail = detail
+                last_status = response.status_code
+                if response.status_code == 401:
+                    continue
+                if "temperature" in detail.lower() and "temperature" in payload:
+                    payload.pop("temperature", None)
+                    response = httpx.post(url, headers=headers, json=payload, timeout=180)
+                    if response.status_code < 400:
+                        return self._message_text(response.json())
+                    detail = response.text[:500]
+                    last_detail = detail
+                    last_status = response.status_code
+                    if response.status_code == 401:
+                        continue
+                if "max_tokens" in detail.lower() and "max_tokens" in payload:
+                    payload["max_completion_tokens"] = payload.pop("max_tokens")
+                    payload.pop("temperature", None)
+                    response = httpx.post(url, headers=headers, json=payload, timeout=180)
+                    if response.status_code < 400:
+                        return self._message_text(response.json())
+                    last_detail = response.text[:500]
+                    last_status = response.status_code
+                    if response.status_code == 401:
+                        continue
+                if response.status_code in (404, 400):
+                    continue
+                raise RuntimeError(f"OpenAI chat failed ({response.status_code}): {detail}")
+
+        raise RuntimeError(f"OpenAI chat failed ({last_status}): {last_detail}")
+
+    @staticmethod
+    def _message_text(payload: Dict) -> str:
+        message = (payload.get("choices") or [{}])[0].get("message") or {}
         content = message.get("content") or ""
         if isinstance(content, list):
             content = "".join(
