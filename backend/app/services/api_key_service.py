@@ -10,13 +10,23 @@ class APIKeyService:
     """Service for managing API keys and LLM provider configuration"""
     
     def __init__(self):
+        azure_chat = "azure.com" in (settings.chat_base_url() or "").lower()
+        chat_name = (
+            f"Azure OpenAI ({settings.OPENAI_QUERY_MODEL})"
+            if azure_chat
+            else "OpenAI"
+        )
         self._providers = {
             "openai": {
-                "name": "OpenAI GPT-4",
+                "name": chat_name,
                 "api_key": settings.chat_api_key() or None,
                 "enabled": "openai" in settings.ENABLED_LLM_PROVIDERS,
-                "description": "OpenAI direct API (GPT-4)",
-                "models": [settings.OPENAI_QUERY_MODEL, "gpt-3.5-turbo"],
+                "description": (
+                    "Azure OpenAI chat deployment on this VM"
+                    if azure_chat
+                    else "OpenAI direct API"
+                ),
+                "models": [settings.OPENAI_QUERY_MODEL],
                 "default_model": settings.OPENAI_QUERY_MODEL,
                 "auth_type": "api_key",
             },

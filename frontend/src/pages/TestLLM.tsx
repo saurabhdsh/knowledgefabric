@@ -110,37 +110,43 @@ const TestLLM: React.FC = () => {
         body: JSON.stringify({
           query: testQuery,
           llm_provider: selectedLLM,
-          retrieve_all: true,
-          top_k: 0,
+          top_k: 8,
           session_id: sessionByFabric[selectedFabric] || undefined,
         })
       });
 
       const data = await response.json();
+      const failure = !response.ok || data?.success === false;
+      const detail = typeof data?.detail === 'string'
+        ? data.detail
+        : (data?.detail?.message || data?.error || data?.message);
+      const answer = failure
+        ? (detail || 'The model did not answer. Check the Azure OpenAI key on the VM.')
+        : (data?.data?.answer || 'The model returned an empty answer.');
       
       const result = {
         fabricId: selectedFabric,
         llmProvider: selectedLLM,
         query: testQuery,
-        response: data.success ? data.data.answer : (data.error || data.message || 'Sorry, I encountered an error. Please try again.'),
-        confidence: data.success ? data.data.confidence || 0.85 : 0.0,
+        response: answer,
+        confidence: failure ? 0 : (data.data?.confidence || 0.85),
         timestamp: new Date().toISOString(),
-        relevantChunks: data.success ? (data.data.relevant_chunks ?? data.data.relevant_chunks_found ?? 0) : 0,
-        packedChunks: data.success ? (data.data.retrieval?.packed_chunks ?? data.data.relevant_chunks_found ?? 0) : 0,
-        processingTime: data.success ? data.data.processing_time || '1.2s' : '0s',
-        sessionId: data.success ? data.data.session_id : undefined,
-        episodeId: data.success ? data.data.episode_id : undefined,
+        relevantChunks: failure ? 0 : (data.data?.relevant_chunks ?? data.data?.relevant_chunks_found ?? 0),
+        packedChunks: failure ? 0 : (data.data?.retrieval?.packed_chunks ?? data.data?.relevant_chunks_found ?? 0),
+        processingTime: failure ? '0s' : (data.data?.processing_time || '1.2s'),
+        sessionId: failure ? undefined : data.data?.session_id,
+        episodeId: failure ? undefined : data.data?.episode_id,
         feedbackState: null as string | null,
       };
 
-      if (data.success && data.data.session_id) {
+      if (!failure && data.data?.session_id) {
         setSessionByFabric((prev) => ({ ...prev, [selectedFabric]: data.data.session_id }));
       }
 
       setTestResults(prev => [result, ...prev]);
       setStatusBanner({
-        type: data.success ? 'success' : 'error',
-        message: data.success ? 'Query completed successfully.' : (data.error || data.message || 'Query failed.'),
+        type: failure ? 'error' : 'success',
+        message: failure ? String(detail || 'Query failed.') : 'Query completed successfully.',
       });
     } catch (error) {
       const errorResult = {
@@ -308,7 +314,7 @@ const TestLLM: React.FC = () => {
                   onChange={(e) => setSelectedLLM(e.target.value)}
                   className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
                 >
-                  {(llmProviders.length > 0 ? llmProviders : [{ id: 'openai', name: 'OpenAI GPT-4' }]).map((provider) => (
+                  {(llmProviders.length > 0 ? llmProviders : [{ id: 'openai', name: 'Azure OpenAI' }]).map((provider) => (
                     <option key={provider.id} value={provider.id}>
                       {provider.name}
                     </option>
@@ -318,7 +324,7 @@ const TestLLM: React.FC = () => {
                   {llmProviders.find((p) => p.id === selectedLLM)?.description
                     || (selectedLLM === 'bedrock'
                       ? 'Using AWS Bedrock via IAM (no OpenAI key required on AWS)'
-                      : 'Using OpenAI for advanced reasoning')}
+                      : 'Questions are answered by the Azure OpenAI deployment on this VM.')}
                 </p>
               </div>
 

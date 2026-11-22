@@ -197,8 +197,8 @@ def _resolve_llm_key(fastapi_request: Optional[Request]) -> str:
     raise HTTPException(
         status_code=503,
         detail=(
-            "No LLM key available. Either configure OPENAI_API_KEY on the "
-            f"server or send `{LLM_API_KEY_HEADER}` with your request."
+            "No LLM key available. Set AZURE_OPENAI_API_KEY on this VM, "
+            f"or send `{LLM_API_KEY_HEADER}` with your request."
         ),
     )
 
@@ -5164,18 +5164,15 @@ async def query_knowledge_base(
         
         # Use configured LLM provider (OpenAI direct or AWS Bedrock)
         is_valid, message = api_key_service.validate_provider(llm_provider)
-        fallback_answer = (
-            f"Based on the document content in '{fabric['name']}':\n\n"
-            "Here's what I found:\n\n"
-            "• The knowledge fabric was queried but the LLM provider was unavailable\n"
-            "• Retry after confirming Bedrock/OpenAI configuration\n"
-            f"• Retrieved context chunks available: {len(context_chunks)}\n"
-        )
 
         if not is_valid:
             print(f"LLM provider not available ({llm_provider}): {message}")
-            answer = fallback_answer
-            confidence = 0.7
+            return APIResponse(
+                success=False,
+                message="The language model is not configured",
+                data=None,
+                error=message or "Set AZURE_OPENAI_API_KEY on this VM and rebuild the backend.",
+            )
         elif llm_provider in ("openai", "bedrock"):
             try:
                 system_prompt = build_domain_system_prompt(
@@ -5220,8 +5217,12 @@ async def query_knowledge_base(
                 confidence = 0.85 if context_chunks else 0.5
             except Exception as e:
                 print(f"LLM API error ({llm_provider}): {e}")
-                answer = fallback_answer
-                confidence = 0.7
+                return APIResponse(
+                    success=False,
+                    message="The language model did not answer",
+                    data=None,
+                    error=str(e),
+                )
         elif llm_provider == "gemini":
             answer = (
                 f"Based on the document content in '{fabric['name']}':\n\n"
@@ -5229,8 +5230,12 @@ async def query_knowledge_base(
             )
             confidence = 0.6
         else:
-            answer = fallback_answer
-            confidence = 0.7
+            return APIResponse(
+                success=False,
+                message="The language model is not configured",
+                data=None,
+                error=f"Provider '{llm_provider}' is not available on this VM. Use Azure OpenAI.",
+            )
 
         # Calculate actual confidence based on content quality and LLM response
         actual_confidence = 0.0

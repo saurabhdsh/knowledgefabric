@@ -105,7 +105,7 @@ class LLMRouter:
         body: Dict = {"model": model, "messages": messages}
         # gpt-5 deployments reject temperature and expect max_completion_tokens.
         if model.lower().startswith(("gpt-5", "o1", "o3", "o4")):
-            body["max_completion_tokens"] = max(max_tokens, 2048)
+            body["max_completion_tokens"] = max(max_tokens, 4096)
             return body
         body["max_tokens"] = max_tokens
         body["temperature"] = temperature
@@ -160,7 +160,13 @@ class LLMRouter:
                 payload = dict(body)
                 response = httpx.post(url, headers=headers, json=payload, timeout=180)
                 if response.status_code < 400:
-                    return self._message_text(response.json())
+                    text = self._message_text(response.json())
+                    if not text:
+                        raise RuntimeError(
+                            "Azure OpenAI returned an empty answer. "
+                            "The deployment answered, but there was no message text."
+                        )
+                    return text
                 detail = response.text[:500]
                 last_detail = detail
                 last_status = response.status_code
