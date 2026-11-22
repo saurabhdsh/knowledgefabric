@@ -58,14 +58,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends gosu \
     && groupadd --system weave \
     && useradd --system --gid weave --home-dir /var/weave --shell /usr/sbin/nologin weave \
     && chown -R weave:weave /app /var/weave \
+    && sed -i 's/\r$//' /app/docker-entrypoint.sh \
     && chmod +x /app/docker-entrypoint.sh
 
 # Expose port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=40s --retries=5 \
-    CMD curl -f http://localhost:8000/health || exit 1
+# Health check — 127.0.0.1 avoids IPv6 localhost miss against IPv4-only bind.
+HEALTHCHECK --interval=15s --timeout=10s --start-period=60s --retries=8 \
+    CMD curl -f http://127.0.0.1:8000/health || exit 1
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
