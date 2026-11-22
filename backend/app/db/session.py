@@ -85,6 +85,10 @@ def _ensure_schema_columns(engine) -> None:
         "users": [
             ("role", "VARCHAR(32) DEFAULT 'user'"),
             ("allowed_features", "TEXT"),
+            ("must_change_password", "BOOLEAN DEFAULT 0"),
+            ("failed_login_count", "INTEGER DEFAULT 0"),
+            ("locked_until", "DATETIME"),
+            ("password_changed_at", "DATETIME"),
         ],
         "retrieval_episodes": [
             ("route", "VARCHAR(64)"),

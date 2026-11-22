@@ -22,6 +22,7 @@ export interface WeaveUser {
   role?: WeaveRole;
   allowed_features?: WeaveFeatureKey[];
   is_active?: boolean;
+  must_change_password?: boolean;
 }
 
 export const getStoredToken = (): string | null => localStorage.getItem(TOKEN_KEY);

@@ -45,6 +45,7 @@ class OntologyAssembler:
                     normalized_name=e.get("normalized_name") or e.get("name", ""),
                     definition=e.get("definition"),
                     aliases=e.get("aliases", []),
+                    parent_class_id=e.get("parent_class_id"),
                     source_evidence=ev_list,
                     confidence_score=float(e.get("confidence", 0.5)),
                     status=OntologyElementStatus.DRAFT,
@@ -54,15 +55,26 @@ class OntologyAssembler:
                 )
             )
 
+        # A relationship or attribute is kept only when it names classes that
+        # exist. Nothing is attached to a default class: an unbound element is
+        # left out and reported, so the draft never states something no source said.
+        class_ids = {c.id for c in classes}
+        dropped: List[Dict[str, Any]] = []
+
         rels: List[OntologyRelationship] = []
         for r in relationships:
             if not r.get("relationship_name"):
                 continue
-            src_id = r.get("source_class_id") or (classes[0].id if classes else "")
-            tgt_id = r.get("target_class_id") or (
-                classes[1].id if len(classes) > 1 else (classes[0].id if classes else "")
-            )
-            if src_id and tgt_id and src_id == tgt_id:
+            src_id = r.get("source_class_id") or ""
+            tgt_id = r.get("target_class_id") or ""
+            if src_id not in class_ids or tgt_id not in class_ids:
+                dropped.append({
+                    "kind": "relationship",
+                    "name": r.get("relationship_name"),
+                    "reason": "no named source and target entity",
+                })
+                continue
+            if src_id == tgt_id:
                 continue
             ev_list = self._evidence_for(r, evidence_pool)
             card = r.get("cardinality_if_detected") or r.get("cardinality")
@@ -96,11 +108,18 @@ class OntologyAssembler:
 
         attrs: List[OntologyAttribute] = []
         for a in attributes:
+            if (a.get("class_id") or "") not in class_ids:
+                dropped.append({
+                    "kind": "attribute",
+                    "name": a.get("attribute_name") or a.get("name"),
+                    "reason": "no named entity",
+                })
+                continue
             ev_list = self._evidence_for(a, evidence_pool)
             attrs.append(
                 OntologyAttribute(
                     id=a.get("id") or f"attr_{uuid.uuid4().hex[:8]}",
-                    class_id=a.get("class_id") or (classes[0].id if classes else ""),
+                    class_id=a["class_id"],
                     attribute_name=a.get("attribute_name") or a.get("name", ""),
                     normalized_name=a.get("normalized_name") or a.get("attribute_name", ""),
                     data_type_guess=a.get("data_type_guess"),
@@ -156,6 +175,7 @@ class OntologyAssembler:
             "relationships": [r.model_dump() for r in rels],
             "attributes": [a.model_dump() for a in attrs],
             "constraints": [c.model_dump() for c in constraints],
+            "dropped": dropped,
         }
 
     def _evidence_for(self, item: Dict[str, Any], pool: List[OntologyEvidence]) -> List[OntologyEvidence]:

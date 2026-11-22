@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowPathIcon, CheckCircleIcon, CubeIcon } from '@heroicons/react/24/outline';
 import { jobStatusColor, jobTypeLabel, platformApi, PlatformJob } from '../utils/platformApi';
+import RelationshipGovernancePanel from './RelationshipGovernancePanel';
 
 interface FabricPlatformPanelProps {
   fabricId: string;
@@ -191,6 +192,10 @@ const FabricPlatformPanel: React.FC<FabricPlatformPanelProps> = ({
           ))}
         </div>
       )}
+
+      <div className="mt-4">
+        <RelationshipGovernancePanel fabricId={fabricId} />
+      </div>
     </div>
   );
 };

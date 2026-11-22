@@ -5,16 +5,19 @@ import WeaveLogo from '../components/WeaveLogo';
 import { useAuth } from '../contexts/AuthContext';
 
 const Login: React.FC = () => {
-  const { login, isAuthenticated, isLoading } = useAuth();
+  const { login, changePassword, isAuthenticated, isLoading, mustChangePassword } = useAuth();
   const location = useLocation();
   const [username, setUsername] = useState('Saurabh');
   const [password, setPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const redirectTo = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname || '/';
 
-  if (!isLoading && isAuthenticated) {
+  if (!isLoading && isAuthenticated && !mustChangePassword) {
     return <Navigate to={redirectTo} replace />;
   }
 
@@ -24,12 +27,32 @@ const Login: React.FC = () => {
     setSubmitting(true);
     try {
       await login(username.trim(), password);
+      setCurrentPassword(password);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sign in failed');
     } finally {
       setSubmitting(false);
     }
   };
+
+  const handleChangePassword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    if (newPassword !== confirmPassword) {
+      setError('New password and confirmation do not match.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await changePassword(currentPassword || password, newPassword);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Password change failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const showChangeForm = isAuthenticated && mustChangePassword;
 
   return (
     <div className="min-h-screen bg-[#040508] text-[#e8edf4] flex items-center justify-center px-4 py-12 relative overflow-hidden">
@@ -60,56 +83,110 @@ const Login: React.FC = () => {
             <p className="mt-1 text-[10px] uppercase tracking-[0.22em] text-[#8b9cb0]">
               Knowledge Fabric Platform
             </p>
-            <p className="mt-4 text-sm text-[#8b9cb0]">Sign in to your private workspace</p>
+            <p className="mt-4 text-sm text-[#8b9cb0]">
+              {showChangeForm
+                ? 'Choose a new password before continuing'
+                : 'Sign in to your private workspace'}
+            </p>
           </div>
 
-          <form onSubmit={handleSubmit} className="px-8 py-8 space-y-5">
-            {error && (
-              <div className="rounded-xl border border-[rgba(240,137,132,0.35)] bg-[rgba(240,137,132,0.12)] px-4 py-3 text-sm text-[#ffd6d3]">
-                {error}
+          {showChangeForm ? (
+            <form onSubmit={handleChangePassword} className="px-8 py-8 space-y-5">
+              {error && (
+                <div className="rounded-xl border border-[rgba(240,137,132,0.35)] bg-[rgba(240,137,132,0.12)] px-4 py-3 text-sm text-[#ffd6d3]">
+                  {error}
+                </div>
+              )}
+              <p className="text-xs text-[#8b9cb0]">
+                Use at least 10 characters with three of: lowercase, uppercase, digit, symbol.
+              </p>
+              <div>
+                <label htmlFor="new-password" className="block text-xs font-medium uppercase tracking-[0.16em] text-[#8b9cb0] mb-2">
+                  New password
+                </label>
+                <input
+                  id="new-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full rounded-xl border border-[rgba(148,163,184,0.18)] bg-[#0d1422]/80 px-4 py-3 text-sm text-[#e8edf4] placeholder:text-[#8b9cb0] focus:outline-none focus:border-[rgba(94,200,242,0.45)] focus:ring-1 focus:ring-[rgba(94,200,242,0.35)]"
+                  required
+                  minLength={10}
+                />
               </div>
-            )}
+              <div>
+                <label htmlFor="confirm-password" className="block text-xs font-medium uppercase tracking-[0.16em] text-[#8b9cb0] mb-2">
+                  Confirm new password
+                </label>
+                <input
+                  id="confirm-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full rounded-xl border border-[rgba(148,163,184,0.18)] bg-[#0d1422]/80 px-4 py-3 text-sm text-[#e8edf4] placeholder:text-[#8b9cb0] focus:outline-none focus:border-[rgba(94,200,242,0.45)] focus:ring-1 focus:ring-[rgba(94,200,242,0.35)]"
+                  required
+                  minLength={10}
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={submitting || isLoading}
+                className="w-full rounded-xl border border-[rgba(94,200,242,0.35)] bg-gradient-to-r from-violet-600/80 via-fuchsia-600/70 to-cyan-600/70 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-900/20 transition hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {submitting ? 'Updating…' : 'Update password'}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleSubmit} className="px-8 py-8 space-y-5">
+              {error && (
+                <div className="rounded-xl border border-[rgba(240,137,132,0.35)] bg-[rgba(240,137,132,0.12)] px-4 py-3 text-sm text-[#ffd6d3]">
+                  {error}
+                </div>
+              )}
 
-            <div>
-              <label htmlFor="username" className="block text-xs font-medium uppercase tracking-[0.16em] text-[#8b9cb0] mb-2">
-                Username
-              </label>
-              <input
-                id="username"
-                type="text"
-                autoComplete="username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full rounded-xl border border-[rgba(148,163,184,0.18)] bg-[#0d1422]/80 px-4 py-3 text-sm text-[#e8edf4] placeholder:text-[#8b9cb0] focus:outline-none focus:border-[rgba(94,200,242,0.45)] focus:ring-1 focus:ring-[rgba(94,200,242,0.35)]"
-                placeholder="Enter your username"
-                required
-              />
-            </div>
+              <div>
+                <label htmlFor="username" className="block text-xs font-medium uppercase tracking-[0.16em] text-[#8b9cb0] mb-2">
+                  Username
+                </label>
+                <input
+                  id="username"
+                  type="text"
+                  autoComplete="username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="w-full rounded-xl border border-[rgba(148,163,184,0.18)] bg-[#0d1422]/80 px-4 py-3 text-sm text-[#e8edf4] placeholder:text-[#8b9cb0] focus:outline-none focus:border-[rgba(94,200,242,0.45)] focus:ring-1 focus:ring-[rgba(94,200,242,0.35)]"
+                  placeholder="Enter your username"
+                  required
+                />
+              </div>
 
-            <div>
-              <label htmlFor="password" className="block text-xs font-medium uppercase tracking-[0.16em] text-[#8b9cb0] mb-2">
-                Password
-              </label>
-              <input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-xl border border-[rgba(148,163,184,0.18)] bg-[#0d1422]/80 px-4 py-3 text-sm text-[#e8edf4] placeholder:text-[#8b9cb0] focus:outline-none focus:border-[rgba(94,200,242,0.45)] focus:ring-1 focus:ring-[rgba(94,200,242,0.35)]"
-                placeholder="Enter your password"
-                required
-              />
-            </div>
+              <div>
+                <label htmlFor="password" className="block text-xs font-medium uppercase tracking-[0.16em] text-[#8b9cb0] mb-2">
+                  Password
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full rounded-xl border border-[rgba(148,163,184,0.18)] bg-[#0d1422]/80 px-4 py-3 text-sm text-[#e8edf4] placeholder:text-[#8b9cb0] focus:outline-none focus:border-[rgba(94,200,242,0.45)] focus:ring-1 focus:ring-[rgba(94,200,242,0.35)]"
+                  placeholder="Enter your password"
+                  required
+                />
+              </div>
 
-            <button
-              type="submit"
-              disabled={submitting || isLoading}
-              className="w-full rounded-xl border border-[rgba(94,200,242,0.35)] bg-gradient-to-r from-violet-600/80 via-fuchsia-600/70 to-cyan-600/70 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-900/20 transition hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {submitting ? 'Signing in…' : 'Sign in to Weave'}
-            </button>
-          </form>
+              <button
+                type="submit"
+                disabled={submitting || isLoading}
+                className="w-full rounded-xl border border-[rgba(94,200,242,0.35)] bg-gradient-to-r from-violet-600/80 via-fuchsia-600/70 to-cyan-600/70 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-900/20 transition hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {submitting ? 'Signing in…' : 'Sign in to Weave'}
+              </button>
+            </form>
+          )}
         </div>
 
         <p className="mt-6 text-center text-xs text-[#8b9cb0]">

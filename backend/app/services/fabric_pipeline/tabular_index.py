@@ -65,6 +65,13 @@ def dataset_card(profile: Dict[str, Any], fabric_name: str) -> str:
                 f"- {fk['from_table']}.{fk['from_column']} -> {fk['to_table']}.{fk['to_column']} "
                 f"({fk['cardinality']})"
             )
+    for fk in profile.get("composite_foreign_keys") or []:
+        if not profile.get("foreign_keys"):
+            lines.append("Relationships:")
+        lines.append(
+            f"- {fk['from_table']}.({', '.join(fk['from_columns'])}) -> "
+            f"{fk['to_table']}.({', '.join(fk['to_columns'])}) ({fk['cardinality']}, two-column key)"
+        )
     return "\n".join(lines)
 
 
@@ -104,7 +111,8 @@ def schema_card(table: Dict[str, Any], profile: Dict[str, Any], *, for_sql: bool
         lines.append("; ".join(parts))
     out_fks = [fk for fk in profile.get("foreign_keys", []) if fk["from_table"] == table["name"]]
     in_fks = [fk for fk in profile.get("foreign_keys", []) if fk["to_table"] == table["name"]]
-    if out_fks or in_fks:
+    pair_fks = [fk for fk in profile.get("composite_foreign_keys") or [] if fk["from_table"] == table["name"]]
+    if out_fks or in_fks or pair_fks:
         lines.append("Relationships:")
 
     def _names(tbl_name: str, col_name: str) -> Tuple[str, str]:
@@ -122,6 +130,13 @@ def schema_card(table: Dict[str, Any], profile: Dict[str, Any], *, for_sql: bool
         ft, fc = _names(fk["from_table"], fk["from_column"])
         tt, tc = _names(fk["to_table"], fk["to_column"])
         lines.append(f"- referenced by {ft}.{fc}")
+    for fk in pair_fks:
+        pairs = []
+        for from_col, to_col in zip(fk["from_columns"], fk["to_columns"]):
+            ft, fc = _names(fk["from_table"], from_col)
+            tt, tc = _names(fk["to_table"], to_col)
+            pairs.append(f"{ft}.{fc} = {tt}.{tc}")
+        lines.append(f"- two-column key, join on both: {' AND '.join(pairs)} ({fk['cardinality']})")
     return "\n".join(lines)
 
 

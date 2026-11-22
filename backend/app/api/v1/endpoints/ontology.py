@@ -895,9 +895,15 @@ async def export_ontology(
         )
     if fmt == "graph":
         return APIResponse(success=True, message="OK", data=export_service.export_graph(version))
+    if fmt in ("shacl", "shapes"):
+        return PlainTextResponse(
+            export_service.export_shacl(version),
+            media_type="text/turtle",
+            headers={"Content-Disposition": f"attachment; filename=ontology_{version_id}.shacl.ttl"},
+        )
     raise HTTPException(
         status_code=400,
-        detail="format must be json, csv, rdf, ttl, owl, or graph",
+        detail="format must be json, csv, rdf, ttl, owl, graph, or shacl",
     )
 
 

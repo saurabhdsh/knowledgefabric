@@ -49,6 +49,17 @@ class DiscoveryOrchestrator:
         self.persistence = OntologyPersistenceService()
         self.llm_service = LLMOntologyService()
 
+    @staticmethod
+    def _spread(items: List[Any], limit: int) -> List[Any]:
+        """Up to ``limit`` items taken at even steps across the whole list."""
+        if limit <= 0 or len(items) <= limit:
+            return list(items)
+        if limit == 1:
+            return [items[0]]
+        step = (len(items) - 1) / (limit - 1)
+        picked = sorted({round(i * step) for i in range(limit)})
+        return [items[i] for i in picked]
+
     def run_discovery(
         self,
         run_id: str,
@@ -198,13 +209,29 @@ class DiscoveryOrchestrator:
         }
         max_llm_chunks = max_chunks_for_llm if max_chunks_for_llm is not None else (getattr(settings, "ONTOLOGY_MAX_CHUNKS_FOR_LLM", 10) or 10)
         if use_llm and self.llm_service.is_available():
-            for i, chunk in enumerate(all_text_chunks[:max_llm_chunks]):
+            # Read passages spread across the whole source, not only its opening pages.
+            llm_chunks = self._spread(all_text_chunks, max_llm_chunks)
+            discarded = {"entities": 0, "relationships": 0, "attributes": 0, "business_rules": 0}
+            for chunk in llm_chunks:
                 result = self.llm_service.extract_from_chunk(chunk.get("content", ""))
                 if result:
+                    for item in result.get("relationships", []):
+                        item.setdefault("artifact_id", chunk.get("artifact_id") or "")
+                        item.setdefault("artifact_type", chunk.get("artifact_type") or "document")
                     llm_candidates["entities"].extend(result.get("entities", []))
                     llm_candidates["relationships"].extend(result.get("relationships", []))
                     llm_candidates["attributes"].extend(result.get("attributes", []))
                     llm_candidates["business_rules"].extend(result.get("business_rules", []))
+                    for kind, count in (result.get("discarded") or {}).items():
+                        discarded[kind] = discarded.get(kind, 0) + int(count or 0)
+            log(
+                DiscoveryRunStage.CONCEPT_EXTRACT.value,
+                f"Model read {len(llm_chunks)} of {len(all_text_chunks)} passages. "
+                f"Discarded because the text did not state them: "
+                f"{discarded['relationships']} relationships, {discarded['entities']} entities, "
+                f"{discarded['attributes']} fields, {discarded['business_rules']} rules.",
+                48.0,
+            )
 
         rule_based = {
             "entities": rule_entities,
@@ -230,12 +257,27 @@ class DiscoveryOrchestrator:
             )
         )
 
+        if self.relation_engine.last_dropped:
+            log(
+                DiscoveryRunStage.RELATION_INFERENCE.value,
+                f"Left out {len(self.relation_engine.last_dropped)} relationships "
+                "because no sentence names both ends.",
+                58.0,
+            )
+
         log(DiscoveryRunStage.ATTRIBUTE_MAP.value, "Mapping attributes", 65.0)
         attr_list = self.attribute_mapper.map_attributes_to_classes(
             classified["attributes"],
             entity_list,
             xml_hierarchy if xml_hierarchy else None,
         )
+        if self.attribute_mapper.last_unassigned:
+            log(
+                DiscoveryRunStage.ATTRIBUTE_MAP.value,
+                f"Left out {len(self.attribute_mapper.last_unassigned)} fields "
+                "that no source ties to an entity.",
+                68.0,
+            )
 
         log(DiscoveryRunStage.ONTOLOGY_ASSEMBLE.value, "Assembling ontology", 75.0)
         assembled = self.assembler.assemble(
@@ -247,6 +289,12 @@ class DiscoveryOrchestrator:
             business_rules=classified["business_rules"],
             evidence_pool=all_evidence,
         )
+        if assembled.get("dropped"):
+            log(
+                DiscoveryRunStage.ONTOLOGY_ASSEMBLE.value,
+                f"Left out {len(assembled['dropped'])} items that name no known entity.",
+                78.0,
+            )
 
         log(DiscoveryRunStage.ONTOLOGY_VALIDATE.value, "Validating", 85.0)
         is_valid, messages, stats = self.validator.validate(
@@ -429,8 +477,11 @@ class DiscoveryOrchestrator:
 
         log(DiscoveryRunStage.ONTOLOGY_VALIDATE.value, "Validating", 85.0)
         is_valid, messages, stats = self.validator.validate(
-            assembled["classes"], assembled["relationships"], assembled["attributes"]
+            assembled["classes"], assembled["relationships"], assembled["attributes"],
+            profile=schema_profile if schema_profile.get("tables") else None,
         )
+        if messages:
+            log(DiscoveryRunStage.ONTOLOGY_VALIDATE.value, "; ".join(messages[:3]), 87.0)
 
         version = OntologyVersion(
             id=f"ver_{run_id.replace('run_', '')}",

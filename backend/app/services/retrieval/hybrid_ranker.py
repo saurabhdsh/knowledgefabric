@@ -88,6 +88,18 @@ def pack_with_budget(blocks: Sequence[str], budget_chars: int) -> Tuple[List[str
     return used, truncated
 
 
+# Default blend. ``fit_confidence_weights`` replaces these when enough thumbs
+# up/down ratings have been stored for a fabric.
+DEFAULT_CONFIDENCE_WEIGHTS = {
+    "rerank": 0.35,
+    "recall": 0.35,
+    "keyword": 0.15,
+    "graph": 0.10,
+    "sql": 0.05,
+    "sql_floor": 0.82,
+}
+
+
 def measure_confidence(
     query: str,
     chunks: Sequence[Dict[str, Any]],
@@ -95,6 +107,7 @@ def measure_confidence(
     *,
     graph_fact_count: int = 0,
     sql_backed: bool = False,
+    weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """Confidence from retrieval measurements, not a constant.
 
@@ -103,7 +116,11 @@ def measure_confidence(
     - recall_proxy: share of query tokens present in evidence
     - graph: whether expansion returned facts
     - sql: exact tabular computation
+
+    ``weights`` comes from ``fit_confidence_weights`` when the fabric has enough
+    thumbs up/down ratings; otherwise the defaults are used.
     """
+    w = {**DEFAULT_CONFIDENCE_WEIGHTS, **(weights or {})}
     q_tokens = content_tokens(query)
     ev_tokens = set(content_tokens(evidence_text))
     recall = (len(set(q_tokens) & ev_tokens) / len(set(q_tokens))) if q_tokens else 0.0
@@ -111,9 +128,15 @@ def measure_confidence(
     keyword = any(c.get("keyword_hit") or c.get("ranker") == "exact-token" for c in chunks)
     graph = 1.0 if graph_fact_count else 0.0
     sql = 1.0 if sql_backed else 0.0
-    score = (0.35 * best) + (0.35 * recall) + (0.15 * (1.0 if keyword else 0.0)) + (0.10 * graph) + (0.05 * sql)
+    score = (
+        (w["rerank"] * best)
+        + (w["recall"] * recall)
+        + (w["keyword"] * (1.0 if keyword else 0.0))
+        + (w["graph"] * graph)
+        + (w["sql"] * sql)
+    )
     if sql_backed:
-        score = max(score, 0.82)
+        score = max(score, float(w["sql_floor"]))
     score = round(max(0.0, min(1.0, score)), 3)
     return {
         "confidence": score,
@@ -122,7 +145,57 @@ def measure_confidence(
         "keyword_hit": keyword,
         "graph_facts": graph_fact_count,
         "sql_backed": sql_backed,
+        "weights": {k: round(float(w[k]), 4) for k in DEFAULT_CONFIDENCE_WEIGHTS},
     }
+
+
+def fit_confidence_weights(
+    episodes: Sequence[Dict[str, Any]],
+    *,
+    min_ratings: int = 20,
+) -> Optional[Dict[str, float]]:
+    """Fit the confidence blend to stored thumbs up/down.
+
+    Each episode needs ``rating`` (``up``/``down``) and the measurement fields
+    ``rerank``, ``recall_proxy``, ``keyword_hit``, ``graph_facts``, ``sql_backed``.
+    Returns ``None`` until ``min_ratings`` episodes are available, so a fabric
+    with almost no feedback keeps the defaults.
+    """
+    rows = []
+    for ep in episodes:
+        rating = str(ep.get("rating") or ep.get("feedback_flag") or "").lower()
+        if rating not in ("up", "down"):
+            continue
+        m = ep.get("measurement") or ep
+        rows.append({
+            "y": 1.0 if rating == "up" else 0.0,
+            "rerank": float(m.get("rerank") or 0.0),
+            "recall": float(m.get("recall_proxy") or m.get("recall") or 0.0),
+            "keyword": 1.0 if m.get("keyword_hit") else 0.0,
+            "graph": 1.0 if m.get("graph_facts") else 0.0,
+            "sql": 1.0 if m.get("sql_backed") else 0.0,
+        })
+    if len(rows) < min_ratings:
+        return None
+
+    # Coordinate descent on squared error, keeping weights non-negative and
+    # summing to 1. Starts from the defaults so a small sample cannot jump far.
+    w = dict(DEFAULT_CONFIDENCE_WEIGHTS)
+    keys = ["rerank", "recall", "keyword", "graph", "sql"]
+    for _ in range(40):
+        for key in keys:
+            num = den = 0.0
+            for row in rows:
+                others = sum(w[k] * row[k] for k in keys if k != key)
+                residual = row["y"] - others
+                num += residual * row[key]
+                den += row[key] * row[key]
+            w[key] = max(0.0, num / den) if den else w[key]
+        total = sum(w[k] for k in keys) or 1.0
+        for key in keys:
+            w[key] = w[key] / total
+    w["sql_floor"] = DEFAULT_CONFIDENCE_WEIGHTS["sql_floor"]
+    return w
 
 
 def score_golden_item(

@@ -17,8 +17,10 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   isLoading: boolean;
   isAdmin: boolean;
+  mustChangePassword: boolean;
   can: (feature: WeaveFeatureKey) => boolean;
   login: (username: string, password: string) => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -30,9 +32,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState(true);
 
   const logout = useCallback(() => {
+    const existing = getStoredToken();
+    if (existing) {
+      apiRequest('api/v1/auth/logout', { method: 'POST' }).catch(() => undefined);
+    }
     clearAuthSession();
     setUser(null);
     setToken(null);
+  }, []);
+
+  const changePassword = useCallback(async (currentPassword: string, newPassword: string) => {
+    const response = await apiRequest('api/v1/auth/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+    const payload = await response.json();
+    if (!response.ok || payload?.success === false) {
+      throw new Error(payload?.detail || payload?.error || payload?.message || 'Password change failed');
+    }
+    const data = payload.data ?? payload;
+    const accessToken = data.access_token as string;
+    const nextUser = data.user as WeaveUser;
+    storeAuthSession(accessToken, nextUser);
+    setToken(accessToken);
+    setUser(nextUser);
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
@@ -94,11 +118,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isAuthenticated: Boolean(token && user),
       isLoading,
       isAdmin: isAdminUser(user),
+      mustChangePassword: Boolean(user?.must_change_password),
       can,
       login,
+      changePassword,
       logout,
     }),
-    [user, token, isLoading, can, login, logout],
+    [user, token, isLoading, can, login, changePassword, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

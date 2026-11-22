@@ -93,6 +93,22 @@ def load_profile(fabric_id: str) -> Optional[Dict[str, Any]]:
     return (manifest or {}).get("profile") or None
 
 
+def save_profile(fabric_id: str, profile: Dict[str, Any]) -> bool:
+    """Write a changed profile back into the fabric's manifest."""
+    manifest = load_manifest(fabric_id)
+    if manifest is None:
+        return False
+    manifest = dict(manifest)
+    manifest["profile"] = profile
+    path = manifest_path(fabric_id)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, default=str)
+    os.replace(tmp, path)
+    _manifest_cache.pop(fabric_id, None)
+    return True
+
+
 def delete_manifest(fabric_id: str) -> None:
     _manifest_cache.pop(fabric_id, None)
     try:

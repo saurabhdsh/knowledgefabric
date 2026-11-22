@@ -1,5 +1,7 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import upload, search, knowledge, training, database, ontology, platform, graph, auth, users, agent
+from app.api.v1.endpoints import (
+    upload, search, knowledge, training, database, ontology, platform, graph, auth, users, agent, governance,
+)
 
 api_router = APIRouter()
 
@@ -8,6 +10,8 @@ api_router.include_router(users.router, prefix="/users", tags=["users"])
 
 api_router.include_router(upload.router, prefix="/upload", tags=["upload"])
 api_router.include_router(search.router, prefix="/search", tags=["search"])
+# Governance routes share the fabric prefix and are matched first.
+api_router.include_router(governance.router, prefix="/knowledge", tags=["governance"])
 api_router.include_router(knowledge.router, prefix="/knowledge", tags=["knowledge"])
 api_router.include_router(training.router, prefix="/training", tags=["training"])
 api_router.include_router(database.router, prefix="/database", tags=["database"])

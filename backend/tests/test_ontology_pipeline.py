@@ -157,7 +157,10 @@ class TestAttributeMapper:
 class TestOntologyAssembler:
     def test_assemble_produces_classes_rels_attrs(self):
         assembler = OntologyAssembler()
-        entities = [{"id": "e1", "name": "Claim", "normalized_name": "Claim", "confidence": 0.8}]
+        entities = [
+            {"id": "e1", "name": "Claim", "normalized_name": "Claim", "confidence": 0.8},
+            {"id": "e2", "name": "Policy", "normalized_name": "Policy", "confidence": 0.8},
+        ]
         relationships = [{"id": "r1", "source_class_id": "e1", "relationship_name": "has", "target_class_id": "e2", "confidence": 0.5}]
         attributes = [{"id": "a1", "class_id": "e1", "attribute_name": "claim_id", "normalized_name": "Claim Id", "confidence": 0.7}]
         assembled = assembler.assemble(
@@ -168,7 +171,7 @@ class TestOntologyAssembler:
             attributes=attributes,
             business_rules=[],
         )
-        assert len(assembled["classes"]) == 1
+        assert len(assembled["classes"]) == 2
         assert len(assembled["relationships"]) == 1
         assert len(assembled["attributes"]) == 1
 

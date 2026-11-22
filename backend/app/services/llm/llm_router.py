@@ -155,22 +155,31 @@ class LLMRouter:
         last_detail = "Azure rejected the key"
         last_status = 401
 
+        import time
+
         for url in targets:
             for headers in header_sets:
                 payload = dict(body)
-                response = httpx.post(url, headers=headers, json=payload, timeout=180)
-                if response.status_code < 400:
-                    text = self._message_text(response.json())
-                    if not text:
-                        raise RuntimeError(
-                            "Azure OpenAI returned an empty answer. "
-                            "The deployment answered, but there was no message text."
-                        )
-                    return text
-                detail = response.text[:500]
+                response = None
+                for attempt in range(3):
+                    response = httpx.post(url, headers=headers, json=payload, timeout=180)
+                    if response.status_code < 400:
+                        text = self._message_text(response.json())
+                        if not text:
+                            raise RuntimeError(
+                                "Azure OpenAI returned an empty answer. "
+                                "The deployment answered, but there was no message text."
+                            )
+                        return text
+                    # Retry rate limits and transient host errors.
+                    if response.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+                        time.sleep(0.6 * (2 ** attempt))
+                        continue
+                    break
+                detail = (response.text if response is not None else "")[:500]
                 last_detail = detail
-                last_status = response.status_code
-                if response.status_code == 401:
+                last_status = response.status_code if response is not None else 500
+                if response is not None and response.status_code == 401:
                     continue
                 if "temperature" in detail.lower() and "temperature" in payload:
                     payload.pop("temperature", None)

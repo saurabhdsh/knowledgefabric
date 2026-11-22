@@ -70,6 +70,8 @@ class OntologyClass(BaseModel):
     normalized_name: str
     definition: Optional[str] = None
     aliases: List[str] = Field(default_factory=list)
+    # Optional parent in a class hierarchy (e.g. InpatientClaim under Claim).
+    parent_class_id: Optional[str] = None
     source_evidence: List[OntologyEvidence] = Field(default_factory=list)
     confidence_score: float = Field(ge=0.0, le=1.0, default=0.0)
     status: OntologyElementStatus = OntologyElementStatus.DRAFT

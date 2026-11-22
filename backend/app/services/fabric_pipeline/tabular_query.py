@@ -106,6 +106,90 @@ def _col(table: Dict[str, Any], name: str) -> Dict[str, Any]:
     return next(c for c in table["columns"] if c["name"] == name)
 
 
+# How sure a lookup is, by the kind of evidence behind it. An identifier is
+# exact. A name is weaker: two people can share one, so a name that matches
+# several rows is not a match until a second fact picks one of them.
+CONFIDENCE_IDENTIFIER = 1.0
+CONFIDENCE_NAME_AND_FACT = 0.9
+CONFIDENCE_UNIQUE_NAME = 0.8
+CONFIDENCE_AMBIGUOUS_NAME = 0.4
+MAX_NAME_ROWS = 25
+
+_MONTHS = (
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december",
+)
+_NAME_JOINERS = {"of", "and", "the", "de", "la", "van", "von", "del", "da", "di", "for", "&"}
+
+
+def _date_variants(iso: str) -> List[str]:
+    """Ways a stored ISO date is commonly written in a document."""
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", str(iso))
+    if not m:
+        return []
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if not (1 <= mo <= 12 and 1 <= d <= 31):
+        return []
+    month = _MONTHS[mo - 1]
+    return [
+        f"{y:04d}-{mo:02d}-{d:02d}",
+        f"{mo:02d}/{d:02d}/{y:04d}", f"{mo}/{d}/{y:04d}",
+        f"{mo:02d}-{d:02d}-{y:04d}",
+        f"{month} {d}, {y}", f"{month} {d} {y}", f"{d} {month} {y}",
+        f"{month[:3]} {d}, {y}", f"{month[:3]} {d} {y}", f"{d} {month[:3]} {y}",
+    ]
+
+
+def _second_fact(table: Dict[str, Any], row: Dict[str, Any], label: str, text: str) -> Optional[str]:
+    """A column, other than the name, whose value for this row is also in the text.
+
+    Only specific values count: a date (birth date, service date) or a value
+    that carries digits and is at least five characters long (an identifier, a
+    phone number). A plan name or a city is shared by many rows and proves nothing.
+    """
+    lowered = (text or "").lower()
+    for col in table["columns"]:
+        if col["name"] == label:
+            continue
+        value = row.get(col["name"])
+        if value is None or value == "" or isinstance(value, bool):
+            continue
+        if col["type"] in ("date", "datetime"):
+            if any(v in lowered for v in _date_variants(str(value))):
+                return col["name"]
+            continue
+        token = str(value).strip().lower()
+        if len(token) >= 5 and any(ch.isdigit() for ch in token):
+            if re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", lowered):
+                return col["name"]
+    return None
+
+
+def _written_as_a_name(phrase: str, text: str) -> bool:
+    """Whether ``phrase`` appears in running text the way a proper name does.
+
+    "Lisa Chen" and "Hope Clinic" qualify. The word "hope" in "we hope the
+    member" does not, and neither does a single word that is capitalised only
+    because it opens a sentence.
+    """
+    words = phrase.split()
+    if not words:
+        return False
+    for word in words:
+        if word.lower() in _NAME_JOINERS and len(words) > 1:
+            continue
+        if not (word[0].isupper() or word[0].isdigit()):
+            return False
+    if len(words) > 1 or (words[0].isupper() and len(words[0]) > 1) or any(ch.isdigit() for ch in words[0]):
+        return True
+    for m in re.finditer(rf"(?<![A-Za-z0-9]){re.escape(words[0])}(?![A-Za-z0-9])", text or ""):
+        lead = text[:m.start()]
+        before = lead.rstrip()
+        if before and "\n" not in lead[len(before):] and before[-1] not in ".!?:;\"“(":
+            return True
+    return False
+
+
 def find_entities(
     fabric_id: str,
     profile: Dict[str, Any],
@@ -114,23 +198,57 @@ def find_entities(
     *,
     max_entities: int = MAX_ENTITIES,
     max_child_rows: int = MAX_CHILD_ROWS,
+    strict_names: bool = False,
+    ambiguous_names: str = "flag",
+    ambiguous_out: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
-    """Rows whose key or label is mentioned in the question, with related rows."""
+    """Rows whose key or label is mentioned in the text, with related rows.
+
+    Every match carries ``basis`` and ``confidence``:
+
+    * ``identifier`` (1.0) - a key value appears in the text.
+    * ``unique_name`` (0.8) - a name appears and exactly one row has it.
+    * ``name_and_second_fact`` (0.9) - several rows share the name and one of
+      them also has a date or identifier that appears in the text.
+    * ``ambiguous_name`` (0.4) - several rows share the name and nothing in the
+      text picks one. With ``ambiguous_names="flag"`` (a user's question) every
+      such row is returned, marked. With ``"skip"`` (linking a document
+      passage to a row) none is returned.
+
+    ``strict_names`` is for document text: a phrase counts as a name only when
+    it is written as one, so the verb in "we hope the member" is not a provider
+    called Hope.
+    """
     id_tokens, name_phrases = _candidate_tokens(query)
+    if strict_names:
+        quoted = {p.strip() for p in _QUOTED_RE.findall(query or "")}
+        name_phrases = [p for p in name_phrases if p in quoted or _written_as_a_name(p, query or "")]
     if not id_tokens and not name_phrases:
         return []
     lowered_query = (query or "").lower()
     matches: List[Dict[str, Any]] = []
     seen: set = set()
 
-    def _add(table: Dict[str, Any], column: str, columns: List[str], row: List[Any], matched: str) -> None:
-        data = _row_dict(table, columns, row)
+    def _ident(table: Dict[str, Any], data: Dict[str, Any], row: List[Any]) -> Tuple[Any, ...]:
         pk = table["primary_key"]
-        ident = (table["name"], tuple(str(data.get(k)) for k in pk) if pk else tuple(str(v) for v in row))
+        return (table["name"], tuple(str(data.get(k)) for k in pk) if pk else tuple(str(v) for v in row))
+
+    def _add(
+        table: Dict[str, Any], column: str, columns: List[str], row: List[Any], matched: str,
+        *, basis: str = "identifier", confidence: float = CONFIDENCE_IDENTIFIER, **extra: Any,
+    ) -> None:
+        data = _row_dict(table, columns, row)
+        ident = _ident(table, data, row)
         if ident in seen or len(matches) >= max_entities:
             return
         seen.add(ident)
-        matches.append({"table": table["name"], "matched_column": column, "matched_value": matched, "row": data})
+        matches.append({
+            "table": table["name"], "matched_column": column, "matched_value": matched, "row": data,
+            "basis": basis, "confidence": confidence, **extra,
+        })
+
+    # name (lower-case) -> every row, in any table, that carries it
+    name_hits: Dict[str, List[Tuple[Dict[str, Any], str, List[str], List[Any]]]] = {}
 
     for table in profile.get("tables", []):
         if not table["row_count"]:
@@ -160,14 +278,109 @@ def find_entities(
             col = _col(table, label)
             marks = ", ".join("?" for _ in name_phrases)
             sql = (
-                f'SELECT * FROM "{table["sql_name"]}" WHERE "{col["sql_name"]}" COLLATE NOCASE IN ({marks}) LIMIT 6'
+                f'SELECT * FROM "{table["sql_name"]}" WHERE "{col["sql_name"]}" COLLATE NOCASE IN ({marks}) '
+                f"LIMIT {MAX_NAME_ROWS}"
             )
-            result = store.query(fabric_id, sql, tuple(name_phrases), max_rows=6)
+            result = store.query(fabric_id, sql, tuple(name_phrases), max_rows=MAX_NAME_ROWS)
             label_index = result["columns"].index(col["sql_name"]) if result["rows"] else 0
-            # Longest matching name first, so "Lisa Chen" wins over a plan called "Chen".
-            for row in sorted(result["rows"], key=lambda r: -len(str(r[label_index]))):
-                _add(table, label, result["columns"], row, str(row[label_index]))
+            for row in result["rows"]:
+                name_hits.setdefault(str(row[label_index]).strip().lower(), []).append(
+                    (table, label, result["columns"], row)
+                )
 
+    # Longest name first, so "Lisa Chen" wins over a plan called "Chen".
+    for name in sorted(name_hits, key=lambda n: -len(n)):
+        hits = [
+            h for h in name_hits[name]
+            if _ident(h[0], _row_dict(h[0], h[2], h[3]), h[3]) not in seen
+        ]
+        if len(hits) < len(name_hits[name]):
+            # An identifier in the text already picked the row this name belongs to.
+            continue
+        if len(name_hits[name]) == 1:
+            table, label, columns, row = hits[0]
+            _add(table, label, columns, row, str(_row_dict(table, columns, row).get(label)),
+                 basis="unique_name", confidence=CONFIDENCE_UNIQUE_NAME)
+            continue
+        agreeing = []
+        for table, label, columns, row in hits:
+            fact = _second_fact(table, _row_dict(table, columns, row), label, query or "")
+            if fact:
+                agreeing.append((table, label, columns, row, fact))
+        if len(agreeing) == 1:
+            table, label, columns, row, fact = agreeing[0]
+            _add(table, label, columns, row, str(_row_dict(table, columns, row).get(label)),
+                 basis="name_and_second_fact", confidence=CONFIDENCE_NAME_AND_FACT, second_fact=fact)
+            continue
+        if ambiguous_out is not None:
+            ambiguous_out.append({
+                "name": name,
+                "row_count": len(name_hits[name]),
+                "tables": sorted({h[0]["name"] for h in name_hits[name]}),
+            })
+        if ambiguous_names == "flag":
+            for table, label, columns, row in hits:
+                _add(table, label, columns, row, str(_row_dict(table, columns, row).get(label)),
+                     basis="ambiguous_name", confidence=CONFIDENCE_AMBIGUOUS_NAME,
+                     ambiguous_count=len(name_hits[name]))
+
+    for match in matches:
+        table = table_by_name(profile, match["table"])
+        match["parents"] = _parents(fabric_id, profile, table, match["row"], store)
+        match["children"] = _children(fabric_id, profile, table, match["row"], store, max_child_rows)
+    return matches
+
+
+def rows_by_reference(
+    fabric_id: str,
+    profile: Dict[str, Any],
+    refs: List[Dict[str, Any]],
+    store: TableStore,
+    *,
+    max_entities: int = MAX_ENTITIES,
+    max_child_rows: int = MAX_CHILD_ROWS,
+) -> List[Dict[str, Any]]:
+    """Fetch the exact rows that stored links point at.
+
+    Each ref is ``{table, column, value}``. A ref is followed only when it
+    selects one row, so a link is never widened to everyone who shares a name.
+    """
+    matches: List[Dict[str, Any]] = []
+    seen: set = set()
+    for ref in refs:
+        if len(matches) >= max_entities:
+            break
+        table = table_by_name(profile, str(ref.get("table") or ""))
+        if not table:
+            continue
+        col = next((c for c in table["columns"] if c["name"] == ref.get("column")), None)
+        if col is None or ref.get("value") in (None, ""):
+            continue
+        value: Any = ref["value"]
+        if col["type"] == "integer":
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                continue
+        result = store.query(
+            fabric_id,
+            f'SELECT * FROM "{table["sql_name"]}" WHERE "{col["sql_name"]}" = ? LIMIT 2',
+            (value,),
+            max_rows=2,
+        )
+        if len(result["rows"]) != 1:
+            continue
+        data = _row_dict(table, result["columns"], result["rows"][0])
+        ident = (table["name"], tuple(str(v) for v in result["rows"][0]))
+        if ident in seen:
+            continue
+        seen.add(ident)
+        matches.append({
+            "table": table["name"], "matched_column": col["name"], "matched_value": str(ref["value"]),
+            "row": data, "basis": str(ref.get("basis") or "identifier"),
+            "confidence": float(ref.get("confidence") or CONFIDENCE_IDENTIFIER),
+            "second_fact": ref.get("second_fact"),
+        })
     for match in matches:
         table = table_by_name(profile, match["table"])
         match["parents"] = _parents(fabric_id, profile, table, match["row"], store)
@@ -262,8 +475,20 @@ def entity_context_text(matches: List[Dict[str, Any]]) -> str:
     """Render looked-up rows and their related rows as LLM context."""
     blocks: List[str] = []
     for match in matches:
+        basis = match.get("basis") or "identifier"
+        if basis == "ambiguous_name":
+            how = (
+                f"one of {match.get('ambiguous_count', 'several')} rows with this name; "
+                "the question does not say which one, so do not treat them as the same record"
+            )
+        elif basis == "unique_name":
+            how = "matched by name; the only row with this name"
+        elif basis == "name_and_second_fact":
+            how = f"matched by name and {match.get('second_fact')}"
+        else:
+            how = "exact lookup"
         lines = [
-            f"[{match['table']}] row where {match['matched_column']} = {match['matched_value']} (exact lookup)",
+            f"[{match['table']}] row where {match['matched_column']} = {match['matched_value']} ({how})",
             "  " + _row_text(match["row"]),
         ]
         for parent in match.get("parents", []):

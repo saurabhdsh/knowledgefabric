@@ -87,12 +87,12 @@ def test_graph_facts_include_property_values():
 def test_golden_set_scores_recall_and_groundedness():
     path = Path(__file__).resolve().parent / "golden" / "cost_of_care.json"
     spec = json.loads(path.read_text())
+    assert len(spec["questions"]) >= 25
     evidence = "Member MEM-LISA-COPD Lisa Chen has 10 claims. Cost driver Avoidable ER."
     answer = "Lisa Chen (MEM-LISA-COPD) has 10 claims driven by Avoidable ER."
-    results = [
-        score_golden_item(item, retrieved_text=evidence, answer=answer)
-        for item in spec["questions"]
-    ]
+    # The three original questions still require a perfect match on this evidence.
+    core = [q for q in spec["questions"] if q["id"] in {"member-lisa", "avoidable-er", "claim-count"}]
+    results = [score_golden_item(item, retrieved_text=evidence, answer=answer) for item in core]
     summary = summarize_golden(results)
     assert summary["questions"] == 3
     assert summary["passed"] == 3

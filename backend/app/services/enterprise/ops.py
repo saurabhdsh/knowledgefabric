@@ -311,7 +311,62 @@ def plan_row_sync(
     }
 
 
+_SECRET_KEYS = {
+    "password", "passwd", "secret", "token", "api_key", "apikey", "client_secret",
+    "access_key", "private_key", "connection_string",
+}
+
+
+def scrub_fabric_secrets(fabric: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy safe to send to a browser or partner.
+
+    Connector passwords and other secrets are dropped. Existing fabrics that
+    already stored them are scrubbed on read so the catalog never re-leaks them.
+    """
+    out = dict(fabric or {})
+    out.pop("connection_data", None)
+    conn = out.get("connection_info")
+    if isinstance(conn, dict):
+        cleaned = {}
+        for key, value in conn.items():
+            if str(key).lower() in _SECRET_KEYS:
+                continue
+            if isinstance(value, dict):
+                cleaned[key] = {
+                    k: ("[redacted]" if str(k).lower() in _SECRET_KEYS else v)
+                    for k, v in value.items()
+                }
+            else:
+                cleaned[key] = value
+        out["connection_info"] = cleaned
+    return out
+
+
+def can_view_fabric(fabric: Dict[str, Any], user_id: Optional[str] = None) -> bool:
+    """Whether ``user_id`` may see this fabric in the catalog.
+
+    Owner, anyone on the grant list, and admins (role checked by the caller via
+    ``user_is_admin``) are allowed. With no signed-in user the system path is
+    allowed so background jobs keep working.
+    """
+    user = user_id if user_id is not None else get_current_user_id()
+    if not user:
+        return True
+    access = fabric.get("access") or {}
+    owner = access.get("owner_id") or fabric.get("owner_id")
+    if owner and owner == user:
+        return True
+    grants = access.get("grants") or []
+    if any(g.get("user_id") == user for g in grants):
+        return True
+    # Legacy rows with no owner are hidden from signed-in users (same as before).
+    if not owner:
+        return False
+    return False
+
+
 def redact_row(row: Dict[str, Any], sensitive_columns: Sequence[str]) -> Dict[str, Any]:
+
     hidden = {c.lower() for c in sensitive_columns}
     out = dict(row)
     for key in list(out):

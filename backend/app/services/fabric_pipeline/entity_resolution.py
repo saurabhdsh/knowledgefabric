@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.core.config import settings
-from app.services.fabric_pipeline.tabular_query import _candidate_tokens, find_entities
+from app.services.fabric_pipeline.tabular_profiler import table_by_name
+from app.services.fabric_pipeline.tabular_query import (
+    _candidate_tokens,
+    entity_context_text,
+    find_entities,
+    rows_by_reference,
+)
 from app.services.fabric_pipeline.table_store import TableStore
 
 logger = logging.getLogger(__name__)
@@ -41,12 +47,25 @@ def resolve_mentions_against_profile(
     store: TableStore,
     *,
     max_entities: int = 4,
+    ambiguous_out: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
-    """Resolve mentions in ``text`` to table-store rows (exact id/label match)."""
+    """Resolve mentions in a document passage to table-store rows.
+
+    An identifier links at full confidence. A name links only when it is
+    written as a name and points at one row: a name shared by several rows is
+    linked to none of them unless the passage also carries a second fact (a
+    birth date, an identifier) that belongs to exactly one of those rows.
+    """
     if not text or not profile:
         return []
     try:
-        return find_entities(fabric_id, profile, text, store, max_entities=max_entities)
+        return find_entities(
+            fabric_id, profile, text, store,
+            max_entities=max_entities,
+            strict_names=True,
+            ambiguous_names="skip",
+            ambiguous_out=ambiguous_out,
+        )
     except Exception as exc:
         logger.warning("Mention resolve failed for %s: %s", fabric_id, exc)
         return []
@@ -86,6 +105,7 @@ def link_document_chunks(
     chunks = vs.list_source_chunks(fabric_id, limit=max_chunks)
     links: List[Dict[str, Any]] = []
     linked_chunk_ids: Set[str] = set()
+    ambiguous: List[Dict[str, Any]] = []
     meta_updates: List[Tuple[str, Dict[str, Any]]] = []
 
     for chunk in chunks:
@@ -95,21 +115,38 @@ def link_document_chunks(
         content = str(chunk.get("content") or "")
         if len(content) < 8:
             continue
+        chunk_id = str(chunk.get("id") or "")
+        unclear: List[Dict[str, Any]] = []
         entities = resolve_mentions_against_profile(
-            fabric_id, profile, content, store, max_entities=max_links_per_chunk
+            fabric_id, profile, content, store,
+            max_entities=max_links_per_chunk, ambiguous_out=unclear,
         )
+        for item in unclear:
+            ambiguous.append({
+                "chunk_id": chunk_id,
+                "name": item["name"],
+                "row_count": item["row_count"],
+                "tables": item["tables"],
+                "file_name": meta.get("file_name"),
+                "page_number": meta.get("page_number"),
+            })
         if not entities:
             continue
-        chunk_id = str(chunk.get("id") or "")
         chunk_links = []
         for ent in entities:
+            table = table_by_name(profile, ent["table"]) or {}
+            pk = list(table.get("primary_key") or [])
+            key_column = pk[0] if len(pk) == 1 else None
             link = {
                 "chunk_id": chunk_id,
                 "table": ent["table"],
                 "column": ent["matched_column"],
                 "value": ent["matched_value"],
-                "confidence": 1.0,
-                "basis": "exact_mention",
+                "key_column": key_column,
+                "key_value": ent["row"].get(key_column) if key_column else None,
+                "confidence": ent.get("confidence", 1.0),
+                "basis": ent.get("basis", "identifier"),
+                "second_fact": ent.get("second_fact"),
                 "origin_source_id": meta.get("composite_origin_source_id"),
                 "origin_source_name": meta.get("composite_origin_source_name"),
                 "file_name": meta.get("file_name"),
@@ -131,7 +168,10 @@ def link_document_chunks(
                         "table": L["table"],
                         "column": L["column"],
                         "value": L["value"],
+                        "key_column": L["key_column"],
+                        "key_value": L["key_value"],
                         "confidence": L["confidence"],
+                        "basis": L["basis"],
                     }
                     for L in chunk_links
                 ]
@@ -151,6 +191,11 @@ def link_document_chunks(
         "link_count": len(links),
         "chunk_count_linked": len(linked_chunk_ids),
         "links": links,
+        "by_basis": _count_by_basis(links),
+        # Names that match several rows with nothing in the passage to pick
+        # one. They are listed for review and linked to no row.
+        "ambiguous_names": ambiguous[:500],
+        "ambiguous_name_count": len(ambiguous),
     }
     try:
         path.write_text(json.dumps(payload, default=str), encoding="utf-8")
@@ -162,8 +207,19 @@ def link_document_chunks(
         "link_count": len(links),
         "chunk_count_scanned": len(chunks),
         "chunk_count_linked": len(linked_chunk_ids),
+        "by_basis": payload["by_basis"],
+        "ambiguous_names": ambiguous[:500],
+        "ambiguous_name_count": len(ambiguous),
         "path": str(path),
     }
+
+
+def _count_by_basis(links: List[Dict[str, Any]]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for link in links:
+        basis = str(link.get("basis") or "identifier")
+        out[basis] = out.get(basis, 0) + 1
+    return out
 
 
 def load_entity_links(fabric_id: str) -> Dict[str, Any]:
@@ -183,8 +239,24 @@ def linked_row_context_for_chunks(
     store: TableStore,
 ) -> str:
     """Build exact row context for entities linked from retrieved document chunks."""
-    values: List[str] = []
-    seen: Set[Tuple[str, str]] = set()
+    refs: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, str, str]] = set()
+
+    def _add(item: Dict[str, Any]) -> None:
+        table = str(item.get("table") or "")
+        # Follow the row's own key when the link kept one; a name is followed
+        # only if it still selects a single row.
+        column = item.get("key_column") or item.get("column")
+        value = item.get("key_value") if item.get("key_column") else item.get("value")
+        key = (table, str(column), str(value))
+        if not table or not column or value in (None, "") or key in seen:
+            return
+        seen.add(key)
+        refs.append({
+            "table": table, "column": column, "value": value,
+            "basis": item.get("basis"), "confidence": item.get("confidence"),
+        })
+
     for chunk in chunks:
         meta = chunk.get("metadata") or {}
         raw = meta.get("linked_entities_json")
@@ -195,29 +267,22 @@ def linked_row_context_for_chunks(
             except Exception:
                 items = []
         for item in items:
-            table = str(item.get("table") or "")
-            value = str(item.get("value") or "")
-            key = (table, value)
-            if not table or not value or key in seen:
-                continue
-            seen.add(key)
-            values.append(value)
-    if not values:
-        # Fall back to persisted link file for any value appearing in chunk text
-        persisted = load_entity_links(fabric_id)
-        for link in persisted.get("links") or []:
+            _add(item)
+    if not refs:
+        # Fall back to the persisted links of exactly these chunks.
+        chunk_ids = {str(c.get("id") or "") for c in chunks}
+        for link in load_entity_links(fabric_id).get("links") or []:
             value = str(link.get("value") or "")
-            if value and any(value in str(c.get("content") or "") for c in chunks):
-                values.append(value)
-    if not values:
+            if str(link.get("chunk_id") or "") in chunk_ids or (
+                value and any(value in str(c.get("content") or "") for c in chunks)
+            ):
+                _add(link)
+    if not refs:
         return ""
-    # Reuse find_entities with a synthetic query of known values
-    synthetic = " ".join(dict.fromkeys(values))
     try:
-        entities = find_entities(fabric_id, profile, synthetic, store, max_entities=4)
+        entities = rows_by_reference(fabric_id, profile, refs, store, max_entities=4)
     except Exception:
         return ""
     if not entities:
         return ""
-    from app.services.fabric_pipeline.tabular_query import entity_context_text
     return entity_context_text(entities)

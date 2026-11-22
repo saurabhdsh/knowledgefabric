@@ -7,20 +7,41 @@ from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
 from app.services.llm.llm_router import llm_router
+from app.services.ontology.text_match import (
+    canonical_key,
+    mentions,
+    name_pattern,
+    quote_in_text,
+    sentence_around,
+)
 
 logger = logging.getLogger(__name__)
 
 # Structured schema for LLM output
 ONTOLOGY_EXTRACTION_SCHEMA = """
-You must respond with a single JSON object (no markdown, no code fence) with exactly these keys:
+You extract a domain model from the text you are given. Report only what the text states.
+
+Respond with a single JSON object (no markdown, no code fence) with exactly these keys:
 {
-  "entities": [{"name": "string", "normalized_name": "string", "definition": "string or null", "confidence": 0.0-1.0}],
-  "relationships": [{"name": "string", "normalized_name": "string", "definition": "string or null", "confidence": 0.0-1.0}],
-  "attributes": [{"name": "string", "normalized_name": "string", "data_type_guess": "string or null", "required_flag_guess": false, "confidence": 0.0-1.0}],
-  "business_rules": [{"expression": "string", "confidence": 0.0-1.0}]
+  "entities": [{"name": "noun as written in the text", "definition": "string or null"}],
+  "relationships": [{"subject": "entity name", "predicate": "verb phrase", "object": "entity name", "quote": "one sentence copied word for word from the text"}],
+  "attributes": [{"name": "field name as written in the text", "entity": "entity name it belongs to, or null", "data_type_guess": "string or null", "required_flag_guess": false}],
+  "business_rules": [{"expression": "one sentence copied word for word from the text", "entity": "entity name or null"}]
 }
-Extract domain entities (nouns/concepts), relationships (verbs/connections), attributes (fields/properties), and business rules (must/required/should/cannot phrases). Be concise. confidence is your certainty 0-1.
+
+Rules:
+- An entity name must appear in the text.
+- A relationship needs a quote: one sentence, copied exactly, that names both the subject and the object. The subject is the one that performs the verb. In "An explanation of benefits is sent to the provider", the subject is "explanation of benefits" and the object is "provider".
+- If no single sentence states a relationship, leave it out. Do not infer relationships from general knowledge.
+- A business rule is a must / required / cannot / only-if sentence, copied exactly.
+- Do not report confidence. Each item is checked against the text after you answer, and anything that is not found there is discarded.
 """
+
+# Confidence comes from what was verified in the text, not from the model.
+GROUNDED_ENTITY_CONFIDENCE = 0.7
+GROUNDED_RELATIONSHIP_CONFIDENCE = 0.75
+GROUNDED_ATTRIBUTE_CONFIDENCE = 0.65
+GROUNDED_RULE_CONFIDENCE = 0.8
 
 
 class LLMOntologyService:
@@ -45,7 +66,8 @@ class LLMOntologyService:
         if not self.is_available():
             return None
 
-        user_content = f"Context (optional): {context or 'None'}\n\nText to analyze:\n{text_chunk[:6000]}"
+        text_chunk = (text_chunk or "")[:6000]
+        user_content = f"Context (optional): {context or 'None'}\n\nText to analyze:\n{text_chunk}"
         for attempt in range(self.max_retries):
             try:
                 raw = llm_router.chat_completion(
@@ -60,7 +82,7 @@ class LLMOntologyService:
                 )
                 parsed = self._parse_json_response(raw)
                 if parsed:
-                    return self._normalize_llm_output(parsed)
+                    return self._normalize_llm_output(parsed, text_chunk)
             except Exception as e:
                 logger.debug("LLM attempt %s failed: %s", attempt + 1, e)
         return None
@@ -120,61 +142,131 @@ class LLMOntologyService:
                                 break
         return None
 
-    def _normalize_llm_output(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Add ids and ensure structure for pipeline."""
-        out: Dict[str, List[Dict[str, Any]]] = {
+    def _normalize_llm_output(self, data: Dict[str, Any], source_text: str = "") -> Dict[str, Any]:
+        """Keep only what the source text states, and score it by what was verified.
+
+        Entities must be named in the text. A relationship needs a quoted
+        sentence that is in the text and names both ends. A rule must be a
+        sentence from the text. Whatever fails is counted under ``discarded``.
+        """
+        out: Dict[str, Any] = {
             "entities": [],
             "relationships": [],
             "attributes": [],
             "business_rules": [],
+            "discarded": {"entities": 0, "relationships": 0, "attributes": 0, "business_rules": 0},
         }
-        for e in data.get("entities") or []:
-            name = (e.get("name") or "").strip()
-            if not name:
-                continue
-            norm = (e.get("normalized_name") or name).strip().title()
+        discarded = out["discarded"]
+        known: Dict[str, str] = {}  # canonical name -> display name
+
+        def keep_entity(name: str, definition: Any = None) -> bool:
+            name = (name or "").strip()
+            key = canonical_key(name)
+            if not key:
+                return False
+            if key in known:
+                return True
+            if not mentions(name, source_text):
+                return False
+            known[key] = name
             out["entities"].append({
                 "id": f"ent_llm_{uuid.uuid4().hex[:8]}",
                 "name": name,
-                "normalized_name": norm,
-                "definition": e.get("definition"),
-                "confidence": float(e.get("confidence", 0.6)),
+                "normalized_name": name.strip().title(),
+                "definition": definition,
+                "confidence": GROUNDED_ENTITY_CONFIDENCE,
+                "evidence_snippet": self._snippet(source_text, name),
                 "extraction_source": "llm",
             })
-        for r in data.get("relationships") or []:
-            name = (r.get("name") or "").strip()
-            if not name:
+            return True
+
+        for e in data.get("entities") or []:
+            if not isinstance(e, dict) or not (e.get("name") or "").strip():
                 continue
-            norm = (r.get("normalized_name") or name).strip()
+            if not keep_entity(e.get("name"), e.get("definition")):
+                discarded["entities"] += 1
+
+        for r in data.get("relationships") or []:
+            if not isinstance(r, dict):
+                continue
+            subject = (r.get("subject") or "").strip()
+            obj = (r.get("object") or "").strip()
+            predicate = (r.get("predicate") or r.get("name") or "").strip()
+            quote = (r.get("quote") or "").strip()
+            grounded = (
+                subject and obj and predicate
+                and canonical_key(subject) != canonical_key(obj)
+                and quote_in_text(quote, source_text)
+                and mentions(subject, quote)
+                and mentions(obj, quote)
+                and keep_entity(subject)
+                and keep_entity(obj)
+            )
+            if not grounded:
+                discarded["relationships"] += 1
+                continue
             out["relationships"].append({
                 "id": f"rel_llm_{uuid.uuid4().hex[:8]}",
-                "name": name,
-                "normalized_name": norm,
+                "name": predicate,
+                "normalized_name": predicate,
+                "predicate": predicate,
+                "subject": known[canonical_key(subject)],
+                "object": known[canonical_key(obj)],
+                "quote": quote[:400],
+                "quote_verified": True,
+                "evidence_snippet": quote[:400],
                 "definition": r.get("definition"),
-                "confidence": float(r.get("confidence", 0.5)),
+                "confidence": GROUNDED_RELATIONSHIP_CONFIDENCE,
                 "extraction_source": "llm",
             })
+
         for a in data.get("attributes") or []:
-            name = (a.get("name") or "").strip()
-            if not name:
+            if not isinstance(a, dict):
                 continue
-            norm = (a.get("normalized_name") or name).strip()
+            name = (a.get("name") or "").strip()
+            if not name or not mentions(name, source_text):
+                if name:
+                    discarded["attributes"] += 1
+                continue
+            owner = (a.get("entity") or "").strip()
+            owner_key = canonical_key(owner)
             out["attributes"].append({
                 "id": f"attr_llm_{uuid.uuid4().hex[:8]}",
                 "name": name,
-                "normalized_name": norm,
+                "normalized_name": (a.get("normalized_name") or name).strip(),
+                "entity": known.get(owner_key) if owner_key else None,
                 "data_type_guess": a.get("data_type_guess"),
                 "required_flag_guess": bool(a.get("required_flag_guess", False)),
-                "confidence": float(a.get("confidence", 0.5)),
+                "confidence": GROUNDED_ATTRIBUTE_CONFIDENCE,
+                "evidence_snippet": self._snippet(source_text, name),
                 "extraction_source": "llm",
             })
+
         for br in data.get("business_rules") or []:
+            if not isinstance(br, dict):
+                continue
             expr = (br.get("expression") or "").strip()
             if not expr:
                 continue
+            if not quote_in_text(expr, source_text):
+                discarded["business_rules"] += 1
+                continue
+            owner_key = canonical_key(br.get("entity") or "")
             out["business_rules"].append({
                 "id": f"rule_llm_{uuid.uuid4().hex[:8]}",
                 "expression": expr[:500],
-                "confidence": float(br.get("confidence", 0.5)),
+                "evidence_snippet": expr[:300],
+                "related_entity": known.get(owner_key) if owner_key else None,
+                "confidence": GROUNDED_RULE_CONFIDENCE,
             })
         return out
+
+    @staticmethod
+    def _snippet(text: str, phrase: str, window: int = 160) -> str:
+        """The sentence around the first whole-word mention of ``phrase``."""
+        pattern = name_pattern(phrase)
+        match = pattern.search(text or "") if pattern else None
+        if not match:
+            return ""
+        sentence, _ = sentence_around(text, match.start(), match.end())
+        return sentence.strip()[:window]

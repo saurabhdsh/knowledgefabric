@@ -1,29 +1,30 @@
 {
   "fabric": "cost_of_care",
   "questions": [
-    {
-      "id": "member-lisa",
-      "question": "Who is member MEM-LISA-COPD?",
-      "must_retrieve": ["mem-lisa-copd", "lisa"],
-      "answer_must_mention": ["lisa"],
-      "min_recall": 1.0,
-      "min_groundedness": 1.0
-    },
-    {
-      "id": "avoidable-er",
-      "question": "Which cost driver is Avoidable ER for Lisa?",
-      "must_retrieve": ["avoidable er"],
-      "answer_must_mention": ["avoidable er"],
-      "min_recall": 1.0,
-      "min_groundedness": 1.0
-    },
-    {
-      "id": "claim-count",
-      "question": "How many claims does MEM-LISA-COPD have?",
-      "must_retrieve": ["mem-lisa-copd"],
-      "answer_must_mention": ["10"],
-      "min_recall": 1.0,
-      "min_groundedness": 1.0
-    }
+    {"id": "member-lisa", "question": "Who is member MEM-LISA-COPD?", "must_retrieve": ["mem-lisa-copd", "lisa"], "answer_must_mention": ["lisa"], "min_recall": 1.0, "min_groundedness": 1.0},
+    {"id": "avoidable-er", "question": "Which cost driver is Avoidable ER for Lisa?", "must_retrieve": ["avoidable er"], "answer_must_mention": ["avoidable er"], "min_recall": 1.0, "min_groundedness": 1.0},
+    {"id": "claim-count", "question": "How many claims does MEM-LISA-COPD have?", "must_retrieve": ["mem-lisa-copd"], "answer_must_mention": ["10"], "min_recall": 1.0, "min_groundedness": 1.0},
+    {"id": "member-plan", "question": "What plan is MEM-LISA-COPD enrolled in?", "must_retrieve": ["mem-lisa-copd", "plan"], "answer_must_mention": ["plan"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "member-pcp", "question": "Who is the PCP for MEM-LISA-COPD?", "must_retrieve": ["mem-lisa-copd", "provider"], "answer_must_mention": ["provider"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "total-paid", "question": "What is the total paid amount for MEM-LISA-COPD?", "must_retrieve": ["mem-lisa-copd", "paid"], "answer_must_mention": ["paid"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "er-visits", "question": "How many ER visits does Lisa have?", "must_retrieve": ["er", "lisa"], "answer_must_mention": ["er"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "inpatient", "question": "List inpatient claims for MEM-LISA-COPD", "must_retrieve": ["inpatient", "mem-lisa-copd"], "answer_must_mention": ["inpatient"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "outpatient", "question": "List outpatient claims for MEM-LISA-COPD", "must_retrieve": ["outpatient", "mem-lisa-copd"], "answer_must_mention": ["outpatient"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "service-date", "question": "When was the most recent claim for MEM-LISA-COPD?", "must_retrieve": ["mem-lisa-copd", "service"], "answer_must_mention": ["202"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "cost-driver-rx", "question": "Is pharmacy a cost driver for Lisa?", "must_retrieve": ["pharmacy", "lisa"], "answer_must_mention": ["pharmacy"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "care-gap", "question": "What care gaps are open for MEM-LISA-COPD?", "must_retrieve": ["care gap", "mem-lisa-copd"], "answer_must_mention": ["gap"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "risk-score", "question": "What is the risk score for MEM-LISA-COPD?", "must_retrieve": ["risk", "mem-lisa-copd"], "answer_must_mention": ["risk"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "diagnosis", "question": "What diagnosis is recorded for MEM-LISA-COPD?", "must_retrieve": ["diagnosis", "copd"], "answer_must_mention": ["copd"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "network", "question": "Is the provider in network for Lisa?", "must_retrieve": ["network", "provider"], "answer_must_mention": ["network"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "member-dob", "question": "What is the date of birth for MEM-LISA-COPD?", "must_retrieve": ["mem-lisa-copd", "dob"], "answer_must_mention": ["19"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "paid-vs-billed", "question": "Compare paid and billed amounts for Lisa", "must_retrieve": ["paid", "billed"], "answer_must_mention": ["paid"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "top-provider", "question": "Which provider was paid the most for MEM-LISA-COPD?", "must_retrieve": ["provider", "paid"], "answer_must_mention": ["provider"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "claim-types", "question": "Break down claims by type for MEM-LISA-COPD", "must_retrieve": ["claim", "type"], "answer_must_mention": ["claim"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "monthly-spend", "question": "What is monthly spend for MEM-LISA-COPD?", "must_retrieve": ["mem-lisa-copd", "paid"], "answer_must_mention": ["paid"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "auth-required", "question": "Does this claim require prior authorization?", "must_retrieve": ["authorization"], "answer_must_mention": ["authorization"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "deny-reason", "question": "Why was a claim denied for Lisa?", "must_retrieve": ["denied", "lisa"], "answer_must_mention": ["denied"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "readmission", "question": "Was there a readmission for MEM-LISA-COPD?", "must_retrieve": ["readmission", "mem-lisa-copd"], "answer_must_mention": ["readmission"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "ed-followup", "question": "Was there follow-up after the ER visit?", "must_retrieve": ["follow", "er"], "answer_must_mention": ["follow"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "member-active", "question": "Is MEM-LISA-COPD an active member?", "must_retrieve": ["mem-lisa-copd", "active"], "answer_must_mention": ["active"], "min_recall": 0.5, "min_groundedness": 0.5}
   ]
 }

@@ -2,6 +2,10 @@
 from typing import Any, Dict, List, Optional
 
 from app.models.ontology import ExtractionSourceType
+from app.services.ontology.text_match import canonical_key
+
+REPEAT_BOOST = 0.05
+REPEAT_BOOST_CAP = 0.15
 
 
 class OntologyClassifier:
@@ -43,14 +47,26 @@ class OntologyClassifier:
             "enumerations": enumerations[:30],
         }
 
+    @staticmethod
+    def _merge_key(it: Dict[str, Any]) -> str:
+        """Names that differ only by case or plural are one candidate.
+
+        A relationship with named ends is a different fact for each pair of
+        ends, so "Provider submits Claim" and "Member submits Appeal" stay apart.
+        """
+        norm = canonical_key(it.get("normalized_name") or it.get("name") or "")
+        if it.get("subject") and it.get("object"):
+            return f"{canonical_key(it['subject'])}|{norm}|{canonical_key(it['object'])}"
+        return norm
+
     def _merge_by_normalized(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         by_norm: Dict[str, Dict[str, Any]] = {}
         for it in items:
-            norm = (it.get("normalized_name") or it.get("name") or "").strip()
+            norm = self._merge_key(it)
             if not norm:
                 continue
             if norm not in by_norm:
-                it["evidence_snippets"] = [it.get("evidence_snippet", "")[:200]]
+                it["evidence_snippets"] = [(it.get("evidence_snippet") or "")[:300]]
                 it["source_count"] = 1
                 by_norm[norm] = it
             else:
@@ -58,16 +74,21 @@ class OntologyClassifier:
                 existing["confidence"] = max(
                     existing.get("confidence", 0), it.get("confidence", 0)
                 )
-                existing.setdefault("evidence_snippets", []).append(
-                    (it.get("evidence_snippet") or "")[:200]
-                )
-                existing["source_count"] = existing.get("source_count", 1) + 1
+                snippet = (it.get("evidence_snippet") or "")[:300]
+                if snippet and snippet not in existing.setdefault("evidence_snippets", []):
+                    existing["evidence_snippets"].append(snippet)
+                    existing["source_count"] = existing.get("source_count", 1) + 1
+                if not existing.get("evidence_snippet") and snippet:
+                    existing["evidence_snippet"] = snippet
+                for field in ("definition", "entity", "xml_path"):
+                    if not existing.get(field) and it.get(field):
+                        existing[field] = it[field]
         return list(by_norm.values())
 
     def _score_repetition(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Each further distinct passage that states the same thing adds a little, up to +0.15."""
         for it in items:
             count = it.get("source_count", 1)
             base = it.get("confidence", 0.5)
-            # Slight boost for repetition
-            it["confidence"] = min(1.0, base + 0.05 * (count - 1))
+            it["confidence"] = min(1.0, base + min(REPEAT_BOOST_CAP, REPEAT_BOOST * (count - 1)))
         return items

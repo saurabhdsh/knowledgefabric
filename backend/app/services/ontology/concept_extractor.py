@@ -4,7 +4,18 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.models.ontology import OntologyEvidence, ExtractionSourceType
+from app.services.ontology.text_match import sentence_around
 
+# Words that are capitalised because they open a sentence, not because they name a thing.
+SENTENCE_OPENERS = {
+    "the", "a", "an", "this", "that", "these", "those", "each", "every", "all", "any", "some",
+    "no", "if", "when", "where", "while", "once", "after", "before", "unless", "until", "then",
+    "we", "you", "they", "it", "he", "she", "our", "your", "their", "its", "his", "her",
+    "for", "in", "on", "at", "by", "to", "of", "with", "from", "as", "and", "or", "but", "so",
+    "please", "note", "see", "however", "therefore", "also", "only", "both", "either", "there",
+    "here", "what", "which", "who", "how", "why", "is", "are", "was", "were", "do", "does",
+    "not", "such", "other", "another", "most", "many", "more", "per", "under", "over",
+}
 
 # Labels that strongly suggest attributes (domain-agnostic)
 ATTRIBUTE_LIKE_LABELS = {
@@ -85,14 +96,16 @@ class ConceptExtractor:
             })
 
         # Verb phrases as relationship candidates
-        verb_phrases = self._extract_verb_phrases(text)
-        for vp in verb_phrases:
+        # Each candidate carries the whole sentence the verb sits in, so the
+        # relationship can later be tied to the entities that sentence names.
+        for vp, sentence in self._extract_verb_sentences(text):
             relationships.append({
                 "id": f"rel_rb_{uuid.uuid4().hex[:8]}",
                 "name": vp,
                 "normalized_name": self._normalize_name(vp),
                 "source": "rule_based",
-                "evidence_snippet": self._snippet(text, vp),
+                "evidence_snippet": sentence,
+                "artifact_id": source_artifact_id or "",
                 "confidence": 0.45,
             })
 
@@ -776,13 +789,65 @@ class ConceptExtractor:
         # Simple: capitalized words and short title-case phrases
         seen = set()
         result: List[str] = []
-        # Words that look like nouns (Capitalized, not at sentence start - simplified: take all Cap phrases)
-        for m in re.finditer(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b", text):
-            phrase = m.group(1).strip()
-            if phrase not in seen and 2 <= len(phrase) <= 60:
-                seen.add(phrase)
-                result.append(phrase)
+        lowered = text.lower()
+        for m in re.finditer(r"\b([A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+)*)\b", text):
+            words = m.group(1).split()
+            start = m.start(1)
+            # "The Claim" is the noun "Claim"; "We", "If", "When" are not nouns at all.
+            while words and words[0].lower() in SENTENCE_OPENERS:
+                start += len(words[0]) + 1
+                words = words[1:]
+            while words and words[-1].lower() in SENTENCE_OPENERS:
+                words = words[:-1]
+            if not words:
+                continue
+            phrase = " ".join(words)
+            if phrase in seen or not (2 <= len(phrase) <= 60):
+                continue
+            # A single word capitalised only because it opens a sentence is
+            # kept when the text uses it again; one stray opener is not a concept.
+            lead = text[:start]
+            before = lead.rstrip()
+            opens_sentence = (
+                not before or "\n" in lead[len(before):] or before[-1] in ".!?:;"
+            )
+            if len(words) == 1 and opens_sentence:
+                if len(re.findall(rf"\b{re.escape(phrase.lower())}s?\b", lowered)) < 2:
+                    continue
+            seen.add(phrase)
+            result.append(phrase)
         return result[:80]  # cap
+
+    def _extract_verb_sentences(self, text: str) -> List[Tuple[str, str]]:
+        """(verb phrase, sentence it appears in) for every relationship-like verb."""
+        patterns = [
+            r"\b(has|have)\s+(?:an?\s+|one\s+or\s+more\s+|many\s+)?",
+            r"\b(belongs?\s+to)\b",
+            r"\b(contains?)\b",
+            r"\b(references?)\b",
+            r"\b((?:is|are)\s+associated\s+with)\b",
+            r"\b((?:is|are)\s+related\s+to)\b",
+            r"\b(identifies)\b",
+            r"\b(links?\s+to)\b",
+            r"\b(consists?\s+of)\b",
+            r"\b(submits?|approves?|denies|reviews?|assigns?|issues?|receives?|pays?|covers?|manages?|"
+            r"requires?|provides?|includes?|creates?|owns?|reports?\s+to|enrolls?\s+in)\b",
+            r"\b((?:is|are)\s+(?:submitted|approved|denied|reviewed|assigned|issued|received|paid|"
+            r"covered|managed|required|provided|created|owned|sent)\s+(?:by|to))\b",
+        ]
+        seen = set()
+        result: List[Tuple[str, str]] = []
+        for pat in patterns:
+            for m in re.finditer(pat, text, re.I):
+                phrase = re.sub(r"\s+", " ", m.group(1).strip().lower())
+                sentence, _ = sentence_around(text, m.start(1), m.end(1))
+                sentence = re.sub(r"\s+", " ", sentence).strip()[:300]
+                key = (phrase, sentence)
+                if not sentence or key in seen:
+                    continue
+                seen.add(key)
+                result.append((phrase, sentence))
+        return result[:120]
 
     def _extract_verb_phrases(self, text: str) -> List[str]:
         # Simple verb patterns: "has a", "belongs to", "contains", "references"

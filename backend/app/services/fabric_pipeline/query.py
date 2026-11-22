@@ -177,6 +177,58 @@ def _retrieve_chunks(
     return chunks, exact_chunks, f"hybrid+{ranker}", top_score
 
 
+
+def _fitted_confidence_weights(fabric_id: str):
+    """Weights fitted from thumbs up/down for this fabric, or None."""
+    try:
+        from app.db.models import FabricFeedbackRecord, RetrievalEpisodeRecord
+        from app.db.session import get_session_factory
+        from app.services.retrieval.hybrid_ranker import fit_confidence_weights
+
+        session = get_session_factory()()
+        try:
+            feedback = (
+                session.query(FabricFeedbackRecord)
+                .filter(FabricFeedbackRecord.fabric_id == fabric_id)
+                .order_by(FabricFeedbackRecord.created_at.desc())
+                .limit(500)
+                .all()
+            )
+            if len(feedback) < 20:
+                return None
+            episodes = []
+            for row in feedback:
+                measurement = {}
+                if row.episode_id:
+                    ep = session.get(RetrievalEpisodeRecord, row.episode_id)
+                    if ep and isinstance(getattr(ep, "payload", None), dict):
+                        measurement = (ep.payload or {}).get("measurement") or {}
+                    elif ep:
+                        measurement = {
+                            "rerank": getattr(ep, "confidence", None),
+                        }
+                episodes.append({
+                    "rating": row.rating,
+                    "measurement": measurement or {"rerank": 0.5, "recall_proxy": 0.5},
+                })
+            return fit_confidence_weights(episodes)
+        finally:
+            session.close()
+    except Exception:
+        logger.debug("Could not fit confidence weights for %s", fabric_id, exc_info=True)
+        return None
+
+
+
+def _mask_rows(fabric: Dict[str, Any], rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Hide classified PII columns in rows returned to the caller."""
+    sensitive = list((fabric.get("pii") or {}).get("sensitive_columns") or fabric.get("sensitive_columns") or [])
+    if not sensitive:
+        return rows
+    from app.services.enterprise.ops import redact_row
+    return [redact_row(row, sensitive) for row in rows]
+
+
 def answer_query(
     fabric: Dict[str, Any],
     query: str,
@@ -234,6 +286,7 @@ def answer_query(
         return out
 
     entity_text = ""
+    entity_bases: set = set()
     if profile:
         try:
             entities = find_entities(fabric_id, profile, query, table_store)
@@ -242,9 +295,19 @@ def answer_query(
             entities = []
         if entities:
             entity_text = entity_context_text(entities)
+            entity_bases = {str(e.get("basis") or "identifier") for e in entities}
             out["entities"] = [
-                {"table": e["table"], "column": e["matched_column"], "value": e["matched_value"]} for e in entities
+                {
+                    "table": e["table"], "column": e["matched_column"], "value": e["matched_value"],
+                    "basis": e.get("basis") or "identifier", "confidence": e.get("confidence", 1.0),
+                }
+                for e in entities
             ]
+            if "ambiguous_name" in entity_bases:
+                out["notes"].append(
+                    "A name in the question matches more than one row. Say that there are several "
+                    "records with this name and ask which one is meant, or answer for each separately."
+                )
 
     # ---- Structured-only: SQL / rules, early return ----
     if intent == "structured" and profile:
@@ -260,7 +323,7 @@ def answer_query(
                         "sql": sql_result["sql"],
                         "explanation": sql_result.get("explanation"),
                         "columns": sql_result["columns"],
-                        "rows": sql_result["rows"][:200],
+                        "rows": _mask_rows(fabric, sql_result["rows"][:200]),
                         "row_count": sql_result["row_count"],
                         "truncated": sql_result["truncated"],
                         "is_sample": sql_result["is_sample"],
@@ -313,7 +376,7 @@ def answer_query(
                 "sql": sql_result["sql"],
                 "explanation": sql_result.get("explanation"),
                 "columns": sql_result["columns"],
-                "rows": sql_result["rows"][:200],
+                "rows": _mask_rows(fabric, sql_result["rows"][:200]),
                 "row_count": sql_result["row_count"],
                 "truncated": sql_result["truncated"],
                 "is_sample": sql_result["is_sample"],
@@ -339,7 +402,13 @@ def answer_query(
     if sql_block:
         blocks.append(sql_block)
     if entity_text:
-        blocks.append("EXACT RECORD LOOKUP (rows fetched by identifier, with related rows):\n" + entity_text)
+        if entity_bases <= {"identifier"}:
+            blocks.append("EXACT RECORD LOOKUP (rows fetched by identifier, with related rows):\n" + entity_text)
+        else:
+            blocks.append(
+                "RECORD LOOKUP (rows fetched by identifier or by name; each row states how it was "
+                "matched, with related rows):\n" + entity_text
+            )
     if link_text and link_text != entity_text:
         blocks.append(
             "ROWS LINKED FROM DOCUMENTS (Phase 3 entity resolution — mentions in policy/care text "
@@ -364,14 +433,16 @@ def answer_query(
     hard_cap = int(settings.QUERY_MAX_CONTEXT_CHARS or 350_000)
     packed = _pack(blocks, min(budget, hard_cap))
     evidence_text = "\n".join(packed)
-    from app.services.retrieval.hybrid_ranker import measure_confidence
+    from app.services.retrieval.hybrid_ranker import fit_confidence_weights, measure_confidence
 
+    fitted = _fitted_confidence_weights(fabric_id)
     measurement = measure_confidence(
         query,
         chunks,
         evidence_text,
         graph_fact_count=evidence_text.lower().count("graph facts"),
         sql_backed=bool(sql_payload),
+        weights=fitted,
     )
     out["retrieval"] = {
         "ranker": ranker,
@@ -391,7 +462,12 @@ def answer_query(
         if sql_payload:
             basis.append("SQL over the table store")
         if entity_text:
-            basis.append("exact record lookup")
+            if "ambiguous_name" in entity_bases:
+                basis.append("a name that matches more than one record")
+            elif entity_bases <= {"identifier"}:
+                basis.append("exact record lookup")
+            else:
+                basis.append("record lookup by name")
         if link_text:
             basis.append("document→row entity links")
         if exact_chunks:
@@ -446,7 +522,7 @@ def answer_query(
         "Answer the question from this evidence only.\n"
         "- Cite the passages you use with their bracket numbers, e.g. [2]. Rows from the exact "
         "record lookup or document-linked rows can be cited as (record lookup).\n"
-        "- Figures in DATASET OVERVIEW, SQL RESULT, EXACT RECORD LOOKUP and ROWS LINKED FROM "
+        "- Figures in DATASET OVERVIEW, SQL RESULT, RECORD LOOKUP and ROWS LINKED FROM "
         "DOCUMENTS are exact; prefer them over anything inferred from passages.\n"
         f"{hybrid_note}"
         "- If the evidence does not contain the answer, say so plainly instead of guessing.\n"

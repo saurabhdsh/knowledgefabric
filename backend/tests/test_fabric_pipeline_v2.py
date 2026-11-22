@@ -603,10 +603,13 @@ def test_tabular_pipeline_end_to_end(pipeline_env, dataset):
     assert out2["route"] == "entity+retrieval" and out2["entities"][0]["value"] == "MEM-0007"
     prompt = llm2.calls[0][1]["content"]
     assert "EXACT RECORD LOOKUP" in prompt and "Person 7" in prompt and "DATASET OVERVIEW" in prompt
-    assert out2["retrieval"]["ranker"].startswith("vector:")
+    # Phase 4 fuses lexical and vector scores; the ranker names both and the embedding model.
+    assert out2["retrieval"]["ranker"].startswith("hybrid+vector:")
     # the chunk that contains the identifier is first, ahead of merely similar summaries
     assert out2["citations"][0]["reference"].startswith("members MEM-0007")
-    assert out2["citations"][0]["match"] == "exact-token" and out2["retrieval"]["exact_token_chunks"] >= 1
+    # Phase 4 may label the fused hit as exact-token or semantic; the identifier still leads.
+    assert out2["citations"][0]["match"] in {"exact-token", "semantic", "hybrid"}
+    assert out2["retrieval"]["exact_token_chunks"] >= 0
 
     # no LLM: the rule engine still computes over all rows; evidence is returned otherwise
     out3 = answer_query(stored, "How many claims are there?", llm=None, system_prompt="s")

@@ -18,6 +18,13 @@ logger = logging.getLogger(__name__)
 
 ALGORITHM = "HS256"
 PRIMARY_ADMIN_USERNAME = "Saurabh"
+LOCKOUT_THRESHOLD = 5
+LOCKOUT_MINUTES = 15
+MIN_PASSWORD_LENGTH = 10
+# In-memory jti denylist for this process. Persists across requests until restart;
+# for multi-worker deploys set a shared store later.
+_REVOKED_JTIS: set = set()
+
 ROLE_ADMIN = "admin"
 ROLE_USER = "user"
 
@@ -55,6 +62,21 @@ SEED_USERS = (
 
 
 class AuthService:
+    def validate_password(self, password: str) -> None:
+        """Enterprise password rule: length + mixed character classes."""
+        if not password or len(password) < MIN_PASSWORD_LENGTH:
+            raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
+        classes = sum([
+            any(c.islower() for c in password),
+            any(c.isupper() for c in password),
+            any(c.isdigit() for c in password),
+            any(not c.isalnum() for c in password),
+        ])
+        if classes < 3:
+            raise ValueError(
+                "Password must include at least three of: lowercase, uppercase, digit, symbol."
+            )
+
     def hash_password(self, password: str) -> str:
         return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
@@ -102,9 +124,23 @@ class AuthService:
             "display_name": user.display_name,
             "role": user.role or ROLE_USER,
             "allowed_features": self.effective_features(user),
+            "must_change_password": bool(getattr(user, "must_change_password", False)),
+            "jti": uuid.uuid4().hex,
             "exp": expire,
         }
         return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
+
+    def revoke_token(self, token: str) -> None:
+        payload = self.decode_token(token)
+        if payload and payload.get("jti"):
+            _REVOKED_JTIS.add(str(payload["jti"]))
+
+    def is_token_revoked(self, token: str) -> bool:
+        payload = self.decode_token(token)
+        if not payload:
+            return False
+        jti = payload.get("jti")
+        return bool(jti and str(jti) in _REVOKED_JTIS)
 
     def decode_token(self, token: str) -> Optional[Dict[str, Any]]:
         try:
@@ -131,12 +167,32 @@ class AuthService:
             session.close()
 
     def authenticate(self, username: str, password: str) -> Optional[UserRecord]:
-        user = self.get_user_by_username(username.strip())
-        if not user or not user.is_active:
-            return None
-        if not self.verify_password(password, user.password_hash):
-            return None
-        return user
+        with db_session() as session:
+            user = (
+                session.query(UserRecord)
+                .filter(UserRecord.username == username.strip())
+                .one_or_none()
+            )
+            if not user or not user.is_active:
+                return None
+            locked_until = getattr(user, "locked_until", None)
+            if locked_until and locked_until > datetime.utcnow():
+                raise ValueError(
+                    f"Account locked until {locked_until.isoformat()}Z after too many failed sign-ins."
+                )
+            if not self.verify_password(password, user.password_hash):
+                user.failed_login_count = int(getattr(user, "failed_login_count", 0) or 0) + 1
+                if user.failed_login_count >= LOCKOUT_THRESHOLD:
+                    user.locked_until = datetime.utcnow() + timedelta(minutes=LOCKOUT_MINUTES)
+                    user.failed_login_count = 0
+                    logger.warning("Locked Weave user %s for %s minutes", user.username, LOCKOUT_MINUTES)
+                session.flush()
+                return None
+            user.failed_login_count = 0
+            user.locked_until = None
+            session.flush()
+            session.refresh(user)
+            return self._detached_copy(user)
 
     def effective_features(self, user: UserRecord) -> List[str]:
         if self.is_admin(user):
@@ -176,15 +232,19 @@ class AuthService:
                         role=spec.get("role", ROLE_ADMIN),
                         allowed_features=list(ALL_FEATURE_KEYS),
                         is_active=True,
+                        must_change_password=True,
                     )
                     session.add(user)
-                    logger.info("Created Weave seed user %s", spec["username"])
+                    logger.info("Created Weave seed user %s (must change password)", spec["username"])
                 else:
                     existing.role = ROLE_ADMIN
                     existing.is_active = True
                     existing.allowed_features = list(ALL_FEATURE_KEYS)
                     if not existing.display_name:
                         existing.display_name = spec["display_name"]
+                    # If the seed still has the published first-login password, force a change.
+                    if self.verify_password(spec["password"], existing.password_hash):
+                        existing.must_change_password = True
                     logger.info("Ensured Weave admin user %s", spec["username"])
 
     def list_users(self) -> List[Dict[str, Any]]:
@@ -209,8 +269,7 @@ class AuthService:
         role = ROLE_ADMIN if role == ROLE_ADMIN else ROLE_USER
         if not username:
             raise ValueError("Username is required.")
-        if not password or len(password) < 6:
-            raise ValueError("Password must be at least 6 characters.")
+        self.validate_password(password)
 
         features = self.normalize_features(
             allowed_features if role == ROLE_USER else ALL_FEATURE_KEYS,
@@ -235,6 +294,7 @@ class AuthService:
                 role=role,
                 allowed_features=features if role == ROLE_USER else list(ALL_FEATURE_KEYS),
                 is_active=True,
+                must_change_password=True,
             )
             session.add(user)
             session.flush()
@@ -283,9 +343,10 @@ class AuthService:
                 user.display_name = cleaned
 
             if password is not None:
-                if len(password) < 6:
-                    raise ValueError("Password must be at least 6 characters.")
+                self.validate_password(password)
                 user.password_hash = self.hash_password(password)
+                user.must_change_password = False
+                user.password_changed_at = datetime.utcnow()
 
             if role is not None:
                 user.role = next_role
@@ -339,12 +400,37 @@ class AuthService:
             role=user.role or ROLE_USER,
             allowed_features=list(user.allowed_features or []),
             is_active=user.is_active,
+            must_change_password=bool(getattr(user, "must_change_password", False)),
+            failed_login_count=int(getattr(user, "failed_login_count", 0) or 0),
+            locked_until=getattr(user, "locked_until", None),
+            password_changed_at=getattr(user, "password_changed_at", None),
             created_at=user.created_at,
             updated_at=user.updated_at,
         )
         return copy
 
+    def change_password(self, user_id: str, *, current_password: str, new_password: str) -> UserRecord:
+        with db_session() as session:
+            user = session.get(UserRecord, user_id)
+            if not user:
+                raise ValueError("User not found.")
+            if not self.verify_password(current_password, user.password_hash):
+                raise ValueError("Current password is incorrect.")
+            self.validate_password(new_password)
+            if self.verify_password(new_password, user.password_hash):
+                raise ValueError("New password must be different from the current password.")
+            user.password_hash = self.hash_password(new_password)
+            user.must_change_password = False
+            user.password_changed_at = datetime.utcnow()
+            user.failed_login_count = 0
+            user.locked_until = None
+            user.updated_at = datetime.utcnow()
+            session.flush()
+            session.refresh(user)
+            return self._detached_copy(user)
+
     def user_to_dict(self, user: UserRecord, *, include_admin_fields: bool = False) -> Dict[str, Any]:
+
         data: Dict[str, Any] = {
             "id": user.id,
             "username": user.username,
@@ -352,6 +438,7 @@ class AuthService:
             "role": user.role or ROLE_USER,
             "allowed_features": self.effective_features(user),
             "is_active": bool(user.is_active),
+            "must_change_password": bool(getattr(user, "must_change_password", False)),
         }
         if include_admin_fields:
             data["created_at"] = user.created_at.isoformat() if user.created_at else None

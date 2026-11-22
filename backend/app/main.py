@@ -101,6 +101,35 @@ async def health_check():
     return {"status": overall, "service": "knowledge-fabric-api", "checks": checks}
 
 
+
+@app.get("/metrics")
+async def metrics():
+    """Lightweight process metrics for host monitoring (no extra dependency)."""
+    import os, time, resource
+    try:
+        from app.services.platform.fabric_store import fabric_store
+        fabric_count = len(fabric_store.list_all_dicts())
+    except Exception:
+        fabric_count = -1
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    lines = [
+        "# HELP weave_up 1 if the process is serving",
+        "# TYPE weave_up gauge",
+        "weave_up 1",
+        "# HELP weave_fabric_count Number of fabrics visible to the system path",
+        "# TYPE weave_fabric_count gauge",
+        f"weave_fabric_count {fabric_count}",
+        "# HELP weave_process_cpu_seconds Process CPU time",
+        "# TYPE weave_process_cpu_seconds counter",
+        f"weave_process_cpu_seconds {usage.ru_utime + usage.ru_stime:.3f}",
+        "# HELP weave_process_max_rss_kb Max RSS in kilobytes",
+        "# TYPE weave_process_max_rss_kb gauge",
+        f"weave_process_max_rss_kb {usage.ru_maxrss}",
+    ]
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
+
+
 if __name__ == "__main__":
     import uvicorn
 

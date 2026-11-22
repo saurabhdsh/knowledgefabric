@@ -129,11 +129,18 @@ class FabricStore:
         session = get_session_factory()()
         try:
             query = session.query(FabricRecord).order_by(FabricRecord.created_at.desc())
-            if owner_id:
-                query = query.filter(FabricRecord.owner_id == owner_id)
             records = query.all()
-            if records:
-                return [self._record_to_dict(r) for r in records]
+            rows = [self._record_to_dict(r) for r in records]
+            if owner_id:
+                from app.services.enterprise.ops import can_view_fabric
+                from app.services.auth_service import auth_service
+
+                user = auth_service.get_user_by_id(owner_id)
+                if user and auth_service.is_admin(user):
+                    return rows
+                return [r for r in rows if can_view_fabric(r, owner_id)]
+            if rows:
+                return rows
         finally:
             session.close()
         if owner_id:
@@ -152,28 +159,31 @@ class FabricStore:
         try:
             rec = session.get(FabricRecord, fabric_id)
             if rec:
-                if owner_id and rec.owner_id and rec.owner_id != owner_id:
-                    return None
-                if owner_id and rec.owner_id is None:
-                    return None
-                return self._record_to_dict(rec)
+                data = self._record_to_dict(rec)
+                return data if self._visible_to(data, owner_id) else None
         finally:
             session.close()
         cached = next((f for f in self._cache if f.get("id") == fabric_id), None)
-        if cached and owner_id and cached.get("owner_id") != owner_id:
-            return None
         if cached:
-            return cached
-        # Last resort: fabrics.json may still hold Release 2.0 rows not yet in DB.
+            return cached if self._visible_to(cached, owner_id) else None
         for fab in self._load_json_fabrics():
             if fab.get("id") != fabric_id:
                 continue
-            if owner_id and fab.get("owner_id") and fab.get("owner_id") != owner_id:
-                return None
-            if owner_id and not fab.get("owner_id"):
-                return None
-            return sanitize_for_json(fab)
+            data = sanitize_for_json(fab)
+            return data if self._visible_to(data, owner_id) else None
         return None
+
+    @staticmethod
+    def _visible_to(fabric: Dict[str, Any], owner_id: Optional[str]) -> bool:
+        if not owner_id:
+            return True
+        from app.services.enterprise.ops import can_view_fabric
+        from app.services.auth_service import auth_service
+
+        user = auth_service.get_user_by_id(owner_id)
+        if user and auth_service.is_admin(user):
+            return True
+        return can_view_fabric(fabric, owner_id)
 
     def save(self, fabric: Dict[str, Any]) -> Dict[str, Any]:
         fabric = sanitize_for_json(fabric)

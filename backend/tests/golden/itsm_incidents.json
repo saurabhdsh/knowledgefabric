@@ -1,0 +1,30 @@
+{
+  "fabric": "itsm_incidents",
+  "questions": [
+    {"id": "inc-lookup", "question": "What is incident INC000001 about?", "must_retrieve": ["inc000001"], "answer_must_mention": ["inc000001"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "caller", "question": "Who reported INC000001?", "must_retrieve": ["caller", "inc000001"], "answer_must_mention": ["caller"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "group", "question": "Which assignment group owns INC000001?", "must_retrieve": ["assignment", "group"], "answer_must_mention": ["group"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "priority-p1", "question": "How many priority 1 incidents are open?", "must_retrieve": ["priority"], "answer_must_mention": ["1"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "ci", "question": "Which CI is linked to INC000001?", "must_retrieve": ["ci", "inc000001"], "answer_must_mention": ["ci"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "open-count", "question": "How many open incidents are there?", "must_retrieve": ["open", "incident"], "answer_must_mention": ["incident"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "sla", "question": "Has INC000001 breached its SLA?", "must_retrieve": ["sla", "inc000001"], "answer_must_mention": ["sla"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "category", "question": "What category is INC000001?", "must_retrieve": ["category", "inc000001"], "answer_must_mention": ["category"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "resolved", "question": "When was INC000001 resolved?", "must_retrieve": ["resolved", "inc000001"], "answer_must_mention": ["resolved"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "work-notes", "question": "Summarise the work notes on INC000001", "must_retrieve": ["work", "inc000001"], "answer_must_mention": ["inc000001"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "related", "question": "Which incidents are related to INC000001?", "must_retrieve": ["related", "inc000001"], "answer_must_mention": ["related"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "change", "question": "Is there a change linked to INC000001?", "must_retrieve": ["change", "inc000001"], "answer_must_mention": ["change"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "impact", "question": "What is the impact of INC000001?", "must_retrieve": ["impact", "inc000001"], "answer_must_mention": ["impact"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "urgency", "question": "What is the urgency of INC000001?", "must_retrieve": ["urgency", "inc000001"], "answer_must_mention": ["urgency"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "top-group", "question": "Which assignment group has the most open incidents?", "must_retrieve": ["assignment", "group"], "answer_must_mention": ["group"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "by-ci", "question": "How many incidents are on Server 1?", "must_retrieve": ["server", "incident"], "answer_must_mention": ["server"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "caller-history", "question": "What incidents has caller U0001 opened?", "must_retrieve": ["u0001", "incident"], "answer_must_mention": ["incident"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "reopened", "question": "Which incidents were reopened?", "must_retrieve": ["reopened"], "answer_must_mention": ["reopened"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "mttr", "question": "What is the average time to resolve?", "must_retrieve": ["resolve"], "answer_must_mention": ["resolve"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "major", "question": "List major incidents", "must_retrieve": ["major", "incident"], "answer_must_mention": ["major"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "kb", "question": "Is there a knowledge article for INC000001?", "must_retrieve": ["knowledge", "inc000001"], "answer_must_mention": ["knowledge"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "escalated", "question": "Was INC000001 escalated?", "must_retrieve": ["escalat", "inc000001"], "answer_must_mention": ["escalat"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "short-desc", "question": "What is the short description of INC000001?", "must_retrieve": ["short", "inc000001"], "answer_must_mention": ["inc000001"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "state", "question": "What is the state of INC000001?", "must_retrieve": ["state", "inc000001"], "answer_must_mention": ["state"], "min_recall": 0.5, "min_groundedness": 0.5},
+    {"id": "priority-dist", "question": "Break down incidents by priority", "must_retrieve": ["priority", "incident"], "answer_must_mention": ["priority"], "min_recall": 0.5, "min_groundedness": 0.5}
+  ]
+}

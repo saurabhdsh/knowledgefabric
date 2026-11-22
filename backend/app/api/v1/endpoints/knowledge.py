@@ -2542,11 +2542,12 @@ async def test_endpoint():
 async def list_knowledge_sources():
     """List all available knowledge sources"""
     try:
-        # Return fabrics from in-memory storage
+        from app.services.enterprise.ops import scrub_fabric_secrets
+
         return APIResponse(
             success=True,
             message="Knowledge sources retrieved successfully",
-            data=user_fabrics(),
+            data=[scrub_fabric_secrets(f) for f in user_fabrics()],
             error=None
         )
     except Exception as e:
@@ -2651,10 +2652,12 @@ async def get_knowledge_source(source_id: str):
                 data=None,
                 error="Knowledge source not found"
             )
+        from app.services.enterprise.ops import scrub_fabric_secrets
+
         return APIResponse(
             success=True,
             message="Knowledge source retrieved successfully",
-            data=source,
+            data=scrub_fabric_secrets(source),
             error=None
         )
     except Exception as e:
@@ -3374,6 +3377,9 @@ async def get_fabric_entity_links(fabric_id: str, limit: int = 100):
                 "fabric_id": fabric_id,
                 "link_count": payload.get("link_count", len(links)),
                 "links": links,
+                "by_basis": payload.get("by_basis") or {},
+                "ambiguous_names": list(payload.get("ambiguous_names") or [])[:100],
+                "ambiguous_name_count": payload.get("ambiguous_name_count", 0),
                 "summary": fabric.get("entity_links"),
             },
         )
@@ -5536,30 +5542,42 @@ async def create_servicenow_knowledge_fabric(
             )
             
         elif effective_source_type == "servicenow_connection":
-            # Handle direct connection
+            # Live ServiceNow pull is not wired. Refuse to pretend otherwise, and
+            # never store a connector password. Upload a CSV/JSON export instead,
+            # or explicitly ask for the labelled sample with use_sample=true.
             raw_connection_data = connection_data
             if not raw_connection_data and payload_connection_data is not None:
                 raw_connection_data = json.dumps(payload_connection_data)
-
             if not raw_connection_data:
                 return APIResponse(
                     success=False,
                     message="No connection data provided for ServiceNow fabric creation",
                     data=None,
-                    error="Missing connection data"
+                    error="Missing connection data",
                 )
-            
             conn_data = json.loads(raw_connection_data)
+            use_sample = bool(conn_data.get("use_sample"))
+            if not use_sample:
+                return APIResponse(
+                    success=False,
+                    message=(
+                        "Live ServiceNow connection is not available on this build. "
+                        "Upload an incident export, or set use_sample=true to load a "
+                        "labelled sample that is clearly not your instance data."
+                    ),
+                    data=None,
+                    error="servicenow_connection_not_live",
+                )
             table_name = conn_data.get("tableName", "incident")
             limit = int(conn_data.get("limit", 100) or 100)
             incident_model = build_incident_knowledge_model(
-                f"ServiceNow {table_name}",
+                f"ServiceNow {table_name} (sample)",
                 limit,
             )
             synthetic_incident_records = [
                 {
                     "number": f"INC{100000 + idx}",
-                    "short_description": f"Service disruption for {conn_data.get('tableName', 'incident')}",
+                    "short_description": f"[SAMPLE] Service disruption for {table_name}",
                     "priority": 1 if idx % 5 == 0 else 2,
                     "impact": "high" if idx % 4 == 0 else "medium",
                     "urgency": "high" if idx % 3 == 0 else "medium",
@@ -5571,20 +5589,29 @@ async def create_servicenow_knowledge_fabric(
                 }
                 for idx in range(min(limit, 150))
             ]
-            
-            # Simulate ServiceNow API connection and data retrieval
-            # In a real implementation, you would connect to ServiceNow API here
-            tags_conn = ["servicenow", "incident", "itsm", "connection", table_name]
+            # Keep host/table for display; drop secrets.
+            safe_conn = {
+                k: v for k, v in conn_data.items()
+                if str(k).lower() not in {"password", "passwd", "secret", "token", "api_key", "apikey", "client_secret"}
+            }
+            tags_conn = ["servicenow", "incident", "itsm", "sample", table_name]
             tags_conn.extend(domain_tags_for_kind(resolved_weave))
             fabric_data = {
                 "id": fabric_id,
-                "name": f"ServiceNow Incident Data - {table_name}",
-                "source_type": "servicenow_connection",
-                "description": "Knowledge fabric created from ServiceNow incident-centric connection data",
+                "name": f"[SAMPLE] ServiceNow Incident Data - {table_name}",
+                "source_type": "servicenow_sample",
+                "description": (
+                    "Labelled sample fabric. Not connected to a live ServiceNow instance. "
+                    "No connector password was stored."
+                ),
                 "tags": tags_conn,
                 "weave_domain": resolved_weave,
-                "connection_info": {"type": "servicenow_connection", "table": table_name},
-                "connection_data": conn_data,
+                "connection_info": {
+                    "type": "servicenow_sample",
+                    "table": table_name,
+                    "is_sample": True,
+                    "host": safe_conn.get("instanceUrl") or safe_conn.get("host"),
+                },
                 "knowledge_model": incident_model,
             }
             if resolved_profile:
@@ -5768,47 +5795,23 @@ async def train_ml_models(
 async def distribute_model(
     model_id: str = Form(...),
     distribution_type: str = Form("api"),
-    target_environment: str = Form("production")
+    target_environment: str = Form("production"),
 ):
-    """Distribute trained ML model for deployment"""
-    try:
-        print(f"=== Distributing Model {model_id} ===")
-        
-        # Simulate model distribution
-        distribution_results = {
+    """Model distribution is not wired to a real registry on this build."""
+    return APIResponse(
+        success=False,
+        message=(
+            "Model distribution is not available on this build. "
+            "Trained artifacts stay on this host; nothing was deployed and no API key was issued."
+        ),
+        data={
             "model_id": model_id,
             "distribution_type": distribution_type,
             "target_environment": target_environment,
-            "deployment_url": f"https://api.knowledge-fabric.com/models/{model_id}",
-            "api_key": f"ml_{uuid.uuid4().hex[:16]}",
-            "status": "deployed",
-            "deployed_at": datetime.now().isoformat(),
-            "endpoints": {
-                "predict": f"/api/v1/ml/{model_id}/predict",
-                "health": f"/api/v1/ml/{model_id}/health",
-                "metrics": f"/api/v1/ml/{model_id}/metrics"
-            }
-        }
-        
-        print(f"Model {model_id} distributed successfully")
-        
-        return APIResponse(
-            success=True,
-            message="Model distributed successfully",
-            data=distribution_results,
-            error=None
-        )
-        
-    except Exception as e:
-        import traceback
-        print(f"Model distribution error: {e}")
-        print(f"Traceback: {traceback.format_exc()}")
-        return APIResponse(
-            success=False,
-            message="Failed to distribute model",
-            data=None,
-            error=str(e)
-        )
+            "status": "not_deployed",
+        },
+        error="distribute_model_not_available",
+    )
 
 @router.get("/models", response_model=APIResponse)
 async def get_all_models():

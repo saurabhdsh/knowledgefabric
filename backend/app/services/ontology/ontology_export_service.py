@@ -76,20 +76,30 @@ class OntologyExportService:
             f'  rdfs:comment "Knowledge Fabric ontology export ({version.id})" .',
             "",
         ]
-        class_local: Dict[str, str] = {}
+        class_local: Dict[str, str] = {
+            c.id: self._safe_local(c.normalized_name or c.name or c.id) for c in version.classes
+        }
         for c in version.classes:
-            local = self._safe_local(c.normalized_name or c.name or c.id)
-            class_local[c.id] = local
+            local = class_local[c.id]
             lines.append(f"weave:{local} a rdfs:Class ;")
             lines.append(f'  rdfs:label "{self._ttl_esc(c.name or c.normalized_name)}" ;')
             if c.definition:
                 lines.append(f'  rdfs:comment "{self._ttl_esc(c.definition)}" ;')
+            parent = class_local.get(getattr(c, "parent_class_id", None) or "")
+            if parent:
+                lines.append(f"  rdfs:subClassOf weave:{parent} ;")
             lines.append(f'  weave:confidence "{c.confidence_score:.4f}"^^xsd:decimal ;')
             lines.append(f'  weave:status "{self._ttl_esc(getattr(c.status, "value", str(c.status)))}" .')
             lines.append("")
 
+        used_preds: Dict[str, int] = {}
         for r in version.relationships:
-            pred = self._safe_local(r.relationship_name or r.id)
+            base_pred = self._safe_local(r.relationship_name or r.id)
+            n = used_preds.get(base_pred, 0)
+            used_preds[base_pred] = n + 1
+            # Two links that share a name (claims→members via member_id and
+            # via subscriber_id) must not overwrite each other's domain.
+            pred = base_pred if n == 0 else f"{base_pred}_{n + 1}"
             src = class_local.get(r.source_class_id) or self._safe_local(r.source_class_id)
             tgt = class_local.get(r.target_class_id) or self._safe_local(r.target_class_id)
             lines.append(f"weave:{pred} a rdf:Property ;")
@@ -133,14 +143,18 @@ class OntologyExportService:
             f'  rdfs:comment "OWL export of Knowledge Fabric ontology project {self._ttl_esc(version.project_id)}" .',
             "",
         ]
-        class_local: Dict[str, str] = {}
+        class_local: Dict[str, str] = {
+            c.id: self._safe_local(c.normalized_name or c.name or c.id) for c in version.classes
+        }
         for c in version.classes:
-            local = self._safe_local(c.normalized_name or c.name or c.id)
-            class_local[c.id] = local
+            local = class_local[c.id]
             lines.append(f"weave:{local} a owl:Class ;")
             lines.append(f'  rdfs:label "{self._ttl_esc(c.name or c.normalized_name)}" ;')
             if c.definition:
                 lines.append(f'  rdfs:comment "{self._ttl_esc(c.definition)}" ;')
+            parent = class_local.get(getattr(c, "parent_class_id", None) or "")
+            if parent:
+                lines.append(f"  rdfs:subClassOf weave:{parent} ;")
             for alias in (c.aliases or [])[:8]:
                 if alias and alias != c.name:
                     lines.append(f'  rdfs:label "{self._ttl_esc(alias)}" ;')
@@ -197,6 +211,79 @@ class OntologyExportService:
             lines.append(f'  rdfs:comment "{self._ttl_esc(c.expression)}" .')
             lines.append("")
 
+        return "\n".join(lines).rstrip() + "\n"
+
+    def export_shacl(self, version: OntologyVersion) -> str:
+        """Measured rules as SHACL shapes.
+
+        Each class becomes a NodeShape. Required attributes become
+        ``sh:minCount 1``. Cardinality on a relationship becomes ``sh:maxCount``
+        / ``sh:minCount`` on a property shape. Business-rule constraints are
+        kept as ``sh:description`` so a reviewer can see the original wording.
+        """
+        base = f"{WEAVE_ONT_NS}{version.project_id}/"
+        lines = [
+            "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
+            "@prefix sh: <http://www.w3.org/ns/shacl#> .",
+            "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .",
+            f"@prefix weave: <{base}> .",
+            "",
+        ]
+        class_local = {
+            c.id: self._safe_local(c.normalized_name or c.name or c.id) for c in version.classes
+        }
+        attrs_by_class: Dict[str, List[OntologyAttribute]] = {}
+        for a in version.attributes:
+            attrs_by_class.setdefault(a.class_id, []).append(a)
+        rels_by_source: Dict[str, List[OntologyRelationship]] = {}
+        for r in version.relationships:
+            rels_by_source.setdefault(r.source_class_id, []).append(r)
+        constraints_by_class: Dict[str, List[OntologyConstraint]] = {}
+        for c in version.constraints:
+            if c.related_class_id:
+                constraints_by_class.setdefault(c.related_class_id, []).append(c)
+
+        used_preds: Dict[str, int] = {}
+        for cls in version.classes:
+            local = class_local[cls.id]
+            shape = f"{local}Shape"
+            lines.append(f"weave:{shape} a sh:NodeShape ;")
+            lines.append(f"  sh:targetClass weave:{local} ;")
+            lines.append(f'  sh:name "{self._ttl_esc(cls.name or cls.normalized_name)}" ;')
+            for a in attrs_by_class.get(cls.id) or []:
+                prop = self._safe_local(f"{local}_{a.attribute_name or a.normalized_name or a.id}")
+                lines.append("  sh:property [")
+                lines.append(f"    sh:path weave:{prop} ;")
+                lines.append(f"    sh:datatype {self._xsd_type(a.data_type_guess)} ;")
+                if a.required_flag_guess:
+                    lines.append("    sh:minCount 1 ;")
+                lines.append(f'    sh:name "{self._ttl_esc(a.attribute_name or a.normalized_name)}" ;')
+                lines.append("  ] ;")
+            for r in rels_by_source.get(cls.id) or []:
+                base_pred = self._safe_local(r.relationship_name or r.id)
+                n = used_preds.get(base_pred, 0)
+                used_preds[base_pred] = n + 1
+                pred = base_pred if n == 0 else f"{base_pred}_{n + 1}"
+                tgt = class_local.get(r.target_class_id) or self._safe_local(r.target_class_id)
+                lines.append("  sh:property [")
+                lines.append(f"    sh:path weave:{pred} ;")
+                lines.append(f"    sh:class weave:{tgt} ;")
+                card = (r.cardinality_if_detected or "").lower()
+                if card in ("1:1", "1-1", "one-to-one", "n:1", "n-1", "many-to-one"):
+                    lines.append("    sh:maxCount 1 ;")
+                if card in ("1:1", "1-1", "one-to-one", "1:n", "1-n", "one-to-many"):
+                    lines.append("    sh:minCount 1 ;")
+                lines.append(f'    sh:name "{self._ttl_esc(r.relationship_name)}" ;')
+                lines.append("  ] ;")
+            for rule in constraints_by_class.get(cls.id) or []:
+                lines.append(f'  sh:description "{self._ttl_esc(rule.expression)}" ;')
+            # Close the shape: last property ends with `;`, replace trailing with `.`
+            if lines[-1].endswith(" ;"):
+                lines[-1] = lines[-1][:-2] + " ."
+            else:
+                lines.append("  .")
+            lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
     def export_graph(self, version: OntologyVersion) -> Dict[str, Any]:
@@ -333,6 +420,7 @@ class OntologyExportService:
         return {
             "id": c.id, "name": c.name, "normalized_name": c.normalized_name,
             "definition": c.definition, "aliases": c.aliases,
+            "parent_class_id": c.parent_class_id,
             "confidence_score": c.confidence_score, "status": c.status.value,
             "source_evidence": [{"text_snippet": e.text_snippet[:200], "page_number": e.page_number, "xml_path": e.xml_path} for e in c.source_evidence],
         }

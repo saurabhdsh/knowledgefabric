@@ -118,6 +118,11 @@ class SchemaAnalyzer:
                 entity["evidence"] = {"basis": "data_profile", "row_count": rows, "kind": table.get("kind")}
             entities.append(entity)
             if profiled:
+                # Two links to the same table are two different facts
+                # (provider_id and pcp_provider_id), so each gets its own name.
+                targets = [str(fk.get("references_table") or "") for fk in table.get("foreign_keys") or []]
+                targets += [str(fk.get("references_table") or "") for fk in table.get("composite_foreign_keys") or []]
+                repeated = {t for t in targets if t and targets.count(t) > 1}
                 for fk in table.get("foreign_keys") or []:
                     target = str(fk.get("references_table") or "")
                     if not target:
@@ -136,9 +141,20 @@ class SchemaAnalyzer:
                         f"{tname}.{fk.get('column')} exist in {target}.{fk.get('references_column')}"
                         + (f" ({evidence_basis})" if evidence_basis else "")
                     )
+                    if fk.get("distinct_values") is not None:
+                        detail += f"; {fk.get('matched_values')} of {fk.get('distinct_values')} distinct values"
+                    if fk.get("support") == "low":
+                        detail += "; few values, so the column name carries this link"
+                    if fk.get("status") == "accepted_by_review":
+                        detail += "; accepted by a reviewer"
+                    if fk.get("parent_is_sample"):
+                        detail += f"; {target} is a sample of its source"
+                    rel_name = f"references_{target}"
+                    if target in repeated:
+                        rel_name = f"references_{target}_via_{fk.get('column')}"
                     relationships.append({
                         "id": f"rel_{uuid.uuid4().hex[:8]}",
-                        "name": f"references_{target}",
+                        "name": rel_name,
                         "source_entity": norm,
                         "target_entity": self._normalize(target),
                         "source_columns": [c for c in [fk.get("column")] if c],
@@ -154,6 +170,48 @@ class SchemaAnalyzer:
                             "matched_values": fk.get("matched_values"),
                             "orphan_values": fk.get("orphan_values"),
                             "name_affinity": fk.get("name_affinity"),
+                            "distinct_values": fk.get("distinct_values"),
+                            "value_confidence": fk.get("value_confidence"),
+                            "support": fk.get("support"),
+                            "status": fk.get("status") or "accepted",
+                            "detail": detail,
+                        },
+                    })
+                for fk in table.get("composite_foreign_keys") or []:
+                    target = str(fk.get("references_table") or "")
+                    cols = [str(c) for c in fk.get("columns") or []]
+                    ref_cols = [str(c) for c in fk.get("references_columns") or []]
+                    if not target or len(cols) != len(ref_cols) or not cols:
+                        continue
+                    card_raw = str(fk.get("cardinality") or "")
+                    card = "1:1" if card_raw in ("one-to-one", "1:1", "1-1") else "n:1"
+                    overlap = fk.get("overlap")
+                    detail = (
+                        f"{float(overlap or 0):.0%} of the distinct ({', '.join(cols)}) pairs of {tname} "
+                        f"exist as ({', '.join(ref_cols)}) in {target} (two-column key)"
+                    )
+                    rel_name = f"references_{target}"
+                    if target in repeated:
+                        rel_name = f"references_{target}_via_{'_'.join(cols)}"
+                    relationships.append({
+                        "id": f"rel_{uuid.uuid4().hex[:8]}",
+                        "name": rel_name,
+                        "source_entity": norm,
+                        "target_entity": self._normalize(target),
+                        "source_columns": cols,
+                        "target_columns": ref_cols,
+                        "cardinality": card,
+                        "confidence": float(fk.get("confidence") or 0.0),
+                        "extraction_source": "rule_based",
+                        "tabular_binding": True,
+                        "evidence_snippet": detail,
+                        "evidence": {
+                            "basis": str(fk.get("evidence") or "pair-inclusion"),
+                            "overlap": overlap,
+                            "matched_values": fk.get("matched_values"),
+                            "orphan_values": fk.get("orphan_values"),
+                            "distinct_values": fk.get("distinct_values"),
+                            "status": fk.get("status") or "accepted",
                             "detail": detail,
                         },
                     })
@@ -185,6 +243,7 @@ class SchemaAnalyzer:
                         "extraction_source": "rule_based",
                         "tabular_binding": True,
                     })
+        self.infer_parent_classes(entities)
         return {"entities": entities, "relationships": relationships, "attributes": attributes}
 
     def _llm_analyze(self, profile: Dict[str, Any]) -> Dict[str, Any]:
@@ -226,6 +285,32 @@ class SchemaAnalyzer:
         rels = rules.get("relationships", []) + llm.get("relationships", [])
         attrs = rules.get("attributes", []) + llm.get("attributes", [])
         return {"entities": list(entities.values()), "relationships": rels, "attributes": attrs}
+
+
+    def infer_parent_classes(self, entities: List[Dict[str, Any]]) -> None:
+        """When one entity name is a proper prefix of another, the shorter is the parent.
+
+        ``Claim`` becomes the parent of ``ClaimLine``. Names that only share a
+        short stem (``Plan`` / ``Plant``) are left alone.
+        """
+        from app.services.ontology.text_match import canonical_key
+
+        keyed = [(canonical_key(e.get("normalized_name") or e.get("name") or ""), e) for e in entities]
+        keyed = [(k, e) for k, e in keyed if k]
+        for child_key, child in keyed:
+            parents = [
+                (parent_key, parent)
+                for parent_key, parent in keyed
+                if parent is not child
+                and len(parent_key) >= 4
+                and child_key != parent_key
+                and (child_key.startswith(parent_key + " ") or child_key.startswith(parent_key))
+            ]
+            if len(parents) != 1:
+                continue
+            # Prefer the longest proper parent when several match.
+            parents.sort(key=lambda item: -len(item[0]))
+            child["parent_class_id"] = parents[0][1].get("id")
 
     def _normalize(self, value: str) -> str:
         cleaned = re.sub(r"[^a-zA-Z0-9_]", "_", value.strip())

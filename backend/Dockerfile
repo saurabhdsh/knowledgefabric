@@ -50,8 +50,11 @@ RUN pip install --upgrade pip \
 # Copy application code
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p uploads chroma_db models
+# Create necessary directories and a non-root runtime user.
+RUN mkdir -p uploads chroma_db models /var/weave \
+    && groupadd --system weave \
+    && useradd --system --gid weave --home-dir /var/weave --shell /usr/sbin/nologin weave \
+    && chown -R weave:weave /app /var/weave
 
 # Expose port
 EXPOSE 8000
@@ -59,6 +62,8 @@ EXPOSE 8000
 # Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
+
+USER weave
 
 # Run the application
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

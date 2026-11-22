@@ -337,6 +337,24 @@ def _profile_table(name: str, rows: List[Dict[str, Any]], source_row_count: Opti
                 primary_key = [a, b]
                 break
 
+    # Pairs of identifier columns that identify a row together while neither
+    # does alone, e.g. (order_id, line_no). Another table can point at such a pair.
+    composite_keys: List[List[str]] = []
+    if len(primary_key) == 2:
+        composite_keys.append(list(primary_key))
+    if row_count:
+        pair_cols = [
+            c["name"] for c in columns
+            if c["null_count"] == 0 and c["type"] in ("integer", "string")
+            and is_id_name(c["name"]) and not c["is_unique"]
+        ][:6]
+        for a, b in combinations(pair_cols, 2):
+            if [a, b] in composite_keys:
+                continue
+            pairs = {(_hashable(r.get(a)), _hashable(r.get(b))) for r in rows}
+            if len(pairs) == row_count:
+                composite_keys.append([a, b])
+
     for col in columns:
         if col["name"] in primary_key:
             col["role"] = "identifier"
@@ -356,6 +374,7 @@ def _profile_table(name: str, rows: List[Dict[str, Any]], source_row_count: Opti
         "columns": columns,
         "primary_key": primary_key,
         "key_candidates": [c["name"] for c in ranked],
+        "composite_key_candidates": composite_keys,
         "label_column": label_column,
     }
 
@@ -375,12 +394,68 @@ def _name_affinity(child_col: str, parent_table: str, parent_col: str) -> float:
     return 0.0
 
 
-def discover_foreign_keys(tables: List[Dict[str, Any]], min_overlap: Optional[float] = None) -> List[Dict[str, Any]]:
+# A link below the acceptance threshold is not thrown away when there is a
+# reason to look at it: it is listed for review with the reason, and it is not
+# used for joins, the graph, or the ontology until someone accepts it.
+REVIEW_MIN_OVERLAP = 0.5
+# Without a name that points at the parent, this many distinct values must agree.
+MIN_SUPPORT_WITHOUT_NAME = 10
+LOW_SUPPORT = 5
+MIN_ACCEPT_CONFIDENCE = 0.5
+
+
+def wilson_lower(successes: int, n: int, z: float = 1.96) -> float:
+    """Lower end of the 95% Wilson interval for ``successes`` out of ``n``.
+
+    Two matches out of two is weak evidence (0.34); forty out of forty is
+    strong (0.91). This is what keeps a tiny column from scoring 1.0.
+    """
+    if n <= 0:
+        return 0.0
+    p = successes / n
+    denom = 1 + z * z / n
+    centre = p + z * z / (2 * n)
+    margin = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return max(0.0, (centre - margin) / denom)
+
+
+def _link_confidence(matched: int, n: int, affinity: float, id_like: bool) -> Tuple[float, float]:
+    """``(confidence, value_confidence)`` for a candidate link.
+
+    ``value_confidence`` is what the values alone support. A name that points
+    at the parent key is independent evidence, so it is averaged in; with no
+    such name the values have to carry the link on their own, discounted.
+    """
+    value_conf = wilson_lower(matched, n)
+    if affinity > 0:
+        confidence = max(value_conf, (value_conf + affinity) / 2)
+    else:
+        confidence = value_conf * (0.7 if id_like else 0.6)
+    return round(confidence, 4), round(value_conf, 4)
+
+
+def _sample_note(table: Dict[str, Any]) -> str:
+    return (
+        f"'{table['name']}' is a sample of {table['row_count']:,} of {table['source_row_count']:,} source rows, "
+        "so values with no match may be in rows that were not imported"
+    )
+
+
+def discover_foreign_keys(
+    tables: List[Dict[str, Any]],
+    min_overlap: Optional[float] = None,
+    review_out: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     """Find foreign keys by inclusion: child values contained in a parent key.
 
     ``overlap`` is the share of the child column's distinct values that exist in
     the parent key. Name affinity is used only to rank and to keep small-integer
     columns (ages, counts) from matching surrogate keys by accident.
+
+    Returns the accepted links. Links that are plausible but not proven are
+    appended to ``review_out`` with ``status: needs_review`` and the reasons:
+    too many values without a parent row, a parent table that is only a
+    sample, or too few values to tell.
     """
     threshold = settings.FABRIC_FK_MIN_OVERLAP if min_overlap is None else min_overlap
     parents: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
@@ -390,6 +465,7 @@ def discover_foreign_keys(tables: List[Dict[str, Any]], min_overlap: Optional[fl
             parents.append((table, cols[key_name]))
 
     best: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    best_review: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for child in tables:
         for col in child["columns"]:
             if col["type"] not in ("integer", "string") or col["distinct_count"] == 0:
@@ -397,6 +473,7 @@ def discover_foreign_keys(tables: List[Dict[str, Any]], min_overlap: Optional[fl
             if col["role"] in ("text", "flag", "date", "nested"):
                 continue
             child_values = col["_distinct"]
+            n = len(child_values)
             for parent, pkey in parents:
                 same_table = parent["name"] == child["name"]
                 if same_table and pkey["name"] == col["name"]:
@@ -406,28 +483,60 @@ def discover_foreign_keys(tables: List[Dict[str, Any]], min_overlap: Optional[fl
                 matched = len(child_values & pkey["_distinct"])
                 if not matched:
                     continue
-                overlap = matched / len(child_values)
-                if overlap < threshold:
-                    continue
+                overlap = matched / n
                 affinity = _name_affinity(col["name"], parent["name"], pkey["name"])
-                if same_table and affinity < 0.9 and not is_id_name(col["name"]):
+                id_like = is_id_name(col["name"])
+                if same_table and affinity < 0.9 and not id_like:
                     continue
-                if affinity > 0:
-                    weight = 1.0
-                elif col["type"] == "string" and is_id_name(col["name"]):
-                    weight = 0.7
-                elif col["type"] == "string":
-                    weight = 0.6
-                else:
-                    weight = 0.3  # integers with no naming evidence: not trusted
-                confidence = round(overlap * weight, 4)
-                if confidence < 0.5:
+                # Integers with no naming evidence (ages, counts) are never trusted.
+                if affinity == 0 and col["type"] != "string":
                     continue
                 # A column that is itself a key of its table and matches another
                 # table's key 1:1 is a shared key; keep it only with naming evidence.
                 if col["name"] in child["key_candidates"] and affinity == 0:
                     continue
+                confidence, value_conf = _link_confidence(matched, n, affinity, id_like)
+                parent_sampled = bool(parent.get("is_sample")) and bool(parent.get("source_row_count"))
+                reasons: List[str] = []
+                status = "accepted"
+                if overlap < threshold:
+                    if parent_sampled and affinity > 0:
+                        fraction = parent["row_count"] / max(1, parent["source_row_count"])
+                        if overlap < max(0.1, 0.8 * fraction):
+                            continue
+                        reasons.append(
+                            f"{n - matched} of {n} distinct values have no parent row, and "
+                            + _sample_note(parent)
+                        )
+                    elif overlap >= REVIEW_MIN_OVERLAP and (affinity > 0 or id_like):
+                        reasons.append(
+                            f"{n - matched} of {n} distinct values ({1 - overlap:.0%}) have no matching parent row"
+                        )
+                    else:
+                        continue
+                    status = "needs_review"
+                elif affinity == 0 and n < MIN_SUPPORT_WITHOUT_NAME:
+                    status = "needs_review"
+                    reasons.append(
+                        f"only {n} distinct value(s) and the column name does not point at "
+                        f"{parent['name']}.{pkey['name']}"
+                    )
+                elif confidence < MIN_ACCEPT_CONFIDENCE:
+                    status = "needs_review"
+                    reasons.append(f"only {n} distinct value(s) support this link")
+                if status == "accepted" and parent_sampled:
+                    reasons.append(_sample_note(parent))
                 is_pk = [pkey["name"]] == parent["primary_key"]
+                if affinity > 0:
+                    basis = (
+                        f"{matched} of {n} distinct values exist in {parent['name']}.{pkey['name']}, "
+                        "and the column name points at that key"
+                    )
+                else:
+                    basis = (
+                        f"{matched} of {n} distinct values exist in {parent['name']}.{pkey['name']}; "
+                        "the column names do not agree, so the values alone support this link"
+                    )
                 candidate = {
                     "from_table": child["name"],
                     "from_column": col["name"],
@@ -435,13 +544,19 @@ def discover_foreign_keys(tables: List[Dict[str, Any]], min_overlap: Optional[fl
                     "to_column": pkey["name"],
                     "overlap": round(overlap, 4),
                     "confidence": confidence,
+                    "value_confidence": value_conf,
                     "name_affinity": affinity,
                     "matched_values": matched,
-                    "distinct_values": len(child_values),
-                    "orphan_values": len(child_values) - matched,
+                    "distinct_values": n,
+                    "orphan_values": n - matched,
                     "parent_coverage": round(matched / max(1, pkey["distinct_count"]), 4),
                     "cardinality": "one-to-one" if col["is_unique"] else "many-to-one",
                     "evidence": "value-inclusion" + ("+name" if affinity > 0 else ""),
+                    "status": status,
+                    "support": "low" if n < LOW_SUPPORT else "ok",
+                    "parent_is_sample": parent_sampled,
+                    "confidence_basis": basis,
+                    "review_reasons": reasons,
                     "_rank": (
                         confidence,
                         affinity,
@@ -451,13 +566,153 @@ def discover_foreign_keys(tables: List[Dict[str, Any]], min_overlap: Optional[fl
                     ),
                 }
                 key = (child["name"], col["name"])
-                if key not in best or candidate["_rank"] > best[key]["_rank"]:
-                    best[key] = candidate
+                bucket = best if status == "accepted" else best_review
+                if key not in bucket or candidate["_rank"] > bucket[key]["_rank"]:
+                    bucket[key] = candidate
 
     fks = sorted(best.values(), key=lambda f: (f["from_table"], f["from_column"]))
     for fk in fks:
         fk.pop("_rank", None)
+    if review_out is not None:
+        for key in sorted(best_review):
+            if key in best:
+                continue  # the column already has an accepted parent
+            cand = best_review[key]
+            cand.pop("_rank", None)
+            review_out.append(cand)
     return fks
+
+
+def discover_composite_foreign_keys(
+    tables: List[Dict[str, Any]],
+    raw_tables: Dict[str, List[Dict[str, Any]]],
+    min_overlap: Optional[float] = None,
+    review_out: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Two-column foreign keys: a pair of child columns contained in a two-column key.
+
+    A table such as order lines is identified by (order_id, line_no). A child
+    that carries the same pair points at one line, which no single column can
+    express. Must run while the per-column ``_distinct`` sets are still present.
+    """
+    threshold = settings.FABRIC_FK_MIN_OVERLAP if min_overlap is None else min_overlap
+    found: List[Dict[str, Any]] = []
+    pending: List[Dict[str, Any]] = []
+
+    def _tuples(table: Dict[str, Any], names: Sequence[str]) -> set:
+        cols = {c["name"]: c for c in table["columns"]}
+        out = set()
+        for row in raw_tables.get(table["name"], []):
+            values = []
+            for name in names:
+                raw = row.get(name)
+                if is_null(raw):
+                    break
+                values.append(_hashable(normalize_value(raw, cols[name]["type"], cols[name])))
+            else:
+                out.add(tuple(values))
+        return out
+
+    parent_keys = [
+        (parent, list(pk))
+        for parent in tables if parent["row_count"]
+        for pk in (parent.get("composite_key_candidates") or [])
+    ]
+    seen_links: set = set()
+    for parent, pk in parent_keys:
+        pcols = {c["name"]: c for c in parent["columns"]}
+        parent_tuples = _tuples(parent, pk)
+        for child in tables:
+            if child["name"] == parent["name"] or not child["row_count"]:
+                continue
+            options: List[List[Tuple[Dict[str, Any], float]]] = []
+            for key_name in pk:
+                key_col = pcols[key_name]
+                matches: List[Tuple[Dict[str, Any], float]] = []
+                for col in child["columns"]:
+                    if col["type"] != key_col["type"] or not col["distinct_count"]:
+                        continue
+                    if col["role"] in ("text", "flag", "date", "nested"):
+                        continue
+                    shared = len(col["_distinct"] & key_col["_distinct"])
+                    if shared / len(col["_distinct"]) < REVIEW_MIN_OVERLAP:
+                        continue
+                    matches.append((col, _name_affinity(col["name"], parent["name"], key_name)))
+                matches.sort(key=lambda m: -m[1])
+                options.append(matches[:3])
+            if len(options) != 2 or not options[0] or not options[1]:
+                continue
+            best_pair: Optional[Dict[str, Any]] = None
+            for a, aff_a in options[0]:
+                for b, aff_b in options[1]:
+                    if a["name"] == b["name"]:
+                        continue
+                    child_tuples = _tuples(child, (a["name"], b["name"]))
+                    if not child_tuples:
+                        continue
+                    n = len(child_tuples)
+                    matched = len(child_tuples & parent_tuples)
+                    overlap = matched / n
+                    if overlap < REVIEW_MIN_OVERLAP:
+                        continue
+                    affinity = min(aff_a, aff_b)
+                    confidence, value_conf = _link_confidence(matched, n, affinity, True)
+                    reasons: List[str] = []
+                    status = "accepted"
+                    if overlap < threshold:
+                        status = "needs_review"
+                        reasons.append(f"{n - matched} of {n} distinct pairs have no matching parent row")
+                    elif affinity == 0:
+                        status = "needs_review"
+                        reasons.append("the column names do not point at the parent key")
+                    elif confidence < MIN_ACCEPT_CONFIDENCE:
+                        status = "needs_review"
+                        reasons.append(f"only {n} distinct pair(s) support this link")
+                    candidate = {
+                        "from_table": child["name"],
+                        "from_columns": [a["name"], b["name"]],
+                        "to_table": parent["name"],
+                        "to_columns": list(pk),
+                        "overlap": round(overlap, 4),
+                        "confidence": confidence,
+                        "value_confidence": value_conf,
+                        "name_affinity": affinity,
+                        "matched_values": matched,
+                        "distinct_values": n,
+                        "orphan_values": n - matched,
+                        "cardinality": "one-to-one" if n == child["row_count"] else "many-to-one",
+                        "evidence": "pair-inclusion" + ("+name" if affinity > 0 else ""),
+                        "status": status,
+                        "support": "low" if n < LOW_SUPPORT else "ok",
+                        "confidence_basis": (
+                            f"{matched} of {n} distinct ({a['name']}, {b['name']}) pairs exist as "
+                            f"({pk[0]}, {pk[1]}) in {parent['name']}"
+                        ),
+                        "review_reasons": reasons,
+                    }
+                    rank = (status == "accepted", confidence, affinity)
+                    if best_pair is None or rank > best_pair["_rank"]:
+                        candidate["_rank"] = rank
+                        best_pair = candidate
+            if best_pair is None:
+                continue
+            link = (child["name"], tuple(best_pair["from_columns"]), parent["name"])
+            if link in seen_links:
+                continue
+            seen_links.add(link)
+            best_pair.pop("_rank", None)
+            if best_pair["status"] == "accepted":
+                found.append(best_pair)
+            else:
+                pending.append(best_pair)
+    if review_out is not None:
+        accepted_pairs = {(f["to_table"], f["from_table"]) for f in found}
+        for cand in pending:
+            # The mirror image of an accepted link is the same fact read backwards.
+            if (cand["from_table"], cand["to_table"]) in accepted_pairs:
+                continue
+            review_out.append(cand)
+    return sorted(found, key=lambda f: (f["from_table"], f["from_columns"]))
 
 
 def _classify_tables(tables: List[Dict[str, Any]], fks: List[Dict[str, Any]]) -> None:
@@ -500,7 +755,12 @@ def profile_tables(
         _profile_table(name, rows, source_row_counts.get(name))
         for name, rows in tables.items()
     ]
-    fks = discover_foreign_keys(profiled, min_fk_overlap)
+    review: List[Dict[str, Any]] = []
+    fks = discover_foreign_keys(profiled, min_fk_overlap, review_out=review)
+    composite_review: List[Dict[str, Any]] = []
+    composite_fks = discover_composite_foreign_keys(
+        profiled, tables, min_fk_overlap, review_out=composite_review
+    )
     _classify_tables(profiled, fks)
 
     warnings: List[str] = []
@@ -534,6 +794,23 @@ def profile_tables(
                 f"{fk['from_table']}.{fk['from_column']} -> {fk['to_table']}.{fk['to_column']}: "
                 f"{fk['orphan_values']} value(s) have no matching parent row."
             )
+        if fk["support"] == "low":
+            warnings.append(
+                f"{fk['from_table']}.{fk['from_column']} -> {fk['to_table']}.{fk['to_column']}: "
+                f"only {fk['distinct_values']} distinct value(s) support this link "
+                f"(confidence {fk['confidence']:.2f})."
+            )
+    for cand in review:
+        warnings.append(
+            f"{cand['from_table']}.{cand['from_column']} -> {cand['to_table']}.{cand['to_column']} "
+            f"needs review: {'; '.join(cand['review_reasons'])}. It is not used until it is accepted."
+        )
+    for cand in composite_review:
+        warnings.append(
+            f"{cand['from_table']}.({', '.join(cand['from_columns'])}) -> "
+            f"{cand['to_table']}.({', '.join(cand['to_columns'])}) needs review: "
+            f"{'; '.join(cand['review_reasons'])}."
+        )
 
     total_rows = sum(t["row_count"] for t in profiled)
     known_source = [t["source_row_count"] for t in profiled if t["source_row_count"] is not None]
@@ -541,6 +818,10 @@ def profile_tables(
         "profile_version": 1,
         "tables": profiled,
         "foreign_keys": fks,
+        # Plausible links that are not proven. Not used for joins, the graph,
+        # or the ontology until a reviewer accepts them.
+        "foreign_key_candidates": review + composite_review,
+        "composite_foreign_keys": composite_fks,
         "warnings": warnings,
         "summary": {
             "table_count": len(profiled),
@@ -548,9 +829,71 @@ def profile_tables(
             "source_row_count": sum(known_source) if len(known_source) == len(profiled) else None,
             "is_sample": any(t["is_sample"] for t in profiled),
             "foreign_key_count": len(fks),
+            "foreign_key_review_count": len(review) + len(composite_review),
+            "composite_foreign_key_count": len(composite_fks),
             "tables_without_key": [t["name"] for t in profiled if t["row_count"] and not t["primary_key"]],
         },
     }
+
+
+def _link_key(link: Dict[str, Any]) -> Tuple[str, Tuple[str, ...], str, Tuple[str, ...]]:
+    """Identity of a link, the same for single-column and two-column forms."""
+    from_cols = link.get("from_columns") or [link.get("from_column")]
+    to_cols = link.get("to_columns") or [link.get("to_column")]
+    return (
+        str(link.get("from_table") or ""),
+        tuple(str(c) for c in from_cols if c),
+        str(link.get("to_table") or ""),
+        tuple(str(c) for c in to_cols if c),
+    )
+
+
+def apply_relationship_decisions(profile: Dict[str, Any], decisions: Optional[List[Dict[str, Any]]]) -> int:
+    """Apply reviewer decisions to the links that were listed for review.
+
+    ``accept`` moves a candidate into the links the fabric uses (joins, graph,
+    ontology) and records who accepted it. ``reject`` keeps it out and stops it
+    from being listed again. Decisions about links that are no longer
+    candidates are ignored, so a rebuild on changed data starts from the data.
+    Returns how many decisions were applied.
+    """
+    if not decisions:
+        return 0
+    by_key = {_link_key(d): d for d in decisions}
+    applied = 0
+    remaining: List[Dict[str, Any]] = []
+    for cand in profile.get("foreign_key_candidates") or []:
+        decision = by_key.get(_link_key(cand))
+        verdict = str((decision or {}).get("decision") or "").lower()
+        if cand.get("status") != "needs_review" or verdict not in ("accept", "reject"):
+            remaining.append(cand)
+            continue
+        applied += 1
+        cand["reviewed_by"] = decision.get("by")
+        cand["reviewed_at"] = decision.get("at")
+        if verdict == "reject":
+            cand["status"] = "rejected"
+            remaining.append(cand)
+            continue
+        cand["status"] = "accepted_by_review"
+        if cand.get("from_columns"):
+            profile.setdefault("composite_foreign_keys", []).append(cand)
+            continue
+        profile.setdefault("foreign_keys", []).append(cand)
+        table = table_by_name(profile, cand["from_table"])
+        if table:
+            for col in table["columns"]:
+                if col["name"] == cand["from_column"] and col["name"] not in table["primary_key"]:
+                    col["role"] = "foreign_key"
+    profile["foreign_key_candidates"] = remaining
+    profile.get("foreign_keys", []).sort(key=lambda f: (f["from_table"], f["from_column"]))
+    summary = profile.setdefault("summary", {})
+    summary["foreign_key_count"] = len(profile.get("foreign_keys") or [])
+    summary["composite_foreign_key_count"] = len(profile.get("composite_foreign_keys") or [])
+    summary["foreign_key_review_count"] = sum(
+        1 for c in profile.get("foreign_key_candidates") or [] if c.get("status") == "needs_review"
+    )
+    return applied
 
 
 def table_by_name(profile: Dict[str, Any], name: str) -> Optional[Dict[str, Any]]:

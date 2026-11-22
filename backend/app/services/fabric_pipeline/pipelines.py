@@ -25,7 +25,7 @@ from app.services.fabric_pipeline.document_parser import (
 from app.services.fabric_pipeline.runner import PipelineError, PipelineRun, delete_manifest, load_profile
 from app.services.fabric_pipeline.table_store import assign_sql_names, table_store
 from app.services.fabric_pipeline.tabular_index import build_index_documents
-from app.services.fabric_pipeline.tabular_profiler import profile_tables
+from app.services.fabric_pipeline.tabular_profiler import apply_relationship_decisions, profile_tables
 from app.services.fabric_pipeline.validators import failed, validate_documents, validate_tabular, index_count_check
 from app.services.platform.reindex import embedding_stamp
 from app.services.vector_service import vector_service
@@ -82,8 +82,31 @@ def _schema_tables(profile: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "name_affinity": fk.get("name_affinity"),
                 "parent_coverage": fk.get("parent_coverage"),
                 "distinct_values": fk.get("distinct_values"),
+                "value_confidence": fk.get("value_confidence"),
+                "support": fk.get("support"),
+                "status": fk.get("status") or "accepted",
+                "confidence_basis": fk.get("confidence_basis"),
+                "parent_is_sample": fk.get("parent_is_sample", False),
             }
             for fk in profile.get("foreign_keys", [])
+            if fk["from_table"] == table["name"]
+        ]
+        composite = [
+            {
+                "columns": list(fk["from_columns"]),
+                "references_table": fk["to_table"],
+                "references_columns": list(fk["to_columns"]),
+                "cardinality": fk["cardinality"],
+                "confidence": fk["confidence"],
+                "overlap": fk["overlap"],
+                "evidence": fk.get("evidence"),
+                "matched_values": fk.get("matched_values"),
+                "orphan_values": fk.get("orphan_values"),
+                "distinct_values": fk.get("distinct_values"),
+                "status": fk.get("status") or "accepted",
+                "confidence_basis": fk.get("confidence_basis"),
+            }
+            for fk in profile.get("composite_foreign_keys", [])
             if fk["from_table"] == table["name"]
         ]
         out.append({
@@ -95,6 +118,8 @@ def _schema_tables(profile: Dict[str, Any]) -> List[Dict[str, Any]]:
             "primary_key": table["primary_key"],
             "label_column": table.get("label_column"),
             "foreign_keys": fks,
+            "composite_foreign_keys": composite,
+            "composite_key_candidates": table.get("composite_key_candidates") or [],
             "columns": [
                 {
                     "name": c["name"],
@@ -145,11 +170,17 @@ def _tabular_record_fields(profile: Dict[str, Any], tables: Dict[str, List[Dict[
                     "from_table", "from_column", "to_table", "to_column",
                     "cardinality", "overlap", "confidence", "evidence",
                     "matched_values", "orphan_values", "name_affinity",
+                    "value_confidence", "support", "status", "confidence_basis",
+                    "distinct_values", "parent_is_sample", "review_reasons",
                 )
                 if k in fk
             }
             for fk in profile.get("foreign_keys", [])
         ],
+        # Two-column links, and links that wait for a reviewer. The second list
+        # is shown for review and is not used to join, graph, or model anything.
+        "composite_relationships": list(profile.get("composite_foreign_keys") or []),
+        "relationship_candidates": list(profile.get("foreign_key_candidates") or []),
         "rows_imported": summary["row_count"],
         "rows_in_source": summary["source_row_count"],
         "is_sample": summary["is_sample"],
@@ -181,6 +212,7 @@ def run_tabular_pipeline(
     try:
         with run.stage("profile") as st:
             profile = profile_tables(tables, source_row_counts)
+            apply_relationship_decisions(profile, record.get("relationship_decisions"))
             assign_sql_names(profile)
             if profile["summary"]["row_count"] == 0:
                 raise PipelineError("The source returned no rows")
@@ -194,6 +226,8 @@ def run_tabular_pipeline(
                 columns=sum(len(t["columns"]) for t in profile["tables"]),
                 primary_keys={t["name"]: t["primary_key"] for t in profile["tables"]},
                 foreign_keys=len(profile["foreign_keys"]),
+                two_column_foreign_keys=len(profile.get("composite_foreign_keys") or []),
+                relationships_needing_review=profile["summary"].get("foreign_key_review_count", 0),
             )
             run.manifest["profile"] = profile
 
@@ -514,6 +548,7 @@ def run_composite_pipeline(
         with run.stage("model") as st:
             if tables:
                 profile = profile_tables(tables, source_counts)
+                apply_relationship_decisions(profile, record.get("relationship_decisions"))
                 assign_sql_names(profile)
                 for table in profile["tables"]:
                     table["origin_fabric_id"] = table_origin.get(table["name"])
@@ -571,11 +606,19 @@ def run_composite_pipeline(
                 except Exception as exc:
                     st.warn(f"Entity resolution skipped: {exc}")
                     entity_link_summary = {"link_count": 0, "chunk_count_linked": 0, "error": str(exc)}
+            unclear = int(entity_link_summary.get("ambiguous_name_count") or 0)
             st.metrics(
                 checks=checks,
                 entity_links=entity_link_summary.get("link_count", 0),
                 entity_chunks_linked=entity_link_summary.get("chunk_count_linked", 0),
+                entity_links_by_basis=entity_link_summary.get("by_basis") or {},
+                ambiguous_names=unclear,
             )
+            if unclear:
+                st.warn(
+                    f"{unclear} name mention(s) match more than one row and were linked to none. "
+                    "They are listed under entity links for review."
+                )
             for check in checks:
                 if check["status"] == "warn":
                     st.warn(check["detail"])
@@ -617,6 +660,8 @@ def run_composite_pipeline(
                 "entity_links": {
                     "link_count": entity_link_summary.get("link_count", 0),
                     "chunk_count_linked": entity_link_summary.get("chunk_count_linked", 0),
+                    "by_basis": entity_link_summary.get("by_basis") or {},
+                    "ambiguous_name_count": entity_link_summary.get("ambiguous_name_count", 0),
                     "path": entity_link_summary.get("path"),
                 },
                 "shared_ontology": ontology_refs,
@@ -701,6 +746,8 @@ def refresh_composite_pipeline(
         "approved_ontology_version_id": fabric.get("approved_ontology_version_id"),
         "guardrails": fabric.get("guardrails"),
         "inherited_guardrails": fabric.get("inherited_guardrails"),
+        "relationship_decisions": fabric.get("relationship_decisions"),
+        "access": fabric.get("access"),
         "status": fabric.get("status") or "active",
         "source_fabric_ids": source_ids,
         "owner_id": fabric.get("owner_id"),
