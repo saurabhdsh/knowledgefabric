@@ -78,17 +78,20 @@ def init_db() -> None:
 
 
 def _ensure_schema_columns(engine) -> None:
-    """Add columns introduced after initial release (SQLite-safe)."""
+    """Add columns introduced after initial release (SQLite + Postgres safe)."""
+    is_pg = engine.dialect.name == "postgresql"
+    bool_default = "BOOLEAN DEFAULT FALSE"  # Postgres rejects BOOLEAN DEFAULT 0
+    ts_type = "TIMESTAMP" if is_pg else "DATETIME"
     additions = {
         "fabrics": [("owner_id", "VARCHAR(64)")],
         "ontology_projects": [("owner_id", "VARCHAR(64)")],
         "users": [
             ("role", "VARCHAR(32) DEFAULT 'user'"),
             ("allowed_features", "TEXT"),
-            ("must_change_password", "BOOLEAN DEFAULT 0"),
+            ("must_change_password", bool_default),
             ("failed_login_count", "INTEGER DEFAULT 0"),
-            ("locked_until", "DATETIME"),
-            ("password_changed_at", "DATETIME"),
+            ("locked_until", ts_type),
+            ("password_changed_at", ts_type),
         ],
         "retrieval_episodes": [
             ("route", "VARCHAR(64)"),
