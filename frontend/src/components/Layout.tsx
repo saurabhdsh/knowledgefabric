@@ -34,6 +34,7 @@ const navigation: Array<{
   sublabel: string;
   feature: WeaveFeatureKey;
   group: NavGroup;
+  mobileOnly?: boolean;
 }> = [
   { name: 'Dashboard', short: 'Home', href: '/', icon: HomeIcon, sublabel: 'Overview', feature: 'dashboard', group: 'Home' },
   { name: 'Create Knowledge', short: 'Create', href: '/knowledge', icon: BookOpenIcon, sublabel: 'Fabric builder', feature: 'create_knowledge', group: 'Build' },
@@ -44,7 +45,8 @@ const navigation: Array<{
   { name: 'Context Analysis', short: 'Context', href: '/context', icon: MagnifyingGlassIcon, sublabel: 'Answer packets', feature: 'context', group: 'Understand' },
   { name: 'Test with LLM', short: 'Ask', href: '/test-llm', icon: ChatBubbleLeftRightIcon, sublabel: 'Ask a fabric', feature: 'test_llm', group: 'Use' },
   { name: 'Agent Data Utilities', short: 'Tools', href: '/ontology/agent-utilities', icon: CommandLineIcon, sublabel: 'Agent toolkit', feature: 'agent_utilities', group: 'Use' },
-  { name: 'User Management', short: 'Users', href: '/users', icon: UsersIcon, sublabel: 'Platform users', feature: 'user_management', group: 'Use' },
+  // User Management lives in the account badge on desktop so the top bar does not clip "Users" to "Use".
+  { name: 'User Management', short: 'Users', href: '/users', icon: UsersIcon, sublabel: 'Platform users', feature: 'user_management', group: 'Use', mobileOnly: true },
 ];
 
 const GROUP_ORDER: NavGroup[] = ['Home', 'Build', 'Understand', 'Use'];
@@ -144,7 +146,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                         >
                           <item.icon className="h-4 w-4 shrink-0" />
                           <span className="min-w-0">
-                            <span className="block truncate">{item.short}</span>
+                            <span className="block truncate">{item.name}</span>
                             <span className="block truncate text-[10px] text-[#8b9cb0]">{item.sublabel}</span>
                           </span>
                         </Link>
@@ -178,9 +180,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               <span className="hidden text-sm font-semibold tracking-[-0.03em] text-[#e8edf4] sm:block">Weave</span>
             </Link>
 
-            <nav className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto lg:flex [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <nav className="hidden min-w-0 flex-1 items-center gap-0.5 overflow-x-auto pl-1 pr-3 lg:flex [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {GROUP_ORDER.map((group, groupIndex) => {
-                const items = visibleNavigation.filter((item) => item.group === group);
+                const items = visibleNavigation.filter((item) => item.group === group && !item.mobileOnly);
                 if (items.length === 0) return null;
                 return (
                   <div key={group} className="flex shrink-0 items-center gap-0.5">
@@ -192,7 +194,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                           key={item.href}
                           to={item.href}
                           title={item.name}
-                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[12px] font-medium tracking-[-0.01em] transition ${
+                          className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1.5 text-[12px] font-medium tracking-[-0.01em] transition ${
                             active
                               ? 'bg-white/[0.1] text-[#e8edf4] shadow-[inset_0_1px_0_rgba(255,255,255,0.28)]'
                               : 'text-[#8b9cb0] hover:bg-white/[0.05] hover:text-[#e8edf4]'

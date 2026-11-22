@@ -1,5 +1,5 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { userInitials } from '../utils/authStorage';
 
@@ -8,10 +8,11 @@ interface UserAccountBadgeProps {
 }
 
 const UserAccountBadge: React.FC<UserAccountBadgeProps> = ({ compact = false }) => {
-  const { user, logout } = useAuth();
+  const { user, logout, can } = useAuth();
   const navigate = useNavigate();
   const initials = userInitials(user);
   const displayName = user?.display_name || user?.username || 'User';
+  const showUsers = can('user_management');
 
   const handleLogout = () => {
     logout();
@@ -20,11 +21,20 @@ const UserAccountBadge: React.FC<UserAccountBadgeProps> = ({ compact = false }) 
 
   if (compact) {
     return (
-      <div className="flex items-center gap-2 shrink-0 rounded-lg border border-[rgba(148,163,184,0.16)] bg-white/[0.03] px-2 py-1.5">
-        <div className="h-7 w-7 rounded-md bg-gradient-to-br from-cyan-400 to-violet-500 text-[10px] font-semibold text-white flex items-center justify-center">
+      <div className="flex items-center gap-2 shrink-0 rounded-full border border-[rgba(148,163,184,0.16)] bg-white/[0.03] pl-1.5 pr-2 py-1">
+        <div className="h-7 w-7 rounded-full bg-gradient-to-br from-cyan-400 to-violet-500 text-[10px] font-semibold text-white flex items-center justify-center shrink-0">
           {initials}
         </div>
-        <span className="text-xs text-[#e8edf4] font-medium truncate max-w-[88px]">{displayName}</span>
+        <span className="text-xs text-[#e8edf4] font-medium truncate max-w-[72px] xl:max-w-[100px]">{displayName}</span>
+        {showUsers && (
+          <Link
+            to="/users"
+            title="User Management"
+            className="text-[10px] uppercase tracking-[0.12em] text-[#9adfff] hover:text-white whitespace-nowrap"
+          >
+            Users
+          </Link>
+        )}
         <button
           type="button"
           onClick={handleLogout}
@@ -47,6 +57,14 @@ const UserAccountBadge: React.FC<UserAccountBadgeProps> = ({ compact = false }) 
           {user?.role === 'admin' ? 'Admin' : 'User'}
         </div>
       </div>
+      {showUsers && (
+        <Link
+          to="/users"
+          className="ml-1 text-[10px] uppercase tracking-[0.12em] text-[#9adfff] hover:text-white whitespace-nowrap"
+        >
+          Users
+        </Link>
+      )}
       <button
         type="button"
         onClick={handleLogout}
