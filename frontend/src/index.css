@@ -420,4 +420,159 @@ code {
 .kf-card-in {
   animation: kf-card-in 0.95s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+
+.login-waves {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.login-waves__glow {
+  position: absolute;
+  width: 42rem;
+  height: 42rem;
+  border-radius: 999px;
+  filter: blur(40px);
+  opacity: 0.55;
+}
+
+.login-waves__glow--left {
+  top: -8rem;
+  left: -6rem;
+  background: radial-gradient(circle, rgba(94, 200, 242, 0.16), transparent 68%);
+}
+
+.login-waves__glow--right {
+  right: -8rem;
+  bottom: -4rem;
+  background: radial-gradient(circle, rgba(226, 214, 255, 0.38), transparent 70%);
+}
+
+.login-waves__horizon {
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  top: 28%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(94, 200, 242, 0.35) 16%,
+    rgba(255, 255, 255, 0.8) 50%,
+    rgba(94, 200, 242, 0.28) 78%,
+    transparent
+  );
+  box-shadow: 0 0 36px rgba(94, 200, 242, 0.7), 0 0 80px rgba(94, 200, 242, 0.28);
+}
+
+.login-waves__stage {
+  position: absolute;
+  left: -18%;
+  right: -18%;
+  top: 8%;
+  bottom: -28%;
+  perspective: 1100px;
+  perspective-origin: 50% 8%;
+}
+
+.login-waves__floor {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transform-origin: center top;
+  animation: login-floor-breathe 36s ease-in-out infinite;
+}
+
+.login-wave {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 58%;
+  overflow: hidden;
+  transform-style: preserve-3d;
+}
+
+.login-wave__sheet {
+  display: block;
+  width: 200%;
+  height: 100%;
+  animation-name: login-wave-drift;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+.login-wave__crest {
+  stroke-width: 1.4;
+  filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.35));
+}
+
+.login-waves__sheen {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    115deg,
+    transparent 32%,
+    rgba(255, 255, 255, 0.045) 46%,
+    rgba(255, 255, 255, 0.12) 50%,
+    rgba(255, 255, 255, 0.04) 54%,
+    transparent 68%
+  );
+  mix-blend-mode: screen;
+  animation: login-sheen 48s ease-in-out infinite;
+}
+
+.login-waves__vignette {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 46%, transparent 0%, transparent 36%, rgba(4, 5, 8, 0.35) 68%, #040508 88%),
+    linear-gradient(to top, #040508 0%, transparent 26%);
+}
+
+@keyframes login-wave-drift {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-50%, 0, 0); }
+}
+
+@keyframes login-floor-breathe {
+  0%, 100% { transform: rotateX(52deg) translateY(0) scale(1.06); }
+  50% { transform: rotateX(49deg) translateY(-6px) scale(1.08); }
+}
+
+@keyframes login-sheen {
+  0%, 100% { transform: translateX(-8%); opacity: 0.55; }
+  50% { transform: translateX(8%); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-waves__floor,
+  .login-wave__sheet,
+  .login-waves__sheen {
+    animation: none;
+  }
+}
+
+.dash-loom {
+  stroke-dasharray: 6 14;
+  animation: dash-loom 36s linear infinite;
+}
+
+@keyframes dash-loom {
+  to { stroke-dashoffset: -480; }
+}
+
+.dash-node {
+  animation: kf-card-in 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dash-loom,
+  .dash-node,
+  .kf-card-in {
+    animation: none;
+  }
+}
  

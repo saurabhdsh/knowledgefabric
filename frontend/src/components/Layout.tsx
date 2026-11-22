@@ -24,135 +24,35 @@ interface LayoutProps {
   children: React.ReactNode;
 }
 
+type NavGroup = 'Home' | 'Build' | 'Understand' | 'Use';
+
 const navigation: Array<{
   name: string;
+  short: string;
   href: string;
   icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
   sublabel: string;
   feature: WeaveFeatureKey;
-  color: string;
-  bgColor: string;
-  textColor: string;
-  iconColor: string;
+  group: NavGroup;
 }> = [
-  { 
-    name: 'Dashboard', 
-    href: '/', 
-    icon: HomeIcon,
-    sublabel: 'Overview',
-    feature: 'dashboard',
-    color: 'from-blue-500 to-blue-600',
-    bgColor: 'bg-blue-50',
-    textColor: 'text-blue-700',
-    iconColor: 'text-blue-500'
-  },
-  { 
-    name: 'Create Knowledge', 
-    href: '/knowledge', 
-    icon: BookOpenIcon,
-    sublabel: 'Fabric Builder',
-    feature: 'create_knowledge',
-    color: 'from-purple-500 to-purple-600',
-    bgColor: 'bg-purple-50',
-    textColor: 'text-purple-700',
-    iconColor: 'text-purple-500'
-  },
-  { 
-    name: 'Train ML Models', 
-    href: '/train-ml', 
-    icon: CpuChipIcon,
-    sublabel: 'Model Training',
-    feature: 'train_ml',
-    color: 'from-red-500 to-red-600',
-    bgColor: 'bg-red-50',
-    textColor: 'text-red-700',
-    iconColor: 'text-red-500'
-  },
-  { 
-    name: 'Available Fabrics', 
-    href: '/fabrics', 
-    icon: SparklesIcon,
-    sublabel: 'Fabric Catalog',
-    feature: 'fabrics',
-    color: 'from-indigo-500 to-indigo-600',
-    bgColor: 'bg-indigo-50',
-    textColor: 'text-indigo-700',
-    iconColor: 'text-indigo-500'
-  },
-  { 
-    name: 'Test with LLM', 
-    href: '/test-llm', 
-    icon: ChatBubbleLeftRightIcon,
-    sublabel: 'Agent Testing',
-    feature: 'test_llm',
-    color: 'from-emerald-500 to-emerald-600',
-    bgColor: 'bg-emerald-50',
-    textColor: 'text-emerald-700',
-    iconColor: 'text-emerald-500'
-  },
-  { 
-    name: 'Context Analysis', 
-    href: '/context', 
-    icon: MagnifyingGlassIcon,
-    sublabel: 'Semantic Insights',
-    feature: 'context',
-    color: 'from-orange-500 to-orange-600',
-    bgColor: 'bg-orange-50',
-    textColor: 'text-orange-700',
-    iconColor: 'text-orange-500'
-  },
-  { 
-    name: 'Ontology Discovery', 
-    href: '/ontology', 
-    icon: CircleStackIcon,
-    sublabel: 'Schema Explorer',
-    feature: 'ontology',
-    color: 'from-teal-500 to-teal-600',
-    bgColor: 'bg-teal-50',
-    textColor: 'text-teal-700',
-    iconColor: 'text-teal-500'
-  },
-  {
-    name: 'Ontology Enrichment',
-    href: '/ontology/enrichment',
-    icon: BoltIcon,
-    sublabel: 'AI Governance Queue',
-    feature: 'ontology_enrichment',
-    color: 'from-cyan-500 to-cyan-600',
-    bgColor: 'bg-cyan-50',
-    textColor: 'text-cyan-700',
-    iconColor: 'text-cyan-500'
-  },
-  {
-    name: 'Agent Data Utilities',
-    href: '/ontology/agent-utilities',
-    icon: CommandLineIcon,
-    sublabel: 'Agent ToolKit',
-    feature: 'agent_utilities',
-    color: 'from-violet-500 to-violet-600',
-    bgColor: 'bg-violet-50',
-    textColor: 'text-violet-700',
-    iconColor: 'text-violet-500'
-  },
-  {
-    name: 'User Management',
-    href: '/users',
-    icon: UsersIcon,
-    sublabel: 'Platform Users',
-    feature: 'user_management',
-    color: 'from-slate-500 to-slate-600',
-    bgColor: 'bg-slate-50',
-    textColor: 'text-slate-700',
-    iconColor: 'text-slate-500'
-  },
+  { name: 'Dashboard', short: 'Home', href: '/', icon: HomeIcon, sublabel: 'Overview', feature: 'dashboard', group: 'Home' },
+  { name: 'Create Knowledge', short: 'Create', href: '/knowledge', icon: BookOpenIcon, sublabel: 'Fabric builder', feature: 'create_knowledge', group: 'Build' },
+  { name: 'Available Fabrics', short: 'Fabrics', href: '/fabrics', icon: SparklesIcon, sublabel: 'Catalog and graphs', feature: 'fabrics', group: 'Build' },
+  { name: 'Train ML Models', short: 'Train', href: '/train-ml', icon: CpuChipIcon, sublabel: 'Model training', feature: 'train_ml', group: 'Build' },
+  { name: 'Ontology Discovery', short: 'Ontology', href: '/ontology', icon: CircleStackIcon, sublabel: 'Schema discovery', feature: 'ontology', group: 'Understand' },
+  { name: 'Ontology Enrichment', short: 'Enrich', href: '/ontology/enrichment', icon: BoltIcon, sublabel: 'Governance queue', feature: 'ontology_enrichment', group: 'Understand' },
+  { name: 'Context Analysis', short: 'Context', href: '/context', icon: MagnifyingGlassIcon, sublabel: 'Answer packets', feature: 'context', group: 'Understand' },
+  { name: 'Test with LLM', short: 'Ask', href: '/test-llm', icon: ChatBubbleLeftRightIcon, sublabel: 'Ask a fabric', feature: 'test_llm', group: 'Use' },
+  { name: 'Agent Data Utilities', short: 'Tools', href: '/ontology/agent-utilities', icon: CommandLineIcon, sublabel: 'Agent toolkit', feature: 'agent_utilities', group: 'Use' },
+  { name: 'User Management', short: 'Users', href: '/users', icon: UsersIcon, sublabel: 'Platform users', feature: 'user_management', group: 'Use' },
 ];
+
+const GROUP_ORDER: NavGroup[] = ['Home', 'Build', 'Understand', 'Use'];
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
-  const [hoveredMenuHref, setHoveredMenuHref] = useState<string | null>(null);
-  const [pinnedMenuHref, setPinnedMenuHref] = useState<string>('/');
   const location = useLocation();
   const navigate = useNavigate();
   const { can } = useAuth();
@@ -162,8 +62,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     [can],
   );
 
-  const isActive = (href: string) =>
-    location.pathname === href || (href !== '/' && location.pathname.startsWith(href));
+  const activeHref = useMemo(() => {
+    const matches = visibleNavigation.filter((item) =>
+      item.href === '/'
+        ? location.pathname === '/'
+        : location.pathname === item.href || location.pathname.startsWith(`${item.href}/`),
+    );
+    if (matches.length === 0) return null;
+    return matches.sort((a, b) => b.href.length - a.href.length)[0].href;
+  }, [location.pathname, visibleNavigation]);
 
   const searchItems = visibleNavigation.map((item) => ({
     label: item.name,
@@ -185,13 +92,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   };
 
   useEffect(() => {
-    const matched = visibleNavigation.find((item) => isActive(item.href));
-    if (matched) {
-      setPinnedMenuHref(matched.href);
-    }
-    // Keep pinned menu aligned with current route after page refresh/direct route entry.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleNavigation]);
+    setSidebarOpen(false);
+    setSearchOpen(false);
+  }, [location.pathname]);
 
   return (
     <div className="min-h-screen bg-[#040508] text-[#e8edf4]">
@@ -218,29 +121,37 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               <XMarkIcon className="h-5 w-5" />
             </button>
           </div>
-          <nav className="flex-1 overflow-y-auto px-3 py-5 space-y-1">
-            {visibleNavigation.map((item) => {
-              const active = isActive(item.href);
+          <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
+            {GROUP_ORDER.map((group) => {
+              const items = visibleNavigation.filter((item) => item.group === group);
+              if (items.length === 0) return null;
               return (
-                <Link
-                  key={item.name}
-                  to={item.href}
-                  className={`group flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-2xl transition-all duration-300 ease-out ${
-                    active
-                      ? 'text-[#e8edf4] border border-[rgba(94,200,242,0.32)] bg-[rgba(94,200,242,0.14)] shadow-[0_0_0_1px_rgba(94,200,242,0.2)]'
-                      : 'text-[#8b9cb0] hover:text-[#cbd5e1] hover:bg-white/[0.04] active:scale-[0.98]'
-                  }`}
-                  onClick={() => setSidebarOpen(false)}
-                >
-                  <div
-                    className={`flex items-center justify-center w-9 h-9 rounded-xl transition-all duration-300 ${
-                      active ? 'bg-[rgba(94,200,242,0.2)]' : 'bg-white/[0.03] group-hover:bg-white/[0.06]'
-                    }`}
-                  >
-                    <item.icon className="h-5 w-5 shrink-0" />
+                <div key={group}>
+                  <p className="px-3 pb-1 text-[10px] uppercase tracking-[0.18em] text-[#8b9cb0]">{group}</p>
+                  <div className="space-y-1">
+                    {items.map((item) => {
+                      const active = activeHref === item.href;
+                      return (
+                        <Link
+                          key={item.href}
+                          to={item.href}
+                          className={`flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm ${
+                            active
+                              ? 'bg-white/[0.08] text-[#e8edf4] shadow-[inset_0_1px_0_rgba(255,255,255,0.16)]'
+                              : 'text-[#9fb0c5] hover:bg-white/[0.04] hover:text-[#e8edf4]'
+                          }`}
+                          onClick={() => setSidebarOpen(false)}
+                        >
+                          <item.icon className="h-4 w-4 shrink-0" />
+                          <span className="min-w-0">
+                            <span className="block truncate">{item.short}</span>
+                            <span className="block truncate text-[10px] text-[#8b9cb0]">{item.sublabel}</span>
+                          </span>
+                        </Link>
+                      );
+                    })}
                   </div>
-                  <span className="truncate">{item.name}</span>
-                </Link>
+                </div>
               );
             })}
           </nav>
@@ -252,118 +163,55 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
       {/* Main content */}
       <div className="flex min-h-screen flex-col">
-        {/* Mobile header */}
-        <div className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-[rgba(148,163,184,0.09)] bg-[#080a10]/90 backdrop-blur-2xl px-4 sm:gap-x-6 sm:px-6 lg:hidden">
-          <button
-            type="button"
-            className="-m-2.5 p-2.5 text-[#cbd5e1] rounded-xl hover:bg-white/10 transition-colors"
-            onClick={() => setSidebarOpen(true)}
-          >
-            <Bars3Icon className="h-6 w-6" />
-          </button>
-          <div className="flex flex-1 items-center gap-2 min-w-0">
-            <WeaveLogo gradientId="weave-grad-header" className="w-9 h-9" />
-            <div className="min-w-0">
-              <h1 className="text-base font-semibold text-[#e8edf4] tracking-tight">Weave</h1>
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[#8b9cb0]">Knowledge Fabric Platform</p>
-            </div>
-          </div>
-          <UserAccountBadge compact />
-        </div>
+        <div className="sticky top-0 z-40 px-3 pt-3 sm:px-5">
+          <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 rounded-full border border-white/12 bg-[#0b0f16]/82 px-2.5 shadow-[0_18px_50px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-2xl">
+            <button
+              type="button"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[#cbd5e1] hover:bg-white/[0.06] lg:hidden"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Open menu"
+            >
+              <Bars3Icon className="h-5 w-5" />
+            </button>
+            <Link to="/" className="flex shrink-0 items-center gap-2 rounded-full px-1.5 py-1">
+              <WeaveLogo gradientId="weave-grad-ribbon" className="h-8 w-8" />
+              <span className="hidden text-sm font-semibold tracking-[-0.03em] text-[#e8edf4] sm:block">Weave</span>
+            </Link>
 
-        {/* Desktop compact ribbon */}
-        <div className="hidden lg:grid sticky top-0 z-40 h-16 grid-cols-[1fr_auto_1fr] items-center gap-4 px-5 border-b border-[rgba(148,163,184,0.1)] bg-[#080a10]/85 backdrop-blur-2xl">
-          <div className="flex items-center justify-between gap-3 w-full">
-            <div className="flex items-center gap-3 shrink-0">
-              <WeaveLogo gradientId="weave-grad-ribbon" className="w-9 h-9" />
-              <div>
-                <h1 className="text-sm font-semibold text-[#e8edf4] tracking-tight leading-none">Weave</h1>
-                <p className="text-[9px] uppercase tracking-[0.16em] text-[#8b9cb0] mt-1">Knowledge Fabric</p>
-              </div>
-            </div>
-            <div className="hidden xl:flex items-center gap-1.5">
-              {can('create_knowledge') && (
-                <button
-                  type="button"
-                  onClick={() => navigate('/knowledge')}
-                  className="inline-flex items-center gap-1 rounded-full border border-[rgba(94,200,242,0.32)] bg-[rgba(94,200,242,0.12)] px-2.5 py-1 text-[11px] font-medium text-[#d9f4ff] hover:bg-[rgba(94,200,242,0.2)]"
-                >
-                  <BookOpenIcon className="h-3.5 w-3.5" />
-                  New Fabric
-                </button>
-              )}
-              {can('fabrics') && (
-                <button
-                  type="button"
-                  onClick={() => navigate('/fabrics')}
-                  className="inline-flex items-center gap-1 rounded-full border border-[rgba(148,163,184,0.2)] bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-[#b7c7da] hover:bg-white/[0.08]"
-                >
-                  <SparklesIcon className="h-3.5 w-3.5" />
-                  Catalog
-                </button>
-              )}
-            </div>
-          </div>
-
-          <nav className="overflow-hidden justify-self-center">
-            <div className="flex items-center justify-center gap-1">
-              {visibleNavigation.map((item) => {
-                const active = isActive(item.href);
-                const showLabel = hoveredMenuHref === item.href || pinnedMenuHref === item.href;
+            <nav className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto lg:flex [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {GROUP_ORDER.map((group, groupIndex) => {
+                const items = visibleNavigation.filter((item) => item.group === group);
+                if (items.length === 0) return null;
                 return (
-                  <Link
-                    key={item.name}
-                    to={item.href}
-                    onMouseEnter={() => setHoveredMenuHref(item.href)}
-                    onMouseLeave={() => setHoveredMenuHref(null)}
-                    onClick={() => setPinnedMenuHref(item.href)}
-                    className={`group inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-medium transition-all duration-200 ${
-                      active
-                        ? 'text-[#e8edf4] border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.16)]'
-                        : 'text-[#9fb0c5] border-[rgba(148,163,184,0.14)] bg-white/[0.02] hover:text-[#d9e4f2] hover:border-[rgba(94,200,242,0.28)] hover:bg-white/[0.05]'
-                    }`}
-                  >
-                    <item.icon className="h-3.5 w-3.5" />
-                    <span
-                      className={`overflow-hidden whitespace-nowrap transition-all duration-300 ease-out ${
-                        showLabel ? 'max-w-[180px] opacity-100 ml-0.5' : 'max-w-0 opacity-0'
-                      }`}
-                    >
-                      {item.name}
-                    </span>
-                  </Link>
+                  <div key={group} className="flex shrink-0 items-center gap-0.5">
+                    {groupIndex > 0 && <span className="mx-1 h-4 w-px bg-white/10" aria-hidden />}
+                    {items.map((item) => {
+                      const active = activeHref === item.href;
+                      return (
+                        <Link
+                          key={item.href}
+                          to={item.href}
+                          title={item.name}
+                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[12px] font-medium tracking-[-0.01em] transition ${
+                            active
+                              ? 'bg-white/[0.1] text-[#e8edf4] shadow-[inset_0_1px_0_rgba(255,255,255,0.28)]'
+                              : 'text-[#8b9cb0] hover:bg-white/[0.05] hover:text-[#e8edf4]'
+                          }`}
+                        >
+                          <item.icon className="h-3.5 w-3.5 shrink-0" />
+                          <span className="whitespace-nowrap">{item.short}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
                 );
               })}
-            </div>
-          </nav>
+            </nav>
 
-          <div className="w-full justify-self-end">
-            <div className="flex items-center justify-end gap-2">
-              <div className="hidden xl:flex items-center gap-1.5">
-                {can('test_llm') && (
-                  <button
-                    type="button"
-                    onClick={() => navigate('/test-llm')}
-                    className="inline-flex items-center gap-1 rounded-full border border-[rgba(62,207,155,0.28)] bg-[rgba(62,207,155,0.1)] px-2.5 py-1 text-[11px] font-medium text-[#c9f9e6] hover:bg-[rgba(62,207,155,0.16)]"
-                  >
-                    <ChatBubbleLeftRightIcon className="h-3.5 w-3.5" />
-                    Test LLM
-                  </button>
-                )}
-                {can('context') && (
-                  <button
-                    type="button"
-                    onClick={() => navigate('/context')}
-                    className="inline-flex items-center gap-1 rounded-full border border-[rgba(251,146,60,0.28)] bg-[rgba(251,146,60,0.1)] px-2.5 py-1 text-[11px] font-medium text-[#ffe2c2] hover:bg-[rgba(251,146,60,0.16)]"
-                  >
-                    <MagnifyingGlassIcon className="h-3.5 w-3.5" />
-                    Context
-                  </button>
-                )}
-              </div>
-              <div className="w-full max-w-xs relative hidden 2xl:block">
-                <div className="flex items-center rounded-lg border border-[rgba(148,163,184,0.16)] bg-[#0d1422]/70 px-3 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] hover:border-[rgba(94,200,242,0.32)] focus-within:border-[rgba(94,200,242,0.4)]">
-                  <MagnifyingGlassIcon className="h-3.5 w-3.5 text-[#5ec8f2]" />
+            <div className="relative ml-auto flex shrink-0 items-center gap-2">
+              <div className="relative hidden md:block">
+                <div className="flex h-9 items-center rounded-full border border-white/10 bg-black/20 px-3 focus-within:border-[rgba(94,200,242,0.4)]">
+                  <MagnifyingGlassIcon className="h-3.5 w-3.5 text-[#8b9cb0]" />
                   <input
                     type="text"
                     value={searchQuery}
@@ -372,33 +220,37 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                       setSearchOpen(true);
                     }}
                     onFocus={() => setSearchOpen(true)}
-                    onBlur={() => setTimeout(() => setSearchOpen(false), 120)}
+                    onBlur={() => setTimeout(() => setSearchOpen(false), 140)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && filteredSearchItems.length > 0) {
                         handleSearchSelect(filteredSearchItems[0].href);
                       }
+                      if (e.key === 'Escape') setSearchOpen(false);
                     }}
-                    placeholder="Search fabrics, models, and routes..."
-                    className="ml-2 w-full bg-transparent text-xs text-[#e8edf4] placeholder:text-[#8b9cb0] focus:outline-none"
+                    placeholder="Find"
+                    aria-label="Find a page"
+                    className="ml-2 w-16 bg-transparent text-xs text-[#e8edf4] placeholder:text-[#8b9cb0] focus:w-36 focus:outline-none xl:w-28 xl:focus:w-40 transition-[width]"
                   />
                 </div>
                 {searchOpen && filteredSearchItems.length > 0 && (
-                  <div className="absolute left-0 right-0 mt-1 rounded-lg border border-[rgba(148,163,184,0.18)] bg-[#0b1220]/95 backdrop-blur-xl shadow-2xl z-50 overflow-hidden">
+                  <div className="absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-2xl border border-white/12 bg-[#0b0f16]/95 shadow-[0_18px_50px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-2xl">
                     {filteredSearchItems.slice(0, 8).map((item) => (
                       <button
                         key={item.href}
                         type="button"
-                        onClick={() => handleSearchSelect(item.href)}
-                        className="w-full text-left px-3 py-2 hover:bg-white/[0.06] border-b border-[rgba(148,163,184,0.08)] last:border-b-0"
+                        onMouseDown={() => handleSearchSelect(item.href)}
+                        className="block w-full border-b border-white/8 px-3 py-2 text-left last:border-b-0 hover:bg-white/[0.05]"
                       >
-                        <div className="text-xs text-[#e8edf4]">{item.label}</div>
-                        <div className="text-[10px] text-[#8b9cb0] uppercase tracking-[0.14em]">{item.description}</div>
+                        <span className="block text-xs text-[#e8edf4]">{item.label}</span>
+                        <span className="block text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">{item.description}</span>
                       </button>
                     ))}
                   </div>
                 )}
               </div>
-              <UserAccountBadge />
+              <div className="hidden sm:block">
+                <UserAccountBadge compact />
+              </div>
             </div>
           </div>
         </div>

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
+import LoginWaves from '../components/LoginWaves';
 import WeaveLogo from '../components/WeaveLogo';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -44,13 +45,13 @@ const Login: React.FC = () => {
         />
       </a>
 
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -top-24 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-violet-600/20 blur-3xl" />
-        <div className="absolute bottom-0 right-0 h-64 w-64 rounded-full bg-cyan-500/10 blur-3xl" />
-      </div>
+      <LoginWaves />
 
-      <div className="relative w-full max-w-md">
-        <div className="rounded-3xl border border-[rgba(148,163,184,0.14)] bg-[#080a10]/90 backdrop-blur-2xl shadow-2xl shadow-black/40 overflow-hidden">
+      <div className="relative z-10 w-full max-w-md">
+        <div
+          className="rounded-3xl border border-white/20 shadow-[0_30px_80px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.16)] overflow-hidden"
+          style={{ backgroundColor: 'rgba(16, 21, 29, 0.96)' }}
+        >
           <div className="px-8 pt-10 pb-8 text-center border-b border-[rgba(148,163,184,0.09)]">
             <div className="mx-auto w-16 h-16 mb-4">
               <WeaveLogo gradientId="weave-grad-login" />
