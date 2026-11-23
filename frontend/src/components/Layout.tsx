@@ -260,12 +260,10 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           </div>
         </div>
 
-        {/* Page content — soft stage so side margins match the canvas */}
-        <main className="flex-1 overflow-y-auto py-6 lg:py-8">
+        {/* Page content — atmosphere fills the gutters; no tall stage that forces scroll */}
+        <main className="flex-1 overflow-y-auto py-3 sm:py-4">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-            <div className="weave-content-stage min-h-[70vh] rounded-[28px] border border-white/[0.06] px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-7">
-              {children}
-            </div>
+            {children}
           </div>
         </main>
 

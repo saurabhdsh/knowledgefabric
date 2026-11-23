@@ -57,15 +57,6 @@ h1 {
     linear-gradient(180deg, #121a28 0%, #0e1520 42%, #0c121c 100%);
 }
 
-.weave-content-stage {
-  background:
-    linear-gradient(180deg, rgba(16, 24, 36, 0.55) 0%, rgba(12, 18, 28, 0.35) 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 24px 60px rgba(0, 0, 0, 0.18);
-  backdrop-filter: blur(10px);
-}
-
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
