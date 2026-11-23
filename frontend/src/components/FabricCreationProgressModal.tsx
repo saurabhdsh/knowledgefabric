@@ -40,7 +40,12 @@ const FabricCreationProgressModal: React.FC<FabricCreationProgressModalProps> = 
   const errored = steps.find((step) => step.status === 'error');
   const active = steps.find((step) => step.status === 'processing');
   const finished = Boolean(fabricId);
-  const line = finished ? 'Completed' : errored ? 'Could not finish' : (statusText || active?.title || 'Preparing');
+  // Only show "Completed" once we have a fabric id — never from step titles like "… Ready".
+  const line = finished
+    ? 'Completed'
+    : errored
+      ? 'Could not finish'
+      : (statusText && statusText !== 'Completed' ? statusText : null) || active?.title || 'Preparing';
   const pct = Math.max(0, Math.min(100, finished ? 100 : overallProgress));
 
   const copyId = async () => {

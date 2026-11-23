@@ -450,8 +450,11 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
         string | { fabricId: string; rowsImported?: number; rowsInSource?: number }
       >
     ) => {
-      const phrases = progressSteps.map((step) => step.title);
+      // In-progress titles only — advance once each, never wrap back to the start.
+      // "Completed" is reserved for when the fabric ID is returned.
+      const phrases = progressSteps.slice(0, -1).map((step) => step.title);
       let phraseIndex = 0;
+      let creationFinished = false;
       setCreationProgressSteps((prev) =>
         prev.map((step, index) => ({
           ...step,
@@ -461,12 +464,15 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
       );
       setCreationOverallProgress(8);
       const ticker = window.setInterval(() => {
-        phraseIndex = (phraseIndex + 1) % Math.max(phrases.length, 1);
-        const title = phrases[phraseIndex];
+        if (creationFinished) return;
+        if (phraseIndex < Math.max(phrases.length - 1, 0)) {
+          phraseIndex += 1;
+        }
         setCreationProgressSteps((prev) =>
-          prev.map((step) => ({
+          prev.map((step, index) => ({
             ...step,
-            status: step.title === title ? 'processing' : 'pending',
+            status: index < phraseIndex ? 'completed' : index === phraseIndex ? 'processing' : 'pending',
+            progress: index < phraseIndex ? 100 : index === phraseIndex ? 40 : 0,
           }))
         );
         setCreationOverallProgress((current) => (current >= 92 ? 92 : current + 7));
@@ -481,6 +487,7 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
           throw new Error('The fabric was created but no KF ID was returned.');
         }
 
+        creationFinished = true;
         window.clearInterval(ticker);
         const rowNote =
           typeof created !== 'string' && created.rowsImported != null
@@ -496,6 +503,7 @@ const DatabaseKnowledgeFabric: React.FC<DatabaseKnowledgeFabricProps> = ({
         );
         setCreatedFabricId(fabricId);
       } catch (err) {
+        creationFinished = true;
         window.clearInterval(ticker);
         const message = err instanceof Error ? err.message : 'Failed to create knowledge fabric';
         setCreationProgressSteps((prev) =>

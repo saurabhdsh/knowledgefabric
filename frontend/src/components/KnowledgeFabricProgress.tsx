@@ -229,7 +229,9 @@ const KnowledgeFabricProgress: React.FC<KnowledgeFabricProgressProps> = ({
 
   const startKnowledgeFabricCreation = useCallback(async () => {
     const { steps } = definition;
-    const phrases = steps.map((step) => step.title);
+    // Rotate through in-progress titles only — never wrap, never show the final "ready" line
+    // until the API finishes and we publish "Completed".
+    const phrases = steps.slice(0, -1).map((step) => step.title);
     let phraseIndex = 0;
     publishRun({ statusText: phrases[0] || 'Preparing', progress: 8, error: '', fabricId: '' });
     setProgressSteps(steps.map((step, index) => ({
@@ -239,11 +241,19 @@ const KnowledgeFabricProgress: React.FC<KnowledgeFabricProgressProps> = ({
     })));
 
     const ticker = window.setInterval(() => {
-      phraseIndex = (phraseIndex + 1) % Math.max(phrases.length, 1);
+      if (creationRun?.phase !== 'running') return;
+      if (phraseIndex < Math.max(phrases.length - 1, 0)) {
+        phraseIndex += 1;
+      }
       publishRun({
         statusText: phrases[phraseIndex] || 'Preparing',
         progress: Math.min(92, (creationRun?.progress || 8) + 7),
       });
+      setProgressSteps(steps.map((step, index) => ({
+        ...step,
+        status: index < phraseIndex ? 'completed' : index === phraseIndex ? 'processing' : 'pending',
+        progress: index < phraseIndex ? 100 : index === phraseIndex ? 40 : 0,
+      })));
     }, 1400);
 
     try {
