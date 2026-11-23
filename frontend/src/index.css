@@ -57,6 +57,49 @@ h1 {
     linear-gradient(180deg, #121a28 0%, #0e1520 42%, #0c121c 100%);
 }
 
+/* Soft glass top bar — stays fixed; content scrolls underneath */
+.weave-topbar {
+  background: linear-gradient(
+    180deg,
+    rgba(12, 18, 28, 0.55) 0%,
+    rgba(12, 18, 28, 0.18) 70%,
+    transparent 100%
+  );
+}
+
+.weave-topbar-scrolled {
+  background: linear-gradient(
+    180deg,
+    rgba(12, 18, 28, 0.82) 0%,
+    rgba(12, 18, 28, 0.45) 75%,
+    transparent 100%
+  );
+}
+
+.weave-topbar-scrolled::after {
+  content: '';
+  pointer-events: none;
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(94, 200, 242, 0.28),
+    rgba(148, 163, 184, 0.2),
+    rgba(94, 200, 242, 0.28),
+    transparent
+  );
+  opacity: 0.85;
+}
+
+.weave-main-scroll {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;

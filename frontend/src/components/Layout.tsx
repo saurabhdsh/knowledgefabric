@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   HomeIcon,
@@ -14,7 +14,6 @@ import {
   CommandLineIcon,
   UsersIcon,
 } from '@heroicons/react/24/outline';
-import { useState } from 'react';
 import WeaveLogo from './WeaveLogo';
 import UserAccountBadge from './UserAccountBadge';
 import { useAuth } from '../contexts/AuthContext';
@@ -55,6 +54,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+  const mainRef = useRef<HTMLElement | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
   const { can } = useAuth();
@@ -98,8 +99,23 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     setSearchOpen(false);
   }, [location.pathname]);
 
+  useEffect(() => {
+    const onScroll = () => {
+      const y = mainRef.current?.scrollTop ?? window.scrollY ?? 0;
+      setScrolled(y > 8);
+    };
+    onScroll();
+    const main = mainRef.current;
+    main?.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      main?.removeEventListener('scroll', onScroll);
+      window.removeEventListener('scroll', onScroll);
+    };
+  }, []);
+
   return (
-    <div className="relative min-h-screen overflow-x-hidden text-[#e8edf4] weave-app-shell">
+    <div className="relative min-h-screen text-[#e8edf4] weave-app-shell">
       {/* Full-bleed atmosphere so wide screens are not empty black gutters */}
       <div className="pointer-events-none fixed inset-0 -z-10 weave-app-atmosphere" aria-hidden />
 
@@ -167,9 +183,19 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       </div>
 
       {/* Main content */}
-      <div className="relative z-0 flex min-h-screen flex-col">
-        <div className="sticky top-0 z-40 px-3 pt-3 sm:px-5">
-          <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 rounded-full border border-white/12 bg-[#101822]/88 px-2.5 shadow-[0_18px_50px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-2xl">
+      <div className="relative z-0 flex h-screen min-h-0 flex-col">
+        <header
+          className={`weave-topbar fixed inset-x-0 top-0 z-40 px-3 pt-3 sm:px-5 transition-[padding,background-color] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+            scrolled ? 'weave-topbar-scrolled pb-2' : 'pb-0'
+          }`}
+        >
+          <div
+            className={`mx-auto flex h-14 max-w-7xl items-center gap-2 rounded-full border px-2.5 transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+              scrolled
+                ? 'border-white/16 bg-[#101822]/78 shadow-[0_12px_40px_rgba(0,0,0,0.32),0_0_0_1px_rgba(94,200,242,0.08),inset_0_1px_0_rgba(255,255,255,0.2)] backdrop-blur-2xl'
+                : 'border-white/12 bg-[#101822]/72 shadow-[0_18px_50px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.16)] backdrop-blur-xl'
+            }`}
+          >
             <button
               type="button"
               className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[#cbd5e1] hover:bg-white/[0.06] lg:hidden"
@@ -258,10 +284,13 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               </div>
             </div>
           </div>
-        </div>
+        </header>
 
-        {/* Page content — atmosphere fills the gutters; no tall stage that forces scroll */}
-        <main className="flex-1 overflow-y-auto py-3 sm:py-4">
+        {/* Page content — top padding clears the fixed menu; scrolls under the soft glass bar */}
+        <main
+          ref={mainRef}
+          className="weave-main-scroll flex-1 overflow-y-auto overflow-x-hidden pt-[4.75rem] pb-3 sm:pt-[5rem] sm:pb-4"
+        >
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
             {children}
           </div>
