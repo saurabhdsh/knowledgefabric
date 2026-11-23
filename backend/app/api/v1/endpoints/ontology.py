@@ -53,7 +53,6 @@ from app.services.ontology.llm_ontology_service import LLMOntologyService
 from app.services.vector_service import vector_service
 from app.core.config import settings
 from app.services.platform.fabric_store import fabric_store
-from app.services.platform.job_service import job_service
 from app.services.ontology.ontology_access import (
     allowed_project_ids,
     register_project_owner,
@@ -397,6 +396,8 @@ async def create_project_from_fabric(request: CreateProjectFromFabricRequest):
             "database", "csv", "csv_upload", "composite",
         ) or int(fabric.get("pipeline_version") or 0) >= 2
 
+        # Do not auto-start discovery here — the workspace shows Run Discovery
+        # and the user starts it explicitly (avoids a stuck "Starting…" state).
         discovery_job_id = None
         discovery_mode = "artifacts"
         linked_artifacts: List[SourceArtifact] = []
@@ -422,15 +423,6 @@ async def create_project_from_fabric(request: CreateProjectFromFabricRequest):
                 )
             )
             persistence.add_artifacts_to_project(proj.id, linked_artifacts)
-            discovery_job_id = job_service.enqueue_once(
-                "ontology_discovery",
-                request.fabric_id,
-                {
-                    "project_id": proj.id,
-                    "project_name": project_name,
-                    "use_llm": False,
-                },
-            )
         else:
             processed_files = fabric.get("processed_files") if isinstance(fabric.get("processed_files"), list) else []
             candidate_roots = [
@@ -487,10 +479,7 @@ async def create_project_from_fabric(request: CreateProjectFromFabricRequest):
 
         return APIResponse(
             success=True,
-            message=(
-                "Project created from knowledge fabric"
-                + (" — schema discovery queued from measured profile" if discovery_job_id else "")
-            ),
+            message="Project created from knowledge fabric — open workspace and run discovery",
             data={
                 **proj.model_dump(),
                 "fabric_reference": {

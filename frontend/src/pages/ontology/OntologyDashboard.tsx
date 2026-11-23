@@ -71,8 +71,10 @@ const OntologyDashboard: React.FC = () => {
         fabric ? `Ontology project created from Knowledge Fabric '${fabric.name}'.` : undefined
       );
       setProjects(prev => [...prev, proj]);
-      const jobId = String(proj.fabric_reference?.discovery_job_id || '');
-      navigate(`/ontology/workspace/${proj.id}?source=fabric${jobId ? `&job=${encodeURIComponent(jobId)}` : ''}`);
+      // Land on workspace ready to run discovery — do not auto-attach a job
+      // (that left the button stuck on "Starting…" with no progress).
+      const fabricQs = selectedFabricId ? `&fabric=${encodeURIComponent(selectedFabricId)}` : '';
+      navigate(`/ontology/workspace/${proj.id}?source=fabric${fabricQs}`);
     } catch (err) {
       console.error(err);
       window.alert(err instanceof Error ? err.message : 'Failed to create project from knowledge fabric');
@@ -308,7 +310,7 @@ const OntologyDashboard: React.FC = () => {
               </li>
               <li className="flex items-center gap-2">
                 <ChartBarIcon className="w-5 h-5 text-[#9b8bd4]" />
-                Review versions/discovery history and continue ontology refinement
+                Click <strong>Run Discovery</strong>, then review versions and refine
               </li>
             </ul>
           </div>

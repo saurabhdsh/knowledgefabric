@@ -328,10 +328,10 @@ const OntologyWorkspace: React.FC = () => {
   const extractFabricId = (description?: string, artifactsList?: Array<{ metadata?: { fabric_id?: string } }>) => {
     const fromMeta = (artifactsList || [])
       .map((a) => a?.metadata?.fabric_id)
-      .find((id) => typeof id === 'string' && id.startsWith('fabric_'));
-    if (fromMeta) return fromMeta;
+      .find((id) => typeof id === 'string' && id.trim().length > 0);
+    if (fromMeta) return String(fromMeta).trim();
     const desc = description || '';
-    const m = desc.match(/\(id:\s*(fabric_[A-Za-z0-9_\-]+)\s*,/i);
+    const m = desc.match(/\(id:\s*([A-Za-z0-9_\-]+)\s*,/i);
     return m?.[1] || null;
   };
 
@@ -404,10 +404,16 @@ const OntologyWorkspace: React.FC = () => {
   }, [loadProject, loadArtifacts, loadVersions, loadRunsHistory]);
 
   useEffect(() => {
-    const job = new URLSearchParams(location.search).get('job');
+    const params = new URLSearchParams(location.search);
+    const fabricFromUrl = params.get('fabric');
+    if (fabricFromUrl) {
+      setLinkedFabricId(fabricFromUrl);
+    }
+    const job = params.get('job');
     if (!job) return;
     setTrackedJobId(job);
     setPolling(true);
+    setProgressStage('Starting');
   }, [location.search]);
 
   useEffect(() => {
@@ -415,43 +421,71 @@ const OntologyWorkspace: React.FC = () => {
     if (!active) return;
     setRunId((current) => current || active.id);
     setRun(active);
-    setPolling(true);
-    setProgressPercent((current) => Math.max(current, clampPercent(active.progress_percent)));
-    setProgressStage(discoveryStageLabel(active.current_stage));
+    const pct = clampPercent(active.progress_percent);
+    setProgressPercent((current) => Math.max(current, pct));
+    // Resume the progress UI only for a clearly in-flight run. A stale queued row
+    // must not force "Starting…" after Create from Fabric.
+    if (active.status === 'running' || pct > 0) {
+      setPolling(true);
+      setProgressStage(discoveryStageLabel(active.current_stage));
+    }
   }, [runsHistory]);
+
+  const clearJobQuery = useCallback(() => {
+    const params = new URLSearchParams(location.search);
+    if (!params.has('job')) return;
+    params.delete('job');
+    const next = params.toString();
+    navigate(
+      { pathname: location.pathname, search: next ? `?${next}` : '' },
+      { replace: true },
+    );
+  }, [location.pathname, location.search, navigate]);
 
   useEffect(() => {
     if (!projectId || (!runId && !trackedJobId)) return undefined;
     let stopped = false;
+    let missCount = 0;
+    const finishPolling = () => {
+      setPolling(false);
+      setTrackedJobId(null);
+      clearJobQuery();
+    };
     const tick = async () => {
       if (stopped) return;
       try {
         if (trackedJobId) {
           const job = await platformApi.getJob(trackedJobId);
+          missCount = 0;
           const result = (job.result || {}) as { run_id?: string; version_id?: string };
           if (result.run_id) setRunId((current) => current || result.run_id || null);
           if (job.status === 'failed') {
             const errMsg =
               (job.error_payload as { message?: string } | null | undefined)?.message || 'Discovery failed';
             setPlatformAction(errMsg);
-            setPolling(false);
-            setTrackedJobId(null);
+            finishPolling();
             loadRunsHistory();
             return;
           }
-          if (job.status !== 'ready' && job.status !== 'completed') {
+          const terminal = job.status === 'ready' || job.status === 'completed';
+          if (!terminal) {
             setProgressPercent((current) => Math.max(current, clampPercent(job.progress_percent)));
+            setProgressStage(discoveryStageLabel(String((job.result as { stage?: string } | null)?.stage || job.status)));
             setPolling(true);
-          }
-          if ((job.status === 'ready' || job.status === 'completed') && result.version_id) {
+          } else {
             setProgressPercent(100);
-            setPolling(false);
-            setTrackedJobId(null);
+            finishPolling();
             loadVersions();
             loadRunsHistory();
-            setVersionId(result.version_id);
-            loadVersion(result.version_id);
-            setPlatformAction('Schema discovery complete.');
+            if (result.version_id) {
+              setVersionId(result.version_id);
+              loadVersion(result.version_id);
+            }
+            setPlatformAction(
+              result.version_id
+                ? 'Schema discovery complete.'
+                : 'Discovery finished. Open a completed run below, or run discovery again.',
+            );
             return;
           }
         }
@@ -462,24 +496,30 @@ const OntologyWorkspace: React.FC = () => {
           setProgressPercent(clampPercent(currentRun.progress_percent));
           setProgressStage(discoveryStageLabel(currentRun.current_stage));
           setRunsHistory((rows) => [currentRun, ...rows.filter((row) => row.id !== currentRun.id)]);
-          if (currentRun.status === 'completed' && currentRun.result_version_id) {
+          if (currentRun.status === 'completed') {
             setProgressPercent(100);
-            setPolling(false);
-            setTrackedJobId(null);
-            setVersionId(currentRun.result_version_id);
+            finishPolling();
+            if (currentRun.result_version_id) {
+              setVersionId(currentRun.result_version_id);
+              loadVersion(currentRun.result_version_id);
+            }
             loadVersions();
-            loadVersion(currentRun.result_version_id);
             loadRunsHistory();
             return;
           }
           if (currentRun.status === 'failed') {
-            setPolling(false);
-            setTrackedJobId(null);
+            finishPolling();
             loadRunsHistory();
           }
         }
       } catch {
-        // Keep the last percent on screen if a poll misses.
+        missCount += 1;
+        // Unlock Run Discovery if the tracked job cannot be loaded (stale URL / deleted job).
+        if (trackedJobId && missCount >= 3) {
+          finishPolling();
+          setProgressStage('');
+          setPlatformAction('Could not track discovery progress. Click Run Discovery to start again.');
+        }
       }
     };
     tick();
@@ -488,7 +528,7 @@ const OntologyWorkspace: React.FC = () => {
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [projectId, runId, trackedJobId, loadVersions, loadVersion, loadRunsHistory]);
+  }, [projectId, runId, trackedJobId, loadVersions, loadVersion, loadRunsHistory, clearJobQuery]);
 
   useEffect(() => {
     if (versionId && projectId) loadVersion(versionId);
@@ -934,7 +974,7 @@ const OntologyWorkspace: React.FC = () => {
               <button
                 type="button"
                 onClick={handleFabricDiscover}
-                disabled={!canRunFabricDiscovery || polling || !linkedFabricId || platformLoading || runsHistory.some((r) => r.status === 'queued' || r.status === 'running')}
+                disabled={!canRunFabricDiscovery || polling || !linkedFabricId || platformLoading}
                 className="mt-3 w-full inline-flex items-center justify-center px-3 py-2.5 rounded-xl bg-gradient-to-r from-[#5ec8f2] to-[#3ecf9b] text-[#061018] text-sm font-semibold hover:brightness-110 disabled:opacity-50 transition-all"
               >
                 <PlayIcon className="w-4 h-4 mr-2" />
@@ -942,7 +982,7 @@ const OntologyWorkspace: React.FC = () => {
                   ? progressPercent > 0
                     ? `Running… ${progressPercent}%${progressStage ? ` · ${progressStage}` : ''}`
                     : 'Starting…'
-                  : 'Run schema discovery'}
+                  : 'Run Discovery'}
               </button>
               {(polling || platformLoading) && (
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
@@ -1016,7 +1056,7 @@ const OntologyWorkspace: React.FC = () => {
               <button
                 type="button"
                 onClick={handleDiscover}
-                disabled={selectedArtifactIds.length === 0 || polling || runsHistory.some((r) => r.status === 'queued' || r.status === 'running')}
+                disabled={selectedArtifactIds.length === 0 || polling}
                 className="mt-3 w-full inline-flex items-center justify-center px-3 py-2 rounded-lg bg-teal-600 text-white text-sm font-medium hover:bg-teal-700 disabled:opacity-50"
               >
                 <PlayIcon className="w-4 h-4 mr-2" />
@@ -1024,7 +1064,7 @@ const OntologyWorkspace: React.FC = () => {
                   ? progressPercent > 0
                     ? `Running… ${progressPercent}%${progressStage ? ` · ${progressStage}` : ''}`
                     : 'Starting…'
-                  : 'Run discovery'}
+                  : 'Run Discovery'}
               </button>
               {polling && (
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
