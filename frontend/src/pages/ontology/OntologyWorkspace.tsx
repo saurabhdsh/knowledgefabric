@@ -310,7 +310,9 @@ const OntologyWorkspace: React.FC = () => {
   const [trackedJobId, setTrackedJobId] = useState<string | null>(null);
   const [progressPercent, setProgressPercent] = useState(0);
   const [progressStage, setProgressStage] = useState('');
+  const [jobPhase, setJobPhase] = useState<'idle' | 'queued' | 'running' | 'done' | 'error'>('idle');
   const discoverLock = useRef(false);
+  const pollStartedAt = useRef<number>(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState(false);
@@ -446,9 +448,12 @@ const OntologyWorkspace: React.FC = () => {
     if (!projectId || (!runId && !trackedJobId)) return undefined;
     let stopped = false;
     let missCount = 0;
-    const finishPolling = () => {
+    if (!pollStartedAt.current) pollStartedAt.current = Date.now();
+    const finishPolling = (phase: 'done' | 'error' | 'idle' = 'idle') => {
       setPolling(false);
       setTrackedJobId(null);
+      setJobPhase(phase);
+      pollStartedAt.current = 0;
       clearJobQuery();
     };
     const tick = async () => {
@@ -458,23 +463,43 @@ const OntologyWorkspace: React.FC = () => {
           const job = await platformApi.getJob(trackedJobId);
           missCount = 0;
           const result = (job.result || {}) as { run_id?: string; version_id?: string };
+          const pct = clampPercent(job.progress_percent);
+          const status = String(job.status || '').toLowerCase();
           if (result.run_id) setRunId((current) => current || result.run_id || null);
-          if (job.status === 'failed') {
+          if (status === 'failed') {
             const errMsg =
               (job.error_payload as { message?: string } | null | undefined)?.message || 'Discovery failed';
             setPlatformAction(errMsg);
-            finishPolling();
+            setProgressStage('');
+            finishPolling('error');
             loadRunsHistory();
             return;
           }
-          const terminal = job.status === 'ready' || job.status === 'completed';
+          const terminal = status === 'ready' || status === 'completed';
           if (!terminal) {
-            setProgressPercent((current) => Math.max(current, clampPercent(job.progress_percent)));
-            setProgressStage(discoveryStageLabel(String((job.result as { stage?: string } | null)?.stage || job.status)));
+            const phase = status === 'queued' || status === 'pending' ? 'queued' : 'running';
+            setJobPhase(phase);
+            // Show movement even while queued so the button does not sit on "Starting…".
+            setProgressPercent((current) => Math.max(current, pct > 0 ? pct : phase === 'queued' ? 3 : 8));
+            setProgressStage(
+              discoveryStageLabel(
+                String((job.result as { stage?: string } | null)?.stage || '')
+              ) || (phase === 'queued' ? 'Queued' : 'Running'),
+            );
             setPolling(true);
+            const waitedMs = Date.now() - (pollStartedAt.current || Date.now());
+            if (pct <= 0 && phase === 'queued' && waitedMs > 90000) {
+              setPlatformAction(
+                'Discovery is still queued after 90s. The worker may be busy or stalled — click Run Discovery again to retry.',
+              );
+              finishPolling('error');
+              return;
+            }
           } else {
             setProgressPercent(100);
-            finishPolling();
+            setProgressStage('Completed');
+            setJobPhase('done');
+            finishPolling('done');
             loadVersions();
             loadRunsHistory();
             if (result.version_id) {
@@ -493,12 +518,15 @@ const OntologyWorkspace: React.FC = () => {
           const currentRun = await ontologyApi.getRun(projectId, runId);
           if (stopped) return;
           setRun(currentRun);
-          setProgressPercent(clampPercent(currentRun.progress_percent));
-          setProgressStage(discoveryStageLabel(currentRun.current_stage));
+          const runPct = clampPercent(currentRun.progress_percent);
+          setProgressPercent((current) => Math.max(current, runPct));
+          setProgressStage(discoveryStageLabel(currentRun.current_stage) || 'Running');
+          setJobPhase(currentRun.status === 'queued' ? 'queued' : 'running');
           setRunsHistory((rows) => [currentRun, ...rows.filter((row) => row.id !== currentRun.id)]);
           if (currentRun.status === 'completed') {
             setProgressPercent(100);
-            finishPolling();
+            setProgressStage('Completed');
+            finishPolling('done');
             if (currentRun.result_version_id) {
               setVersionId(currentRun.result_version_id);
               loadVersion(currentRun.result_version_id);
@@ -508,7 +536,7 @@ const OntologyWorkspace: React.FC = () => {
             return;
           }
           if (currentRun.status === 'failed') {
-            finishPolling();
+            finishPolling('error');
             loadRunsHistory();
           }
         }
@@ -516,20 +544,19 @@ const OntologyWorkspace: React.FC = () => {
         missCount += 1;
         // Unlock Run Discovery if the tracked job cannot be loaded (stale URL / deleted job).
         if (trackedJobId && missCount >= 3) {
-          finishPolling();
+          finishPolling('error');
           setProgressStage('');
           setPlatformAction('Could not track discovery progress. Click Run Discovery to start again.');
         }
       }
     };
     tick();
-    const timer = window.setInterval(tick, 2000);
+    const timer = window.setInterval(tick, 1500);
     return () => {
       stopped = true;
       window.clearInterval(timer);
     };
   }, [projectId, runId, trackedJobId, loadVersions, loadVersion, loadRunsHistory, clearJobQuery]);
-
   useEffect(() => {
     if (versionId && projectId) loadVersion(versionId);
   }, [versionId, projectId, loadVersion]);
@@ -791,14 +818,60 @@ const OntologyWorkspace: React.FC = () => {
     try {
       setPlatformLoading(true);
       setPlatformAction(null);
-      const { job_id } = await platformApi.discoverOntology(fabricId, true, projectId);
-      setProgressPercent(0);
-      setProgressStage('Starting');
+      setProgressPercent(3);
+      setProgressStage('Queued');
+      setJobPhase('queued');
+      pollStartedAt.current = Date.now();
+      // Schema-profile discovery does not need LLM; false keeps the measured-profile path.
+      const { job_id } = await platformApi.discoverOntology(fabricId, false, projectId);
       setTrackedJobId(job_id);
       setPolling(true);
       setPlatformAction('Schema discovery is running from the measured table profile.');
+      // Immediate status read so the button leaves "Starting…" on the first paint.
+      try {
+        const job = await platformApi.getJob(job_id);
+        const pct = clampPercent(job.progress_percent);
+        const status = String(job.status || '').toLowerCase();
+        if (status === 'failed') {
+          throw new Error(
+            (job.error_payload as { message?: string } | null | undefined)?.message || 'Discovery failed',
+          );
+        }
+        if (status === 'ready' || status === 'completed') {
+          setProgressPercent(100);
+          setProgressStage('Completed');
+          setJobPhase('done');
+          setPolling(false);
+          setTrackedJobId(null);
+          const result = (job.result || {}) as { version_id?: string };
+          if (result.version_id) {
+            setVersionId(result.version_id);
+            loadVersion(result.version_id);
+          }
+          loadVersions();
+          loadRunsHistory();
+          setPlatformAction(
+            result.version_id
+              ? 'Schema discovery complete.'
+              : 'Discovery finished. Open a completed run below, or run discovery again.',
+          );
+        } else {
+          setJobPhase(status === 'queued' || status === 'pending' ? 'queued' : 'running');
+          setProgressPercent(pct > 0 ? pct : status === 'queued' ? 3 : 8);
+          setProgressStage(status === 'queued' || status === 'pending' ? 'Queued' : 'Running');
+        }
+      } catch (statusErr) {
+        if (statusErr instanceof Error && /failed/i.test(statusErr.message)) {
+          throw statusErr;
+        }
+      }
       loadRunsHistory();
     } catch (err: unknown) {
+      setPolling(false);
+      setTrackedJobId(null);
+      setJobPhase('error');
+      setProgressPercent(0);
+      setProgressStage('');
       setPlatformAction(
         err instanceof Error
           ? `Schema discovery failed: ${err.message}`
@@ -979,9 +1052,9 @@ const OntologyWorkspace: React.FC = () => {
               >
                 <PlayIcon className="w-4 h-4 mr-2" />
                 {polling || platformLoading
-                  ? progressPercent > 0
-                    ? `Running… ${progressPercent}%${progressStage ? ` · ${progressStage}` : ''}`
-                    : 'Starting…'
+                  ? jobPhase === 'queued' || progressStage === 'Queued'
+                    ? `Queued…${progressPercent > 0 ? ` ${progressPercent}%` : ''}`
+                    : `Running… ${Math.max(progressPercent, 1)}%${progressStage ? ` · ${progressStage}` : ''}`
                   : 'Run Discovery'}
               </button>
               {(polling || platformLoading) && (
