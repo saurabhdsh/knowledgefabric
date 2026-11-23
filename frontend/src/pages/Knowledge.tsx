@@ -16,7 +16,9 @@ import {
   setWeaveDomain,
   isPharmaManufacturing,
   FABRIC_KIND_OPTIONS,
+  sourceCatalogForKind,
   type FabricKind,
+  type FabricSourceId,
 } from '../utils/weaveDomain';
 import PDFUpload from '../components/PDFUpload';
 import KnowledgeFabricProgress from '../components/KnowledgeFabricProgress';
@@ -147,46 +149,16 @@ const Knowledge: React.FC = () => {
     loadAvailableFabrics();
   }, [showProgress, showDatabaseFabric, showServiceNowFabric, showPDFUpload, showCodebaseFabric]);
 
-  const knowledgeOptions: KnowledgeOption[] = useMemo(() => {
-    const pharmaPdfFeatures = [
-      'Experiment reports, batch records, SOPs, protocols, analytical & stability PDFs',
-      'Artifact type hints for auto-classification',
-      'Scientific metadata extraction and evidence spans',
-      'Batch / lot / product context detection',
-      'Fabric readiness and staged graph outputs',
-    ];
-    const pharmaDbFeatures = [
-      'LIMS / MES / ELN exports and analytical databases',
-      'Tables mapped into scientific entities',
-      'Lineage-friendly structured ingestion',
-      'Same ontology-ready staging as document fabrics',
-      'Secure connector testing before create',
-    ];
-    const pharmaSnFeatures = [
-      'Deviation / CAPA / quality event feeds (CSV / API style)',
-      'Links to controlled vocabularies where configured',
-      'Pairs with document fabrics in composites',
-      'Governance-friendly provenance metadata',
-      'Incident & task exports supported',
-    ];
-    const pharmaCompFeatures = [
-      'Unify PDF + database + ITSM fabrics for one pharma graph',
-      'Cross-source evidence and lineage',
-      'Recommended after at least two source fabrics exist',
-      'Single composite ID for agents & ontology',
-      'No duplicate re-ingestion of sources',
-    ];
+  const sourceCatalog = useMemo(() => sourceCatalogForKind(weaveDomain), [weaveDomain]);
 
-    return [
-      {
+  const knowledgeOptions: KnowledgeOption[] = useMemo(() => {
+    const base: Record<FabricSourceId, KnowledgeOption> = {
+      pdf: {
         id: 'pdf',
-        title: isPharmaManufacturing(weaveDomain) ? 'Scientific documents & reports' : 'Upload PDF Documents',
-        description:
-          isPharmaManufacturing(weaveDomain)
-            ? 'PDF/TXT across experimental, manufacturing, and quality documentation'
-            : 'Upload and process PDF files to extract knowledge and create embeddings',
+        title: 'Upload PDF Documents',
+        description: 'Upload and process PDF files to extract knowledge and create embeddings',
         icon: DocumentTextIcon,
-        features: isPharmaManufacturing(weaveDomain) ? pharmaPdfFeatures : [
+        features: [
           'Extract text from PDF documents',
           'Automatic chunking and processing',
           'Generate embeddings for semantic search',
@@ -196,43 +168,37 @@ const Knowledge: React.FC = () => {
         color: 'blue',
         gradient: 'from-blue-500 to-blue-600',
       },
-      {
+      database: {
         id: 'database',
-        title: isPharmaManufacturing(weaveDomain) ? 'Databases & structured exports' : 'Connect to Database',
-        description:
-          isPharmaManufacturing(weaveDomain)
-            ? 'LIMS, MES, ELN extracts, and relational tables'
-            : 'Connect to various databases to extract structured knowledge',
+        title: 'Connect to Database',
+        description: 'Connect to various databases to extract structured knowledge',
         icon: ServerIcon,
-        features: isPharmaManufacturing(weaveDomain) ? pharmaDbFeatures : [
+        features: [
           'Support for MongoDB, PostgreSQL, MySQL',
           'Automatic schema detection',
           'Query optimization and indexing',
-          'Real-time data synchronization',
           'Secure connection management',
+          'CSV / Excel structured exports',
         ],
         color: 'green',
         gradient: 'from-green-500 to-green-600',
       },
-      {
+      servicenow: {
         id: 'servicenow',
-        title: isPharmaManufacturing(weaveDomain) ? 'Quality ITSM & exports' : 'ServiceNow Data',
-        description:
-          isPharmaManufacturing(weaveDomain)
-            ? 'ServiceNow or spreadsheet exports for deviations, CAPA, and tasks'
-            : 'Import data from ServiceNow to create knowledge fabric from tickets, incidents, and knowledge articles',
+        title: 'ServiceNow / ITSM export',
+        description: 'Import tickets, incidents, or quality events from an export or labelled sample',
         icon: CloudIcon,
-        features: isPharmaManufacturing(weaveDomain) ? pharmaSnFeatures : [
+        features: [
           'Import from CSV/Excel files',
-          'Direct ServiceNow API connection',
+          'Labelled sample when live pull is not wired',
           'Process tickets and incidents',
           'Extract knowledge articles',
-          'Real-time data synchronization',
+          'Governance-friendly provenance',
         ],
         color: 'orange',
         gradient: 'from-orange-500 to-orange-600',
       },
-      {
+      codebase: {
         id: 'codebase',
         title: 'Codebase / Workspace',
         description:
@@ -248,26 +214,46 @@ const Knowledge: React.FC = () => {
         color: 'cyan',
         gradient: 'from-cyan-500 to-blue-600',
       },
-      {
+      composite: {
         id: 'composite',
         title: 'Composite Multi-Source Fabric',
-        description:
-          isPharmaManufacturing(weaveDomain)
-            ? 'Merge pharma document, database, and ITSM fabrics into one governed fabric'
-            : 'Combine existing PDF, database, and ServiceNow fabrics into one unified fabric',
+        description: 'Combine existing fabrics into one unified fabric without re-ingesting sources',
         icon: Squares2X2Icon,
-        features: isPharmaManufacturing(weaveDomain) ? pharmaCompFeatures : [
+        features: [
           'Merge multiple source fabrics',
           'Unified querying across sources',
           'Cross-source lineage in one fabric',
-          'Smart way to combine PDF + DB',
+          'Recommended after two sources exist',
           'No duplicate source re-ingestion',
         ],
         color: 'violet',
         gradient: 'from-violet-500 to-fuchsia-600',
       },
-    ];
+    };
+
+    const catalog = sourceCatalogForKind(weaveDomain);
+    const applyCopy = (id: FabricSourceId): KnowledgeOption => {
+      const option = { ...base[id] };
+      const override = catalog.copy?.[id];
+      if (override) {
+        option.title = override.title;
+        option.description = override.description;
+      }
+      return option;
+    };
+
+    return [...catalog.recommended, ...catalog.other].map(applyCopy);
   }, [weaveDomain]);
+
+  const recommendedOptions = useMemo(() => {
+    const ids = new Set(sourceCatalog.recommended);
+    return knowledgeOptions.filter((o) => ids.has(o.id as FabricSourceId));
+  }, [knowledgeOptions, sourceCatalog]);
+
+  const otherOptions = useMemo(() => {
+    const ids = new Set(sourceCatalog.other);
+    return knowledgeOptions.filter((o) => ids.has(o.id as FabricSourceId));
+  }, [knowledgeOptions, sourceCatalog]);
 
   const handleCreateKnowledge = async () => {
     if (!selectedOption) return;
@@ -613,41 +599,101 @@ You can now view your fabric in the "Available Fabrics" tab with real statistics
       </section>
 
       {kindPicked && (
-        <section key={weaveDomain} className="mt-12">
-          <p className="mb-1 text-[13px] text-[#cbd5e1]">Pick the fabric creation source</p>
-          <p className="mb-4 text-[12px] text-[#8b9cb0]">{selectedKindMeta.label}</p>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-5">
-            {knowledgeOptions.map((option, index) => {
-              const selected = selectedOption === option.id;
-              const Icon = option.icon;
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedOption(option.id);
-                    if (
-                      isPharmaManufacturing(weaveDomain) &&
-                      (option.id === 'pdf' || option.id === 'database' || option.id === 'servicenow' || option.id === 'composite')
-                    ) {
-                      setPharmaConnector(option.id);
-                    }
-                  }}
-                  style={{ animationDelay: `${index * 120}ms` }}
-                  className={`kf-card-in relative overflow-hidden rounded-[22px] border px-3.5 py-3.5 text-left shadow-[0_16px_40px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.32)] backdrop-blur-2xl transition duration-300 ${
-                    selected
-                      ? 'border-white/45 bg-white/[0.16]'
-                      : 'border-white/18 bg-white/[0.07] hover:border-white/30 hover:bg-white/[0.11]'
-                  }`}
-                >
-                  <span className="pointer-events-none absolute inset-x-3 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
-                  <Icon className="mb-2 h-4 w-4 text-[#5ec8f2]" />
-                  <span className="block text-[13px] font-medium tracking-[-0.02em] text-[#e8edf4]">{option.title}</span>
-                  <span className="mt-1 block text-[11px] leading-snug text-[#8b9cb0]">{option.description}</span>
-                </button>
-              );
-            })}
+        <section key={weaveDomain} className="mt-12 space-y-8">
+          <div>
+            <p className="mb-1 text-[13px] text-[#cbd5e1]">
+              {otherOptions.length > 0 ? 'Recommended for this kind' : 'Pick the fabric creation source'}
+            </p>
+            <p className="mb-4 text-[12px] text-[#8b9cb0]">
+              {selectedKindMeta.label}
+              {otherOptions.length > 0
+                ? ' — sources that usually fit this domain. Same ingestion pipes; different defaults.'
+                : ' — full source menu for a general fabric.'}
+            </p>
+            <div
+              className={`grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 ${
+                recommendedOptions.length >= 4 ? 'lg:grid-cols-4' : 'lg:grid-cols-3'
+              }`}
+            >
+              {recommendedOptions.map((option, index) => {
+                const selected = selectedOption === option.id;
+                const Icon = option.icon;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedOption(option.id);
+                      if (
+                        isPharmaManufacturing(weaveDomain) &&
+                        (option.id === 'pdf' ||
+                          option.id === 'database' ||
+                          option.id === 'servicenow' ||
+                          option.id === 'composite')
+                      ) {
+                        setPharmaConnector(option.id);
+                      }
+                    }}
+                    style={{ animationDelay: `${index * 120}ms` }}
+                    className={`kf-card-in relative overflow-hidden rounded-[22px] border px-3.5 py-3.5 text-left shadow-[0_16px_40px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.32)] backdrop-blur-2xl transition duration-300 ${
+                      selected
+                        ? 'border-white/45 bg-white/[0.16]'
+                        : 'border-white/18 bg-white/[0.07] hover:border-white/30 hover:bg-white/[0.11]'
+                    }`}
+                  >
+                    <span className="pointer-events-none absolute inset-x-3 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
+                    <Icon className="mb-2 h-4 w-4 text-[#5ec8f2]" />
+                    <span className="block text-[13px] font-medium tracking-[-0.02em] text-[#e8edf4]">{option.title}</span>
+                    <span className="mt-1 block text-[11px] leading-snug text-[#8b9cb0]">{option.description}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
+
+          {otherOptions.length > 0 && (
+            <div>
+              <p className="mb-1 text-[13px] text-[#cbd5e1]">Other sources</p>
+              <p className="mb-4 text-[12px] text-[#8b9cb0]">
+                Available if you need them — not the usual starting point for {selectedKindMeta.label.replace(' Knowledge Fabric', '')}.
+              </p>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3">
+                {otherOptions.map((option, index) => {
+                  const selected = selectedOption === option.id;
+                  const Icon = option.icon;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedOption(option.id);
+                        if (
+                          isPharmaManufacturing(weaveDomain) &&
+                          (option.id === 'pdf' ||
+                            option.id === 'database' ||
+                            option.id === 'servicenow' ||
+                            option.id === 'composite')
+                        ) {
+                          setPharmaConnector(option.id);
+                        }
+                      }}
+                      style={{ animationDelay: `${index * 100}ms` }}
+                      className={`kf-card-in relative overflow-hidden rounded-[22px] border px-3.5 py-3.5 text-left shadow-[0_16px_40px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.32)] backdrop-blur-2xl transition duration-300 ${
+                        selected
+                          ? 'border-white/45 bg-white/[0.16]'
+                          : 'border-white/12 bg-white/[0.04] hover:border-white/25 hover:bg-white/[0.08]'
+                      }`}
+                    >
+                      <span className="pointer-events-none absolute inset-x-3 top-0 h-px bg-gradient-to-r from-transparent via-white/50 to-transparent" />
+                      <Icon className="mb-2 h-4 w-4 text-[#8b9cb0]" />
+                      <span className="block text-[13px] font-medium tracking-[-0.02em] text-[#e8edf4]">{option.title}</span>
+                      <span className="mt-1 block text-[11px] leading-snug text-[#8b9cb0]">{option.description}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </section>
       )}
 
