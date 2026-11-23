@@ -99,15 +99,18 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   }, [location.pathname]);
 
   return (
-    <div className="min-h-screen bg-[#040508] text-[#e8edf4]">
+    <div className="relative min-h-screen overflow-x-hidden text-[#e8edf4] weave-app-shell">
+      {/* Full-bleed atmosphere so wide screens are not empty black gutters */}
+      <div className="pointer-events-none fixed inset-0 -z-10 weave-app-atmosphere" aria-hidden />
+
       {/* Mobile sidebar */}
       <div className={`fixed inset-0 z-50 lg:hidden ${sidebarOpen ? 'block' : 'hidden'}`}>
         <div
           className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity"
           onClick={() => setSidebarOpen(false)}
         />
-        <div className="fixed inset-y-0 left-0 flex w-72 flex-col bg-[#080a10]/95 backdrop-blur-2xl rounded-r-3xl border-r border-[rgba(148,163,184,0.11)] shadow-2xl shadow-black/40">
-          <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-gradient-to-b from-violet-500/80 via-fuchsia-500/50 to-cyan-500/80 rounded-r" />
+        <div className="fixed inset-y-0 left-0 flex w-72 flex-col bg-[#0c121c]/96 backdrop-blur-2xl rounded-r-3xl border-r border-[rgba(148,163,184,0.14)] shadow-2xl shadow-black/40">
+          <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-gradient-to-b from-cyan-400/70 via-slate-400/40 to-cyan-500/50 rounded-r" />
           <div className="flex h-20 items-center justify-between px-5 border-b border-[rgba(148,163,184,0.09)]">
             <div className="flex items-center gap-3">
               <WeaveLogo gradientId="weave-grad-mobile" className="w-11 h-11" />
@@ -164,9 +167,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       </div>
 
       {/* Main content */}
-      <div className="flex min-h-screen flex-col">
+      <div className="relative z-0 flex min-h-screen flex-col">
         <div className="sticky top-0 z-40 px-3 pt-3 sm:px-5">
-          <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 rounded-full border border-white/12 bg-[#0b0f16]/82 px-2.5 shadow-[0_18px_50px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-2xl">
+          <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 rounded-full border border-white/12 bg-[#101822]/88 px-2.5 shadow-[0_18px_50px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-2xl">
             <button
               type="button"
               className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[#cbd5e1] hover:bg-white/[0.06] lg:hidden"
@@ -257,16 +260,18 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           </div>
         </div>
 
-        {/* Page content */}
+        {/* Page content — soft stage so side margins match the canvas */}
         <main className="flex-1 overflow-y-auto py-6 lg:py-8">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-            {children}
+            <div className="weave-content-stage min-h-[70vh] rounded-[28px] border border-white/[0.06] px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-7">
+              {children}
+            </div>
           </div>
         </main>
 
         {/* Bottom status strip */}
-        <div className="h-9 border-t border-[rgba(148,163,184,0.09)] bg-[#080a10]/85 backdrop-blur-2xl px-6">
-          <div className="flex h-full items-center justify-between text-[11px]">
+        <div className="h-9 border-t border-[rgba(148,163,184,0.1)] bg-[#0d141f]/80 backdrop-blur-2xl px-6">
+          <div className="mx-auto flex h-full max-w-7xl items-center justify-between text-[11px]">
             <div className="flex items-center gap-2 text-[#e8edf4]">
               <span className="h-2 w-2 rounded-full bg-[#3ecf9b]" />
               <span>System online</span>
