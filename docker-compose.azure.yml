@@ -92,9 +92,15 @@ services:
       - "80:80"
       - "443:443"
       - "443:443/udp"
+    extra_hosts:
+      # Reach SciNova (and other host-published apps) from this container.
+      - "host.docker.internal:host-gateway"
     environment:
       - WEAVE_DOMAIN=${WEAVE_DOMAIN:-cuweave.com}
       - WEAVE_UPSTREAM=${WEAVE_UPSTREAM:-web:80}
+      - SCINOVA_DOMAIN=${SCINOVA_DOMAIN:-scinova.solutions}
+      - SCINOVA_UPSTREAM=${SCINOVA_UPSTREAM:-host.docker.internal:5173}
+      - SCINOVA_API_UPSTREAM=${SCINOVA_API_UPSTREAM:-host.docker.internal:8000}
     volumes:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

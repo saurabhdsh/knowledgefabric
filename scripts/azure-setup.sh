@@ -114,16 +114,26 @@ for name in cuweave.com www.cuweave.com; do
 done
 log "DNS for cuweave.com points here"
 
-# https://cuweave.com needs ports 80 and 443. SEAL stays on 3000. SciNova stays on 5173 and 8000.
+# https://cuweave.com needs ports 80 and 443. SEAL stays on 3000.
+# SciNova app stays on 5173 and 8000. Weave Caddy fronts both domains —
+# do not leave a second proxy on 80/443, but do keep SciNova app containers up.
 while IFS='|' read -r id name ports; do
   [[ -z "${id}" ]] && continue
   [[ "${name}" == weave-azure-* ]] && continue
   if [[ "${ports}" == *":80->"* || "${ports}" == *":443->"* ]]; then
-    log "Stopping ${name} so https://cuweave.com can use ports 80 and 443."
+    log "Stopping ${name} so Weave Caddy can own ports 80 and 443 (cuweave.com + scinova.solutions)."
     docker stop "${id}" >/dev/null
   fi
 done < <(docker ps --format '{{.ID}}|{{.Names}}|{{.Ports}}')
 systemctl stop nginx apache2 caddy 2>/dev/null || true
+
+# Ensure SciNova listeners are up on the host ports Caddy will proxy to.
+if ! ss -ltn 2>/dev/null | grep -q ':5173 '; then
+  log "Nothing is listening on :5173 (SciNova web). Start the SciNova stack, then reload Caddy."
+fi
+if ! ss -ltn 2>/dev/null | grep -q ':8000 '; then
+  log "Nothing is listening on :8000 (SciNova API). Start the SciNova stack, then reload Caddy."
+fi
 
 log "Building and starting Weave. The first build takes several minutes."
 docker compose -f docker-compose.azure.yml up -d --build

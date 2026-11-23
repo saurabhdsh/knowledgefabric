@@ -1,6 +1,6 @@
 # Weave on the Azure VM at cuweave.com
 
-The app runs on `rapid-build-dev-server` (`20.127.186.132`) in its own Compose project. Caddy serves `https://cuweave.com` and `https://www.cuweave.com` on ports 80 and 443. SEAL stays on 3000. SciNova stays on 5173 and 8000. Postgres is not published.
+The app runs on `rapid-build-dev-server` (`20.127.186.132`) in its own Compose project. Weave’s Caddy owns ports 80 and 443 and routes by hostname: `cuweave.com` → Weave, `scinova.solutions` → SciNova on host ports 5173 (web) and 8000 (API). SEAL stays on 3000. Postgres is not published.
 
 Chat uses Azure OpenAI at `https://exxondemofdr.cognitiveservices.azure.com/openai/v1`, deployment `gpt-5-mini`. The key is pasted into `.env` on the VM and is not committed.
 

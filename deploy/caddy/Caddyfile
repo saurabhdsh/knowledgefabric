@@ -1,3 +1,6 @@
+# One Caddy owns :80/:443 on this VM.
+# cuweave.com → Weave. scinova.solutions → SciNova on the host (5173 / 8000).
+
 {$WEAVE_DOMAIN}, www.{$WEAVE_DOMAIN} {
 	encode zstd gzip
 
@@ -8,4 +11,24 @@
 	}
 
 	reverse_proxy {$WEAVE_UPSTREAM:web:80}
+}
+
+{$SCINOVA_DOMAIN:scinova.solutions}, www.{$SCINOVA_DOMAIN:scinova.solutions} {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	# API first when SciNova serves the app from Vite and the API on :8000.
+	@api path /api* /docs* /openapi.json /health /redoc*
+	handle @api {
+		reverse_proxy {$SCINOVA_API_UPSTREAM:host.docker.internal:8000}
+	}
+
+	handle {
+		reverse_proxy {$SCINOVA_UPSTREAM:host.docker.internal:5173}
+	}
 }
