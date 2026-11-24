@@ -274,22 +274,44 @@ def _tables_from_fetched_rows(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict
     if any(r.get("__source_collection") for r in rows):
         return split_rows_by_table(rows)
     if any(r.get("record_type") for r in rows):
-        plural = {
-            "member": "members", "plan": "plans", "provider": "providers",
-            "claim": "claims", "diagnosis": "diagnoses", "medication": "medications",
-            "care_plan": "care_plans", "care_manager": "care_managers",
-            "cost_driver": "cost_drivers", "care_event": "care_events", "sdoh": "sdoh",
-            "contract_term": "contract_terms", "prior_auth_rule": "prior_auth_rules",
-        }
         tables: Dict[str, List[Dict[str, Any]]] = {}
         for row in rows:
             rt = str(row.get("record_type") or "records")
-            name = plural.get(rt, rt if rt.endswith("s") else f"{rt}s")
+            name = _record_type_to_collection(rt)
             item = {k: v for k, v in row.items() if k != "record_type"}
             item["__source_collection"] = name
             tables.setdefault(name, []).append(item)
         return tables
     return split_rows_by_table(rows, default_table="records")
+
+
+def _record_type_to_collection(record_type: str) -> str:
+    """Map a seeded record_type to a plural collection name for domain graphs."""
+    plural = {
+        "member": "members",
+        "plan": "plans",
+        "provider": "providers",
+        "claim": "claims",
+        "claim_line": "claim_lines",
+        "payment": "payments",
+        "claim_event": "claim_events",
+        "diagnosis": "diagnoses",
+        "procedure": "procedures",
+        "medication": "medications",
+        "care_plan": "care_plans",
+        "care_manager": "care_managers",
+        "cost_driver": "cost_drivers",
+        "care_event": "care_events",
+        "sdoh": "sdoh",
+        "contract_term": "contract_terms",
+        "prior_auth_rule": "prior_auth_rules",
+    }
+    rt = str(record_type or "records").strip().lower()
+    if rt in plural:
+        return plural[rt]
+    if rt.endswith("s"):
+        return rt
+    return f"{rt}s"
 
 
 def _source_counts_from_fetched(
@@ -1105,15 +1127,45 @@ def _fetch_databricks_records(connection_data: Dict[str, Any]) -> Dict[str, Any]
 
     table_key = table_name or "databricks_query"
     processed_rows = []
+    per_collection_map: Dict[str, Dict[str, Any]] = {}
     for row in data_array:
         item = dict(zip(columns, row))
-        item["__source_collection"] = table_key
+        # Domain packs (claims_domain) use record_type so one Databricks table
+        # expands into Members / Claims / Providers / … for the knowledge graph.
+        existing_coll = str(item.get("__source_collection") or "").strip()
+        record_type = str(item.get("record_type") or "").strip()
+        if existing_coll:
+            coll = existing_coll
+        elif record_type:
+            coll = _record_type_to_collection(record_type)
+        else:
+            coll = table_key
+        item["__source_collection"] = coll
+        entry = per_collection_map.setdefault(
+            coll,
+            {"name": coll, "documents_imported": 0, "columns": [], "source_table": table_key},
+        )
+        entry["documents_imported"] += 1
+        if not entry["columns"]:
+            entry["columns"] = [
+                str(k) for k in item.keys()
+                if not str(k).startswith("__") and str(k) != "record_type"
+            ]
         processed_rows.append(item)
+
+    collections = list(per_collection_map.keys()) or [table_key]
+    per_collection = list(per_collection_map.values())
+    source_row_counts = {e["name"]: e["documents_imported"] for e in per_collection}
+    fabric_label = (
+        f"{safe_catalog}_{safe_schema}_claims_domain"
+        if "claims_domain" in (table_name or "").lower() or len(collections) > 1
+        else f"{safe_catalog}_{safe_schema}_{safe_table}"
+    )
 
     return {
         "rows": processed_rows,
         "source_name": table_key,
-        "fabric_name": f"{safe_catalog}_{safe_schema}_{safe_table}",
+        "fabric_name": fabric_label,
         "connection_info": {
             "type": "databricks",
             "catalog": catalog,
@@ -1123,12 +1175,18 @@ def _fetch_databricks_records(connection_data: Dict[str, Any]) -> Dict[str, Any]
             "rows_imported": len(processed_rows),
             "rows_in_source": len(processed_rows),
             "is_sample": bool(custom_statement) is False and limit and len(processed_rows) >= limit,
-            "source_row_counts": {table_key: None if (custom_statement or not table_name) else len(processed_rows)},
-            "collections": [table_key],
+            "source_row_counts": source_row_counts,
+            "collections": collections,
+            "per_collection": per_collection,
             "limit_per_collection": limit,
         },
-        "tags": ["databricks", catalog, schema, safe_table],
-        "description": f"Knowledge fabric created from Databricks {catalog}.{schema}.{table_name or 'query'}",
+        "tags": ["databricks", catalog, schema, safe_table] + (
+            ["claims-domain", "multi-entity"] if len(collections) > 1 else []
+        ),
+        "description": (
+            f"Knowledge fabric created from Databricks {catalog}.{schema}.{table_name or 'query'}"
+            + (f" ({len(collections)} entity types)" if len(collections) > 1 else "")
+        ),
     }
 
 
