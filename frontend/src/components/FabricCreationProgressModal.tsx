@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 export type FabricProgressStep = {
   id: string;
@@ -35,6 +36,20 @@ const FabricCreationProgressModal: React.FC<FabricCreationProgressModalProps> = 
   footer,
 }) => {
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!isVisible) return undefined;
+    const prevBody = document.body.style.overflow;
+    const main = document.querySelector('.weave-main-scroll') as HTMLElement | null;
+    const prevMain = main?.style.overflow ?? '';
+    document.body.style.overflow = 'hidden';
+    if (main) main.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevBody;
+      if (main) main.style.overflow = prevMain;
+    };
+  }, [isVisible]);
+
   if (!isVisible) return null;
 
   const errored = steps.find((step) => step.status === 'error');
@@ -59,8 +74,10 @@ const FabricCreationProgressModal: React.FC<FabricCreationProgressModalProps> = 
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 px-6 backdrop-blur-2xl">
+  // Portal to body so the card is viewport-centered — not trapped under the
+  // scrolled Layout / page shell (same issue as Connecting to Fabric).
+  return createPortal(
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/55 px-6 backdrop-blur-2xl">
       <div className="w-full max-w-[22rem] rounded-[28px] border border-white/10 bg-[#0c0e12]/88 px-8 py-9 text-center shadow-[0_30px_80px_rgba(0,0,0,0.45)]">
         <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/40">
           {finished ? 'Knowledge Fabric' : title}
@@ -128,7 +145,8 @@ const FabricCreationProgressModal: React.FC<FabricCreationProgressModalProps> = 
 
         {footer}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
 
