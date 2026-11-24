@@ -40,8 +40,15 @@ interface GraphViewOption {
 }
 
 interface GraphAnalytics {
-  top_entities: Array<{ label: string; weight: number }>;
-  top_relationships: Array<{ source: string; target: string; weight: number }>;
+  top_entities: Array<{ label: string; weight: number; type?: string; group?: string }>;
+  top_relationships: Array<{
+    source: string;
+    target: string;
+    weight: number;
+    relation?: string;
+    source_label?: string;
+    target_label?: string;
+  }>;
   relationship_breakdown: Record<string, number>;
   entity_count: number;
   graph_density: number;
@@ -1279,15 +1286,22 @@ const FabricKnowledgeGraph: React.FC = () => {
 
             <section className="relative overflow-hidden rounded-[24px] border border-white/15 bg-white/[0.07] p-4 shadow-[0_16px_50px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.22)] backdrop-blur-2xl lg:col-span-3">
               <div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
-              <p className="text-[10px] uppercase tracking-[0.22em] text-[#8b9cb0]">Weight</p>
+              <p className="text-[10px] uppercase tracking-[0.22em] text-[#8b9cb0]">Connections</p>
               <h3 className="mt-1 text-[15px] font-semibold tracking-[-0.02em] text-[#e8edf4]">Top Entities</h3>
               <div className="mt-3 max-h-[320px] space-y-1.5 overflow-auto">
                 {(analytics?.top_entities || []).length === 0 && (
                   <p className="text-[12px] text-[#8b9cb0]">Entities appear after the graph is published.</p>
                 )}
                 {(analytics?.top_entities || []).map((entity) => (
-                  <div key={entity.label} className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1.5">
-                    <span className="truncate text-[12px] text-[#e8edf4]">{entity.label}</span>
+                  <div key={`${entity.type || 'node'}-${entity.label}`} className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1.5">
+                    <div className="min-w-0">
+                      <span className="block truncate text-[12px] text-[#e8edf4]">{entity.label}</span>
+                      {(entity.type || entity.group) && (
+                        <span className="block truncate text-[10px] text-[#8b9cb0]">
+                          {[entity.type, entity.group].filter(Boolean).join(' · ')}
+                        </span>
+                      )}
+                    </div>
                     <span className="shrink-0 text-[12px] font-semibold tabular-nums text-[#d7cff5]">{entity.weight}</span>
                   </div>
                 ))}

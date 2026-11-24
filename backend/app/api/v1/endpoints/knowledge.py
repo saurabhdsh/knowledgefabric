@@ -1613,6 +1613,49 @@ def _build_graph_analytics(graph_data: Dict[str, Any]) -> Dict[str, Any]:
     edges = graph_data.get("edges", [])
     graph_type = str(graph_data.get("graph_type") or "")
 
+    degree: Dict[str, int] = {}
+    for edge in edges:
+        src = str(edge.get("source") or "")
+        tgt = str(edge.get("target") or "")
+        if src:
+            degree[src] = degree.get(src, 0) + 1
+        if tgt:
+            degree[tgt] = degree.get(tgt, 0) + 1
+
+    def _is_sample_instance(n: Dict[str, Any]) -> bool:
+        props = n.get("properties") if isinstance(n.get("properties"), dict) else {}
+        if props.get("sample") or props.get("node_kind") == "instance":
+            return True
+        nid = str(n.get("id") or "")
+        return nid.startswith("instance:")
+
+    def _rank_score(n: Dict[str, Any]) -> int:
+        """Prefer real connectivity over stored weight=1 on every sample row."""
+        nid = str(n.get("id") or "")
+        deg = int(degree.get(nid, 0))
+        stored = int(n.get("weight") or 0)
+        props = n.get("properties") if isinstance(n.get("properties"), dict) else {}
+        imported = int(props.get("documents_imported") or 0)
+        # Sample leaves are almost always weight 1 — rank by degree only.
+        if _is_sample_instance(n):
+            return max(deg, 1)
+        return max(stored, imported, deg, 1)
+
+    def _tier(n: Dict[str, Any]) -> int:
+        """Lower tier = more meaningful for Top Entities."""
+        ntype = str(n.get("type") or "")
+        if ntype in {"collection", "class", "module", "package", "service"}:
+            return 0
+        if ntype == "entity" and not _is_sample_instance(n):
+            return 1
+        if ntype in {"file", "symbol", "function"}:
+            return 2
+        if ntype == "entity":
+            return 3
+        if ntype in {"fabric", "workspace"}:
+            return 9
+        return 4
+
     # Document/exploratory graphs use type=entity; codebase graphs use module/file/symbol/etc.
     if graph_type == "codebase":
         preferred_types = {"module", "package", "service", "class", "function", "file", "symbol"}
@@ -1620,40 +1663,102 @@ def _build_graph_analytics(graph_data: Dict[str, Any]) -> Dict[str, Any]:
         if not entity_nodes:
             entity_nodes = [n for n in nodes if (n.get("type") or "") not in {"workspace", "fabric"}]
     else:
-        entity_nodes = [n for n in nodes if n.get("type") == "entity"]
-        if not entity_nodes:
-            entity_nodes = [n for n in nodes if n.get("type") != "fabric"]
+        # Prefer schema hubs (Members, Claims, …) over CLL_/row sample IDs.
+        hubs = [
+            n
+            for n in nodes
+            if (n.get("type") or "") in {"collection", "class"}
+        ]
+        real_entities = [
+            n
+            for n in nodes
+            if (n.get("type") or "") == "entity" and not _is_sample_instance(n)
+        ]
+        sample_entities = [
+            n
+            for n in nodes
+            if (n.get("type") or "") == "entity" and _is_sample_instance(n)
+        ]
+        if hubs:
+            entity_nodes = hubs + real_entities
+        elif real_entities:
+            entity_nodes = real_entities
+        elif sample_entities:
+            # Fall back to samples, but only the best-connected ones.
+            entity_nodes = sample_entities
+        else:
+            entity_nodes = [n for n in nodes if (n.get("type") or "") not in {"fabric", "workspace"}]
 
-    def _node_weight(n: Dict[str, Any]) -> int:
-        if n.get("weight") is not None:
-            return int(n.get("weight") or 0)
-        nid = str(n.get("id") or "")
-        return sum(1 for e in edges if e.get("source") == nid or e.get("target") == nid)
+    ranked_nodes = sorted(
+        entity_nodes,
+        key=lambda n: (_tier(n), -_rank_score(n), str(n.get("label") or n.get("id") or "")),
+    )
+    # When hubs exist, keep Top Entities on hubs (+ a few real entities), not raw row IDs.
+    if any(_tier(n) == 0 for n in ranked_nodes):
+        ranked_nodes = [n for n in ranked_nodes if _tier(n) <= 1] or ranked_nodes
 
-    ranked_nodes = sorted(entity_nodes, key=_node_weight, reverse=True)
     top_entities = [
         {
             "id": n.get("id"),
             "label": n.get("label") or n.get("id"),
             "type": n.get("type"),
-            "weight": _node_weight(n),
+            "group": n.get("group"),
+            "weight": _rank_score(n),
         }
         for n in ranked_nodes[:10]
     ]
 
-    related_edges = [e for e in edges if _edge_relation(e) == "related_to"]
+    id_to_label = {
+        str(n.get("id")): str(n.get("label") or n.get("id") or "")
+        for n in nodes
+        if n.get("id")
+    }
+
+    # Prefer typed domain edges over uniform includes/contains for the relationship brief.
+    preferred_relations = {
+        "related_to",
+        "references",
+        "linked_to",
+        "belongs_to",
+        "has",
+        "covers",
+        "treats",
+    }
+    related_edges = [
+        e for e in edges if _edge_relation(e).lower().replace(" ", "_") in preferred_relations
+    ]
+    if not related_edges:
+        related_edges = [
+            e
+            for e in edges
+            if _edge_relation(e) not in {"contains", "includes"}
+        ]
     if not related_edges:
         related_edges = list(edges)
-    related_edges.sort(key=lambda x: int(x.get("weight") or 1), reverse=True)
+
+    def _edge_score(edge: Dict[str, Any]) -> int:
+        stored = int(edge.get("weight") or 0)
+        if stored > 1:
+            return stored
+        # Fan-in/out proxy when every edge is weight 1.
+        src = str(edge.get("source") or "")
+        tgt = str(edge.get("target") or "")
+        return max(degree.get(src, 0) + degree.get(tgt, 0), 1)
+
+    related_edges.sort(key=_edge_score, reverse=True)
 
     top_relationships = []
     for edge in related_edges[:10]:
+        src = str(edge.get("source") or "")
+        tgt = str(edge.get("target") or "")
         top_relationships.append(
             {
-                "source": edge.get("source"),
-                "target": edge.get("target"),
+                "source": src,
+                "target": tgt,
+                "source_label": id_to_label.get(src) or src.split(":")[-1],
+                "target_label": id_to_label.get(tgt) or tgt.split(":")[-1],
                 "relation": _edge_relation(edge),
-                "weight": int(edge.get("weight") or 1),
+                "weight": _edge_score(edge),
             }
         )
 
