@@ -20,6 +20,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { ontologyApi, OntologyVersion, OntologyClass, OntologyRelationship, OntologyAttribute, DiscoveryRun } from '../../utils/ontologyApi';
 import { platformApi } from '../../utils/platformApi';
+import RelationBondGallery from '../../components/RelationBondGallery';
 
 type Tab = 'entities' | 'relationships' | 'attributes' | 'rules' | 'canonical' | 'graph';
 
@@ -1353,25 +1354,18 @@ const OntologyWorkspace: React.FC = () => {
                           </section>
                         )}
                         {Array.isArray(canonicalData.relationship_matrix) && (canonicalData.relationship_matrix as Record<string, unknown>[]).length > 0 && (
-                          <section>
-                            <h3 className="text-sm font-semibold text-[#e8edf4] mb-3 flex items-center gap-2">
-                              <LinkIcon className="w-4 h-4 text-[#5ec8f2]" />
-                              Relationship matrix
-                            </h3>
-                            <div className="space-y-2">
-                              {(canonicalData.relationship_matrix as Record<string, unknown>[]).map((r: Record<string, unknown>, i: number) => (
-                                <div key={i} className="or-ribbon" style={{ animationDelay: `${i * 30}ms` }}>
-                                  <span className="px-2.5 py-1 rounded-lg border border-[rgba(94,200,242,0.3)] bg-[rgba(94,200,242,0.1)] text-sm text-[#e8edf4]">
-                                    {String(r.source ?? '—')}
-                                  </span>
-                                  <span className="or-mono text-[11px] text-[#5ec8f2]">{String(r.relationship ?? r.name ?? '—')}</span>
-                                  <span className="text-[#8b9cb0]">→</span>
-                                  <span className="px-2.5 py-1 rounded-lg border border-[rgba(62,207,155,0.3)] bg-[rgba(62,207,155,0.1)] text-sm text-[#d8f4e8]">
-                                    {String(r.target ?? '—')}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
+                          <section className="or-shell p-4 sm:p-5">
+                            <RelationBondGallery
+                              title="Relationship constellation"
+                              subtitle="Canonical bonds as orbital arcs — source orb → typed relation → target orb"
+                              bonds={(canonicalData.relationship_matrix as Record<string, unknown>[]).map((r, i) => ({
+                                id: `canon-rel-${i}`,
+                                source: String(r.source ?? '—'),
+                                label: String(r.relationship ?? r.name ?? '—'),
+                                target: String(r.target ?? '—'),
+                                meta: r.cardinality ? String(r.cardinality) : undefined,
+                              }))}
+                            />
                           </section>
                         )}
                         {Array.isArray(canonicalData.attribute_catalog) && (canonicalData.attribute_catalog as Record<string, unknown>[]).length > 0 && (
@@ -1517,34 +1511,19 @@ const OntologyWorkspace: React.FC = () => {
                           </section>
                         )}
                         {graphEdgeTypes.length > 0 && (
-                          <section>
-                            <h3 className="text-sm font-semibold text-[#e8edf4] mb-3 flex items-center gap-2">
-                              <LinkIcon className="w-4 h-4 text-[#5ec8f2]" />
-                              Edge types
-                            </h3>
-                            <div className="space-y-2.5">
-                              {graphEdgeTypes.map((e: Record<string, unknown>, i: number) => {
-                                const source = String(e.source_type ?? e.from ?? '?');
-                                const edgeLabel = String(e.edge_label ?? e.type ?? 'RELATES_TO');
-                                const target = String(e.target_type ?? e.to ?? '?');
-                                const connected = !activeGraphNode || activeGraphNode === source || activeGraphNode === target;
-                                return (
-                                  <div
-                                    key={i}
-                                    className={`or-ribbon transition-opacity ${connected ? 'opacity-100' : 'opacity-35'}`}
-                                  >
-                                    <span className="px-2.5 py-1 rounded-lg border border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.12)] text-sm text-[#e8edf4]">
-                                      {source}
-                                    </span>
-                                    <span className="or-mono text-[11px] text-[#c4b8ef]">{edgeLabel}</span>
-                                    <span className="text-[#8b9cb0]">→</span>
-                                    <span className="px-2.5 py-1 rounded-lg border border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.12)] text-sm text-[#d8f4e8]">
-                                      {target}
-                                    </span>
-                                  </div>
-                                );
-                              })}
-                            </div>
+                          <section className="or-shell p-4 sm:p-5">
+                            <RelationBondGallery
+                              title="Edge constellation"
+                              subtitle="Graph edge types as traveling bonds — click a node above to spotlight its arcs"
+                              focusEntity={activeGraphNode}
+                              bonds={graphEdgeTypes.map((e: Record<string, unknown>, i: number) => ({
+                                id: `edge-${i}`,
+                                source: String(e.source_type ?? e.from ?? '?'),
+                                label: String(e.edge_label ?? e.type ?? 'RELATES_TO'),
+                                target: String(e.target_type ?? e.to ?? '?'),
+                                meta: e.direction ? String(e.direction) : undefined,
+                              }))}
+                            />
                           </section>
                         )}
                         {graphData.graph_cypher_snippet && (
@@ -1670,37 +1649,28 @@ const OntologyWorkspace: React.FC = () => {
                     countLabel={`${version.relationships.length} relations`}
                     tone="cyan"
                   />
-                  <div className="p-4 space-y-2.5">
-                    {version.relationships.length === 0 && (
-                      <div className="rounded-2xl border border-dashed border-[rgba(148,163,184,0.22)] p-8 text-center text-sm text-[#8b9cb0]">
-                        No relationships available in this discovery result.
-                      </div>
-                    )}
-                    {version.relationships.map((r, idx) => {
-                      const src = version.classes.find((c) => c.id === r.source_class_id)?.normalized_name || r.source_class_id;
-                      const tgt = version.classes.find((c) => c.id === r.target_class_id)?.normalized_name || r.target_class_id;
-                      return (
-                        <div
-                          key={r.id}
-                          onClick={() => setSelectedElement(r)}
-                          className={`or-ribbon cursor-pointer ${selectedElement?.id === r.id ? 'ring-1 ring-[#5ec8f2]/60' : ''}`}
-                          style={{ animationDelay: `${idx * 30}ms` }}
-                        >
-                          <span className="px-2.5 py-1 rounded-lg border border-[rgba(94,200,242,0.3)] bg-[rgba(94,200,242,0.1)] text-sm text-[#e8edf4]">
-                            {src}
-                          </span>
-                          <span className="or-mono text-[11px] text-[#5ec8f2]">{r.relationship_name}</span>
-                          <span className="text-[#8b9cb0]">→</span>
-                          <span className="px-2.5 py-1 rounded-lg border border-[rgba(62,207,155,0.3)] bg-[rgba(62,207,155,0.1)] text-sm text-[#d8f4e8]">
-                            {tgt}
-                          </span>
-                          <span className="ml-auto flex items-center gap-2">
-                            <ConfidenceMeter value={r.confidence_score} />
-                            <StatusChip status={r.status} />
-                          </span>
-                        </div>
-                      );
-                    })}
+                  <div className="p-4">
+                    <RelationBondGallery
+                      title="Relationship constellation"
+                      subtitle="Click a bond to inspect confidence, status, and evidence"
+                      emptyLabel="No relationships available in this discovery result."
+                      selectedId={selectedElement && 'relationship_name' in selectedElement ? selectedElement.id : null}
+                      onBondClick={(bond) => {
+                        const rel = version.relationships.find((r) => r.id === bond.id);
+                        if (rel) setSelectedElement(rel);
+                      }}
+                      bonds={version.relationships.map((r) => {
+                        const src = version.classes.find((c) => c.id === r.source_class_id)?.normalized_name || r.source_class_id;
+                        const tgt = version.classes.find((c) => c.id === r.target_class_id)?.normalized_name || r.target_class_id;
+                        return {
+                          id: r.id,
+                          source: String(src),
+                          label: r.relationship_name,
+                          target: String(tgt),
+                          meta: r.status ? String(r.status) : undefined,
+                        };
+                      })}
+                    />
                   </div>
                 </div>
               )}

@@ -382,6 +382,207 @@ code {
     linear-gradient(105deg, rgba(94, 200, 242, 0.06), transparent 40%, rgba(62, 207, 155, 0.06));
 }
 
+/* Relationship constellation — bond arcs (Canonical matrix + Graph edge types) */
+@keyframes or-bond-rise {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes or-bond-dash {
+  to { stroke-dashoffset: -48; }
+}
+
+.ontology-result .or-bond-gallery {
+  position: relative;
+}
+
+.ontology-result .or-bond-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.ontology-result .or-bond-chip {
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--or-line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--or-mute);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.ontology-result .or-bond-chip:hover {
+  color: var(--or-ink);
+  border-color: rgba(94, 200, 242, 0.4);
+}
+
+.ontology-result .or-bond-chip.is-active {
+  color: #061018;
+  border-color: transparent;
+  background: linear-gradient(120deg, #5ec8f2 0%, #7ad4c0 100%);
+}
+
+.ontology-result .or-bond-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+@media (min-width: 900px) {
+  .ontology-result .or-bond-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.ontology-result .or-bond {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.85fr) minmax(120px, 1.4fr) minmax(72px, 0.85fr);
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.85rem 0.9rem 1rem;
+  border-radius: 1.15rem;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background:
+    radial-gradient(120% 80% at 50% -20%, rgba(94, 200, 242, 0.12), transparent 55%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.04), rgba(8, 12, 20, 0.55));
+  animation: or-bond-rise 0.5s ease both;
+  transition: opacity 0.25s ease, border-color 0.25s ease, transform 0.25s ease;
+}
+
+.ontology-result .or-bond:hover {
+  border-color: rgba(94, 200, 242, 0.4);
+  transform: translateY(-2px);
+}
+
+.ontology-result .or-bond.is-dimmed {
+  opacity: 0.28;
+  filter: grayscale(0.35);
+}
+
+.ontology-result .or-bond.is-selected {
+  border-color: rgba(94, 200, 242, 0.55);
+  box-shadow: 0 0 0 1px rgba(94, 200, 242, 0.25), 0 18px 40px -24px rgba(94, 200, 242, 0.5);
+}
+
+.ontology-result .or-bond--interactive {
+  width: 100%;
+  text-align: inherit;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.ontology-result .or-bond__node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  text-align: center;
+}
+
+.ontology-result .or-bond__orb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #061018;
+  background: linear-gradient(145deg, #5ec8f2, #7ad4c0);
+  box-shadow:
+    0 0 0 3px rgba(94, 200, 242, 0.18),
+    0 8px 20px -10px rgba(94, 200, 242, 0.65);
+}
+
+.ontology-result .or-bond__orb--target {
+  background: linear-gradient(145deg, #3ecf9b, #5ec8f2);
+  box-shadow:
+    0 0 0 3px rgba(62, 207, 155, 0.18),
+    0 8px 20px -10px rgba(62, 207, 155, 0.55);
+}
+
+.ontology-result .or-bond__name {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--or-ink);
+  line-height: 1.25;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.ontology-result .or-bond__bridge {
+  position: relative;
+  min-height: 3.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ontology-result .or-bond__svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.ontology-result .or-bond__arc {
+  stroke-dasharray: 6 6;
+  animation: or-bond-dash 2.8s linear infinite;
+}
+
+.ontology-result .or-bond__pulse {
+  filter: drop-shadow(0 0 4px rgba(94, 200, 242, 0.9));
+}
+
+.ontology-result .or-bond__label {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  max-width: 92%;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid rgba(94, 200, 242, 0.35);
+  background: rgba(6, 10, 18, 0.88);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 28px -16px rgba(94, 200, 242, 0.55);
+}
+
+.ontology-result .or-bond__label-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #bfeaff;
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ontology-result .or-bond__meta {
+  font-size: 0.58rem;
+  color: #8b9cb0;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 /* Context Analysis — the operating view of one fabric's context layer */
 .ctx-studio {
   --ctx-line: rgba(148, 163, 184, 0.16);
