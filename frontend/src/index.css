@@ -460,36 +460,33 @@ code {
   animation: kf-status-in 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* Light page enter — no blur (blur caused a short “stuck” flicker on navigate). */
+/* Opacity-only page enter — never use transform here: it creates a containing
+   block and traps position:fixed overlays (Connecting to Fabric, modals) inside
+   the scrolled page so they appear below the fold. */
 @keyframes kf-page-in {
   from {
     opacity: 0.01;
-    transform: translateY(8px);
   }
   to {
     opacity: 1;
-    transform: none;
   }
 }
 
 .kf-page-in {
-  animation: kf-page-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
-  will-change: opacity, transform;
+  animation: kf-page-in 0.22s ease-out both;
 }
 
 @keyframes kf-card-in {
   from {
     opacity: 0.01;
-    transform: translateY(6px);
   }
   to {
     opacity: 1;
-    transform: none;
   }
 }
 
 .kf-card-in {
-  animation: kf-card-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: kf-card-in 0.28s ease-out both;
 }
 
 .login-waves {

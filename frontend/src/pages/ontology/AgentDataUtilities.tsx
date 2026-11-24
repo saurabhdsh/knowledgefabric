@@ -1,5 +1,6 @@
 import * as d3 from 'd3';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { apiRequest } from '../../utils/api';
 import { ontologyApi, OntologyProject, KnowledgeFabricLite } from '../../utils/ontologyApi';
 import { renderLlmGraphInsight } from '../../utils/renderLlmGraphInsight';
@@ -525,7 +526,21 @@ function ConnectingFabricOverlay({
   fabricLabel: string;
   fabricId: string;
 }) {
-  return (
+  useEffect(() => {
+    const prevBody = document.body.style.overflow;
+    const main = document.querySelector('.weave-main-scroll') as HTMLElement | null;
+    const prevMain = main?.style.overflow ?? '';
+    document.body.style.overflow = 'hidden';
+    if (main) main.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevBody;
+      if (main) main.style.overflow = prevMain;
+    };
+  }, []);
+
+  // Portal to body so the dialog is viewport-centered — not trapped inside the
+  // scrolled main/page shell (fixed + ancestor transform/filter breaks that).
+  return createPortal(
     <div
       className="fixed inset-0 z-[200] flex items-center justify-center bg-[#020617]/80 px-4 py-8 backdrop-blur-md motion-reduce:backdrop-blur-sm"
       role="alertdialog"
@@ -563,7 +578,8 @@ function ConnectingFabricOverlay({
           </p>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
