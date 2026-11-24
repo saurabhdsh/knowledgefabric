@@ -35,6 +35,14 @@ function activityLabel(item: KnowledgeFabric): string {
   return 'Fabric updated';
 }
 
+function statusLabel(item: KnowledgeFabric): string {
+  if (item.status === 'failed' || item.model_status === 'failed') return 'Failed';
+  if (item.status === 'building' || item.status === 'training' || item.model_status === 'indexing') return 'Building';
+  if (item.model_status === 'trained' || item.model_status === 'indexed') return 'Ready';
+  if (item.status === 'active') return 'Active';
+  return item.status || 'Ready';
+}
+
 const PATHS = [
   {
     to: '/knowledge',
@@ -70,8 +78,8 @@ const Dashboard: React.FC = () => {
   const [ontologyProjects, setOntologyProjects] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
     const fetchDashboardData = async () => {
-      setLoading(true);
       setError(null);
       try {
         const [fabricsResult, projects] = await Promise.all([
@@ -80,6 +88,7 @@ const Dashboard: React.FC = () => {
             .catch(() => null),
           ontologyApi.listProjects().catch(() => []),
         ]);
+        if (cancelled) return;
 
         const fabricsData: KnowledgeFabric[] =
           fabricsResult?.success && Array.isArray(fabricsResult?.data) ? fabricsResult.data : [];
@@ -91,13 +100,16 @@ const Dashboard: React.FC = () => {
           setError('Load failed. Please check backend server and refresh.');
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load dashboard');
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load dashboard');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     fetchDashboardData();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const totals = useMemo(() => {
@@ -108,13 +120,13 @@ const Dashboard: React.FC = () => {
     return { documents, chunks, indexed, active };
   }, [fabrics]);
 
-  const loom = useMemo(() => {
+  const recentFabrics = useMemo(() => {
     return [...fabrics]
       .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
-      .slice(0, 7);
+      .slice(0, 6);
   }, [fabrics]);
 
-  const recent = loom.slice(0, 5);
+  const recent = recentFabrics.slice(0, 5);
   const greeting = user?.display_name || user?.username || 'there';
   const indexReady = totals.indexed > 0;
 
@@ -127,17 +139,17 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="relative space-y-5 text-[#cbd5e1]">
-      <section className="kf-card-in relative overflow-hidden rounded-[28px] border border-white/15 bg-white/[0.05] px-6 py-7 shadow-[0_24px_70px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.2)] backdrop-blur-2xl sm:px-8">
+      <section className="relative overflow-hidden rounded-[28px] border border-white/15 bg-white/[0.05] px-6 py-7 shadow-[0_24px_70px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.2)] backdrop-blur-2xl sm:px-8">
         <div className="pointer-events-none absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
         <div className="pointer-events-none absolute -right-16 -top-20 h-48 w-48 rounded-full bg-[#5ec8f2]/10 blur-3xl" />
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-xl">
             <p className="text-[10px] uppercase tracking-[0.22em] text-[#8b9cb0]">Workspace</p>
             <h1 className="mt-2 text-[2rem] font-semibold leading-none tracking-[-0.04em] text-[#e8edf4] sm:text-[2.6rem]">
-              {greeting}
+              Welcome back, {greeting}
             </h1>
             <p className="mt-3 max-w-md text-sm leading-relaxed text-[#9fb0c5]">
-              Your fabrics sit on one floor. Open a point to see its graph, the evidence on each edge, and the records behind it.
+              Pick up where you left off — open a fabric, run discovery, or ask the knowledge layer.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -169,7 +181,7 @@ const Dashboard: React.FC = () => {
         </div>
       )}
 
-      <section className="kf-card-in grid grid-cols-2 overflow-hidden rounded-[28px] border border-white/12 bg-white/[0.04] shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] backdrop-blur-xl lg:grid-cols-4" style={{ animationDelay: '80ms' }}>
+      <section className="grid grid-cols-2 overflow-hidden rounded-[28px] border border-white/12 bg-white/[0.04] shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] backdrop-blur-xl lg:grid-cols-4">
         {figures.map((figure, index) => (
           <div
             key={figure.label}
@@ -177,7 +189,11 @@ const Dashboard: React.FC = () => {
           >
             <p className="text-[10px] uppercase tracking-[0.18em] text-[#8b9cb0]">{figure.label}</p>
             <p className="mt-1 text-[1.7rem] font-semibold tabular-nums tracking-[-0.04em] text-[#e8edf4]">
-              {loading ? '—' : figure.value.toLocaleString()}
+              {loading ? (
+                <span className="inline-block h-7 w-14 animate-pulse rounded-md bg-white/10" />
+              ) : (
+                figure.value.toLocaleString()
+              )}
             </p>
             <p className="mt-1 text-[12px] text-[#8b9cb0]">{figure.note}</p>
           </div>
@@ -185,87 +201,98 @@ const Dashboard: React.FC = () => {
       </section>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
-        <section className="kf-card-in relative overflow-hidden rounded-[28px] border border-white/15 bg-[#070b12]/80 p-5 shadow-[0_20px_60px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.14)] xl:col-span-8" style={{ animationDelay: '140ms' }}>
+        <section className="relative overflow-hidden rounded-[28px] border border-white/15 bg-[#070b12]/80 p-5 shadow-[0_20px_60px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.14)] xl:col-span-8">
           <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/50 to-transparent" />
           <div className="flex items-end justify-between gap-3">
             <div>
-              <p className="text-[10px] uppercase tracking-[0.22em] text-[#8b9cb0]">The floor</p>
-              <h2 className="mt-1 text-lg font-semibold tracking-[-0.03em] text-[#e8edf4]">Live fabrics</h2>
+              <p className="text-[10px] uppercase tracking-[0.22em] text-[#8b9cb0]">Catalog</p>
+              <h2 className="mt-1 text-lg font-semibold tracking-[-0.03em] text-[#e8edf4]">Recent fabrics</h2>
             </div>
             <Link to="/fabrics" className="text-[12px] text-[#9adfff] hover:text-white">
-              All fabrics
+              View all
             </Link>
           </div>
 
-          <div className="relative mt-2 h-[280px]">
-            <svg className="absolute inset-0 h-full w-full" viewBox="0 0 1000 280" preserveAspectRatio="none" aria-hidden>
-              <path
-                className="dash-loom"
-                d="M 40 190 C 220 40, 420 250, 640 120 S 900 60, 970 150"
-                fill="none"
-                stroke="rgba(94,200,242,0.35)"
-                strokeWidth="1.2"
-              />
-            </svg>
-            {loading && (
-              <p className="absolute left-2 top-4 text-sm text-[#8b9cb0]">Gathering fabrics…</p>
-            )}
-            {!loading && loom.length === 0 && (
-              <Link
-                to="/knowledge"
-                className="absolute left-1/2 top-1/2 w-44 -translate-x-1/2 -translate-y-1/2 text-center"
-              >
-                <span className="mx-auto block h-3 w-3 rounded-full border border-[#5ec8f2] bg-[#5ec8f2]/30" />
-                <span className="mt-3 block text-sm text-[#e8edf4]">No fabrics yet</span>
-                <span className="mt-1 block text-[12px] text-[#8b9cb0]">Create the first one</span>
-              </Link>
-            )}
-            {loom.map((fabric, index) => {
-              const t = loom.length === 1 ? 0.5 : index / (loom.length - 1);
-              const left = 8 + t * 84;
-              const top = 58 - Math.sin(t * Math.PI) * 34;
-              return (
+          <ul className="mt-4 space-y-2">
+            {loading &&
+              Array.from({ length: 4 }).map((_, i) => (
+                <li
+                  key={`sk-${i}`}
+                  className="h-[4.25rem] animate-pulse rounded-2xl border border-white/8 bg-white/[0.03]"
+                />
+              ))}
+            {!loading && recentFabrics.length === 0 && (
+              <li>
                 <Link
-                  key={fabric.id}
-                  to={`/fabrics/${fabric.id}/knowledge-graph`}
-                  className="dash-node group absolute w-36 -translate-x-1/2 text-center"
-                  style={{ left: `${left}%`, top: `${top}%`, animationDelay: `${120 + index * 70}ms` }}
+                  to="/knowledge"
+                  className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-white/15 bg-white/[0.02] px-4 py-10 text-center"
                 >
-                  <span
-                    className="mx-auto block h-2.5 w-2.5 rounded-full ring-4 ring-[#5ec8f2]/10 transition group-hover:scale-125"
-                    style={{ backgroundColor: tone(fabric) }}
-                  />
-                  <span className="mt-2 block truncate text-[12px] font-medium text-[#e8edf4] group-hover:text-white">
-                    {fabric.name}
-                  </span>
-                  <span className="block truncate text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">
-                    {fabric.source_type || 'fabric'}
-                  </span>
-                </Link>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="kf-card-in rounded-[28px] border border-white/15 bg-white/[0.045] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] backdrop-blur-xl xl:col-span-4" style={{ animationDelay: '200ms' }}>
-          <p className="text-[10px] uppercase tracking-[0.22em] text-[#8b9cb0]">Latest</p>
-          <h2 className="mt-1 text-lg font-semibold tracking-[-0.03em] text-[#e8edf4]">What changed</h2>
-          <ul className="mt-4 space-y-3">
-            {loading && <li className="text-sm text-[#8b9cb0]">Loading activity…</li>}
-            {!loading && recent.length === 0 && <li className="text-sm text-[#8b9cb0]">Nothing has moved yet.</li>}
-            {recent.map((item) => (
-              <li key={item.id}>
-                <Link to={`/fabrics/${item.id}/knowledge-graph`} className="block rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2.5 hover:bg-white/[0.06]">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[12px] font-medium" style={{ color: tone(item) }}>{activityLabel(item)}</span>
-                    <span className="shrink-0 text-[10px] text-[#8b9cb0]">
-                      {item.updated_at ? new Date(item.updated_at).toLocaleDateString() : ''}
-                    </span>
-                  </div>
-                  <p className="mt-1 truncate text-sm text-[#e8edf4]">{item.name}</p>
+                  <span className="text-sm text-[#e8edf4]">No fabrics yet</span>
+                  <span className="mt-1 text-[12px] text-[#8b9cb0]">Create your first knowledge fabric</span>
                 </Link>
               </li>
-            ))}
+            )}
+            {!loading &&
+              recentFabrics.map((fabric) => (
+                <li key={fabric.id}>
+                  <Link
+                    to={`/fabrics/${fabric.id}/knowledge-graph`}
+                    className="group flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-3.5 py-3 transition-colors duration-200 hover:border-white/20 hover:bg-white/[0.06]"
+                  >
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full ring-4 ring-[#5ec8f2]/10"
+                      style={{ backgroundColor: tone(fabric) }}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-[#e8edf4] group-hover:text-white">
+                        {fabric.name}
+                      </p>
+                      <p className="mt-0.5 truncate text-[11px] uppercase tracking-[0.14em] text-[#8b9cb0]">
+                        {fabric.source_type || 'fabric'}
+                        {fabric.document_count != null ? ` · ${fabric.document_count} docs` : ''}
+                      </p>
+                    </div>
+                    <span
+                      className="shrink-0 rounded-full border border-white/10 px-2.5 py-1 text-[11px]"
+                      style={{ color: tone(fabric) }}
+                    >
+                      {statusLabel(fabric)}
+                    </span>
+                    <ArrowRightIcon className="h-4 w-4 shrink-0 text-[#8b9cb0] opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
+                  </Link>
+                </li>
+              ))}
+          </ul>
+        </section>
+
+        <section className="rounded-[28px] border border-white/15 bg-white/[0.045] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] backdrop-blur-xl xl:col-span-4">
+          <p className="text-[10px] uppercase tracking-[0.22em] text-[#8b9cb0]">Activity</p>
+          <h2 className="mt-1 text-lg font-semibold tracking-[-0.03em] text-[#e8edf4]">What changed</h2>
+          <ul className="mt-4 space-y-3">
+            {loading &&
+              Array.from({ length: 3 }).map((_, i) => (
+                <li key={`act-sk-${i}`} className="h-16 animate-pulse rounded-2xl border border-white/8 bg-white/[0.03]" />
+              ))}
+            {!loading && recent.length === 0 && <li className="text-sm text-[#8b9cb0]">Nothing has moved yet.</li>}
+            {!loading &&
+              recent.map((item) => (
+                <li key={item.id}>
+                  <Link
+                    to={`/fabrics/${item.id}/knowledge-graph`}
+                    className="block rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2.5 transition-colors duration-200 hover:bg-white/[0.06]"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[12px] font-medium" style={{ color: tone(item) }}>
+                        {activityLabel(item)}
+                      </span>
+                      <span className="shrink-0 text-[10px] text-[#8b9cb0]">
+                        {item.updated_at ? new Date(item.updated_at).toLocaleDateString() : ''}
+                      </span>
+                    </div>
+                    <p className="mt-1 truncate text-sm text-[#e8edf4]">{item.name}</p>
+                  </Link>
+                </li>
+              ))}
           </ul>
         </section>
       </div>
@@ -275,8 +302,7 @@ const Dashboard: React.FC = () => {
           <Link
             key={path.to}
             to={path.to}
-            className="kf-card-in group rounded-[24px] border border-white/12 bg-white/[0.04] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-xl transition hover:border-white/25 hover:bg-white/[0.07]"
-            style={{ animationDelay: `${260 + index * 70}ms` }}
+            className="group rounded-[24px] border border-white/12 bg-white/[0.04] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-xl transition-colors duration-200 hover:border-white/25 hover:bg-white/[0.07]"
           >
             <div className="flex items-center justify-between">
               <span className="text-[10px] uppercase tracking-[0.2em] text-[#8b9cb0]">{path.kicker}</span>

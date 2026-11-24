@@ -11,11 +11,7 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   const location = useLocation();
 
   if (isLoading) {
-    return (
-      <div className="min-h-screen bg-[#040508] flex items-center justify-center text-[#8b9cb0] text-sm">
-        Loading Weave…
-      </div>
-    );
+    return <div className="min-h-screen bg-[#040508]" aria-busy="true" />;
   }
 
   if (!isAuthenticated) {

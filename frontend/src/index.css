@@ -460,21 +460,36 @@ code {
   animation: kf-status-in 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-@keyframes kf-card-in {
+/* Light page enter — no blur (blur caused a short “stuck” flicker on navigate). */
+@keyframes kf-page-in {
   from {
-    opacity: 0;
-    transform: translateY(18px) scale(0.97);
-    filter: blur(8px);
+    opacity: 0.01;
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
     transform: none;
-    filter: none;
+  }
+}
+
+.kf-page-in {
+  animation: kf-page-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: opacity, transform;
+}
+
+@keyframes kf-card-in {
+  from {
+    opacity: 0.01;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 
 .kf-card-in {
-  animation: kf-card-in 0.95s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: kf-card-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .login-waves {
@@ -611,22 +626,8 @@ code {
   }
 }
 
-.dash-loom {
-  stroke-dasharray: 6 14;
-  animation: dash-loom 36s linear infinite;
-}
-
-@keyframes dash-loom {
-  to { stroke-dashoffset: -480; }
-}
-
-.dash-node {
-  animation: kf-card-in 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .dash-loom,
-  .dash-node,
+  .kf-page-in,
   .kf-card-in {
     animation: none;
   }

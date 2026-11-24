@@ -11,12 +11,10 @@ interface FeatureRouteProps {
 const FeatureRoute: React.FC<FeatureRouteProps> = ({ feature, children }) => {
   const { can, isLoading } = useAuth();
 
+  // Keep the prior page shell visible during the tiny auth resolve — a text
+  // flash here read as a navigation hitch.
   if (isLoading) {
-    return (
-      <div className="flex min-h-[40vh] items-center justify-center text-sm text-[#8b9cb0]">
-        Checking access…
-      </div>
-    );
+    return <div className="min-h-[24vh]" aria-hidden />;
   }
 
   if (!can(feature)) {

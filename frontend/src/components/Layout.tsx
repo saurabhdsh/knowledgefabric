@@ -97,6 +97,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   useEffect(() => {
     setSidebarOpen(false);
     setSearchOpen(false);
+    // Instant scroll reset keeps route changes feeling fluid (no mid-page jump).
+    const main = mainRef.current;
+    if (main) main.scrollTop = 0;
+    else window.scrollTo(0, 0);
+    setScrolled(false);
   }, [location.pathname]);
 
   useEffect(() => {
@@ -291,7 +296,10 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           ref={mainRef}
           className="weave-main-scroll flex-1 overflow-y-auto overflow-x-hidden pt-[4.75rem] pb-3 sm:pt-[5rem] sm:pb-4"
         >
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div
+            key={location.pathname}
+            className="kf-page-in mx-auto max-w-7xl px-4 sm:px-6 lg:px-8"
+          >
             {children}
           </div>
         </main>
