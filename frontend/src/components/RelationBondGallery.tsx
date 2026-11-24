@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 export type RelationBond = {
   id?: string;
@@ -19,6 +19,10 @@ type RelationBondGalleryProps = {
   selectedId?: string | null;
   onBondClick?: (bond: RelationBond) => void;
 };
+
+function norm(value: string): string {
+  return value.trim().toLowerCase();
+}
 
 function initials(name: string): string {
   const parts = name.replace(/[_-]+/g, ' ').trim().split(/\s+/).filter(Boolean);
@@ -122,22 +126,37 @@ const RelationBondGallery: React.FC<RelationBondGalleryProps> = ({
   const [filter, setFilter] = useState<string | 'all'>('all');
 
   const sources = useMemo(() => {
-    const set = new Set<string>();
+    const byKey = new Map<string, string>();
     bonds.forEach((b) => {
-      if (b.source) set.add(b.source);
+      const raw = (b.source ?? '').trim();
+      if (!raw) return;
+      const key = norm(raw);
+      if (!byKey.has(key)) byKey.set(key, raw);
     });
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
+    return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b));
   }, [bonds]);
 
+  useEffect(() => {
+    if (filter === 'all') return;
+    const stillThere = sources.some((s) => norm(s) === norm(filter));
+    if (!stillThere) setFilter('all');
+  }, [sources, filter]);
+
   const visible = useMemo(() => {
-    return bonds.map((b) => {
-      const focus = focusEntity?.trim();
-      const dimmedByFocus = Boolean(
-        focus && focus !== b.source && focus !== b.target,
-      );
-      const dimmedByFilter = filter !== 'all' && b.source !== filter;
-      return { ...b, dimmed: dimmedByFocus || dimmedByFilter };
-    });
+    const focusKey = focusEntity ? norm(focusEntity) : '';
+    const filterKey = filter === 'all' ? '' : norm(filter);
+
+    return bonds
+      .filter((b) => {
+        if (!filterKey) return true;
+        return norm(b.source) === filterKey;
+      })
+      .map((b) => {
+        const dimmedByFocus = Boolean(
+          focusKey && norm(b.source) !== focusKey && norm(b.target) !== focusKey,
+        );
+        return { ...b, dimmed: dimmedByFocus };
+      });
   }, [bonds, focusEntity, filter]);
 
   if (bonds.length === 0) {
@@ -152,43 +171,62 @@ const RelationBondGallery: React.FC<RelationBondGalleryProps> = ({
           <p className="text-[12px] text-[#8b9cb0] mt-1 max-w-xl">{subtitle}</p>
         </div>
         <p className="text-[11px] uppercase tracking-[0.16em] text-[#5ec8f2]/80">
-          {bonds.length} bond{bonds.length === 1 ? '' : 's'}
+          {filter === 'all'
+            ? `${bonds.length} bond${bonds.length === 1 ? '' : 's'}`
+            : `${visible.length} of ${bonds.length} bonds`}
         </p>
       </div>
 
       {sources.length > 1 && (
-        <div className="or-bond-filters mb-4">
+        <div className="or-bond-filters mb-4" role="toolbar" aria-label="Filter by source entity">
           <button
             type="button"
             className={`or-bond-chip ${filter === 'all' ? 'is-active' : ''}`}
-            onClick={() => setFilter('all')}
+            aria-pressed={filter === 'all'}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setFilter('all');
+            }}
           >
             All sources
           </button>
-          {sources.map((src) => (
-            <button
-              key={src}
-              type="button"
-              className={`or-bond-chip ${filter === src ? 'is-active' : ''}`}
-              onClick={() => setFilter(src)}
-            >
-              From {src}
-            </button>
-          ))}
+          {sources.map((src) => {
+            const active = filter !== 'all' && norm(filter) === norm(src);
+            return (
+              <button
+                key={src}
+                type="button"
+                className={`or-bond-chip ${active ? 'is-active' : ''}`}
+                aria-pressed={active}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setFilter(src);
+                }}
+              >
+                From {src}
+              </button>
+            );
+          })}
         </div>
       )}
 
-      <div className="or-bond-grid">
-        {visible.map((bond, i) => (
-          <BondArc
-            key={bond.id ?? `${bond.source}-${bond.label}-${bond.target}-${i}`}
-            bond={bond}
-            index={i}
-            selected={Boolean(selectedId && bond.id === selectedId)}
-            onClick={onBondClick ? () => onBondClick(bond) : undefined}
-          />
-        ))}
-      </div>
+      {visible.length === 0 ? (
+        <p className="text-sm text-[#8b9cb0]">No bonds from this source.</p>
+      ) : (
+        <div className="or-bond-grid">
+          {visible.map((bond, i) => (
+            <BondArc
+              key={bond.id ?? `${bond.source}-${bond.label}-${bond.target}-${i}`}
+              bond={bond}
+              index={i}
+              selected={Boolean(selectedId && bond.id === selectedId)}
+              onClick={onBondClick ? () => onBondClick(bond) : undefined}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 };
