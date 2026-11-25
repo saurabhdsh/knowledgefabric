@@ -7,6 +7,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { apiRequest } from '../utils/api';
+import ContextEvidenceBubble from '../components/ContextEvidenceBubble';
 
 type TabId = 'in-use' | 'queue' | 'overrides' | 'coverage';
 
@@ -281,18 +282,14 @@ const ContextAnalysis: React.FC = () => {
                     <p className="mt-1 line-clamp-2 text-sm text-[#cbd5e1]">{episode.answer}</p>
                   </button>
                   {open && (
-                    <div className="mt-4 space-y-2 border-t border-[rgba(148,163,184,0.12)] pt-3">
+                    <div className="mt-4 space-y-3 border-t border-[rgba(148,163,184,0.12)] pt-4">
                       {lines.length === 0 && <p className="text-sm text-[#8b9cb0]">This turn was recorded before envelopes were stored.</p>}
                       {lines.map((line, index) => (
-                        <div key={`${episode.id}-${index}`} className="flex gap-3 rounded-lg bg-black/20 px-3 py-2">
-                          <span className={`ctx-kind ${line.kind}`}>{line.kind}</span>
-                          <div className="min-w-0">
-                            <p className="text-sm text-[#e8edf4]">{line.text}</p>
-                            <p className="mt-1 font-mono text-[11px] text-[#8b9cb0]">
-                              {line.source_id || 'no source'}{line.confidence != null ? ` · ${confidenceLabel(line.confidence)}` : ''}
-                            </p>
-                          </div>
-                        </div>
+                        <ContextEvidenceBubble
+                          key={`${episode.id}-${index}`}
+                          line={line}
+                          index={index}
+                        />
                       ))}
                     </div>
                   )}
