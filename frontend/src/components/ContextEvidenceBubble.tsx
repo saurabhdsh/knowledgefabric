@@ -66,13 +66,17 @@ const ContextEvidenceBubble: React.FC<ContextEvidenceBubbleProps> = ({ line, ind
     [kind, line.text]
   );
 
+  const label = kind.toUpperCase();
+
   return (
     <article
       className={`ctx-ev ctx-ev--${kind}`}
       style={{ animationDelay: `${Math.min(index, 14) * 40}ms` }}
     >
       <div className="ctx-ev__rail" aria-hidden>
-        <span className="ctx-ev__badge">{kind}</span>
+        <span className="ctx-ev__badge" title={label}>
+          {label}
+        </span>
       </div>
 
       <div className="ctx-ev__body">
