@@ -516,6 +516,18 @@ def answer_query(
             "- This is a mixed question: use the SQL RESULT for counts/totals and the document "
             "passages for policy or narrative context. Cite both.\n"
         )
+    context_contract = "DESIGNED CONTEXT LAYER" in (memory_context or "")
+    decision_tail = (
+        "\n- A DESIGNED CONTEXT LAYER is attached. After SUMMARY and EVIDENCE, you MUST end with:\n"
+        "## DECISION\n"
+        "- decision: pay|deny|hold|human_review\n"
+        "- confidence_0_1: <number>\n"
+        "- evidence_fields: <fields used>\n"
+        "- reasoning_one_line: <one sentence>\n"
+        "- Apply the Context Layer business rules literally; do not stop at IMPLICATIONS/UNKNOWNS.\n"
+        if context_contract
+        else ""
+    )
     user_prompt = (
         f"Question: {query}\n{memory_block}\n"
         f"Evidence from the knowledge fabric '{fabric_name}':\n\n" + "\n\n".join(packed) + "\n\n"
@@ -528,6 +540,7 @@ def answer_query(
         "- If the evidence does not contain the answer, say so plainly instead of guessing.\n"
         "- If APPROVED FABRIC MEMORY is present, treat those corrections as authoritative.\n"
         "- Use Markdown; use a table for lists of records or numbers."
+        f"{decision_tail}"
     )
     if out["notes"]:
         user_prompt += "\nNote: " + " ".join(out["notes"])

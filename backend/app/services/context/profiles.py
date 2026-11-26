@@ -247,26 +247,62 @@ def unbind_agent(context_id: str, agent_key: str) -> Dict[str, Any]:
     return update_profile(context_id, {"agent_bindings": bindings})
 
 
+def render_decision_system_addendum(profile: Dict[str, Any]) -> str:
+    """Hard system-prompt contract applied only when a context_id is attached."""
+    playbook = profile.get("playbook") or {}
+    routes = [str(r) for r in (playbook.get("routes") or ["pay", "deny", "hold", "human_review"])]
+    default_route = str(playbook.get("default_route") or "human_review")
+    schema = profile.get("decision_schema") or {}
+    thr = schema.get("human_review_if_confidence_below")
+    thr_line = (
+        f"- If your confidence_0_1 is below {thr}, decision MUST be human_review.\n"
+        if thr is not None
+        else ""
+    )
+    return (
+        "\n\nDESIGNED CONTEXT LAYER — MANDATORY (this query has a published context_id).\n"
+        f"Context: {profile.get('name')} ({profile.get('id')}) v{profile.get('version')}.\n"
+        "You are not free-form narrating. You MUST adjudicate under this contract:\n"
+        f"- Decision MUST be exactly one of: {', '.join(routes)}.\n"
+        f"- Default when evidence is incomplete: {default_route}.\n"
+        f"{thr_line}"
+        "- End every answer with this exact Markdown block (no other decision format):\n"
+        "## DECISION\n"
+        "- decision: <one route>\n"
+        "- confidence_0_1: <0-1 number>\n"
+        "- evidence_fields: <comma-separated fabric fields or record keys you used>\n"
+        "- reasoning_one_line: <one sentence>\n"
+        "- Do NOT invent claim, member, plan, amount, or status fields that are absent from evidence.\n"
+        "- Prefer exact RECORD LOOKUP / table rows over narrative summaries when deciding.\n"
+    )
+
+
 def render_agent_preamble(profile: Dict[str, Any]) -> str:
     """Text injected ahead of fabric retrieval so agents honor the designed layer."""
     lines: List[str] = [
-        "DESIGNED CONTEXT LAYER (operating contract — obey before answering):",
+        "DESIGNED CONTEXT LAYER (operating contract — MUST obey before answering):",
         f"Context: {profile.get('name')} ({profile.get('id')}) · status={profile.get('status')} · v{profile.get('version')}",
         f"Purpose: {profile.get('purpose') or '—'}",
         f"Primary fabric: {profile.get('primary_fabric_id') or '—'}",
+        "This is a FAIL-CLOSED adjudication contract. Narrative alone is not a decision.",
     ]
     if profile.get("ontology_version_id"):
         lines.append(f"Ontology lens: {profile['ontology_version_id']}")
     scope = profile.get("scope") or {}
-    cols = scope.get("collections") or []
+    cols = [
+        str(c).strip()
+        for c in (scope.get("collections") or [])
+        if str(c).strip() and str(c).strip().lower() not in {"pay", "deny", "hold", "human_review"}
+        and not str(c).strip().lower().startswith("playbook")
+    ]
     if cols:
-        lines.append("Scope collections: " + ", ".join(str(c) for c in cols))
+        lines.append("Scope collections: " + ", ".join(cols))
     excl = scope.get("exclude_collections") or []
     if excl:
         lines.append("Exclude collections: " + ", ".join(str(c) for c in excl))
     rules = profile.get("rules") or []
     if rules:
-        lines.append("Business rules:")
+        lines.append("Business rules (MUST apply in order; critical overrides warn/info):")
         for rule in rules[:20]:
             if isinstance(rule, dict):
                 lines.append(f"- [{rule.get('severity') or 'info'}] {rule.get('text') or ''}")
@@ -285,7 +321,7 @@ def render_agent_preamble(profile: Dict[str, Any]) -> str:
     schema = profile.get("decision_schema") or {}
     if schema:
         lines.append(
-            "Return structured decisions when deciding. Keys: "
+            "REQUIRED output keys under ## DECISION: "
             + ", ".join(str(k) for k in (schema.get("keys") or []))
         )
         thr = schema.get("human_review_if_confidence_below")
@@ -304,6 +340,10 @@ def render_agent_preamble(profile: Dict[str, Any]) -> str:
                 lines.append(f"- {note.get('text') or ''}")
             else:
                 lines.append(f"- {note}")
+    lines.append(
+        "OUTPUT REQUIREMENT: after SUMMARY/EVIDENCE, end with ## DECISION "
+        "(decision, confidence_0_1, evidence_fields, reasoning_one_line)."
+    )
     lines.append("End of designed context layer.")
     return "\n".join(lines)
 

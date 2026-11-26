@@ -60,6 +60,45 @@ def looks_structured(query: str, profile: Dict[str, Any]) -> bool:
     return False
 
 
+def _id_aliases(token: str) -> List[str]:
+    """Expand common demo/agent ID spellings (underscore vs hyphen, zero-pad, MBR→MEM)."""
+    raw = (token or "").strip()
+    if not raw:
+        return []
+    out: List[str] = []
+    seen = set()
+
+    def add(value: str) -> None:
+        if value and value not in seen:
+            seen.add(value)
+            out.append(value)
+
+    add(raw)
+    if "_" in raw:
+        add(raw.replace("_", "-"))
+    if "-" in raw:
+        add(raw.replace("-", "_"))
+
+    for candidate in list(out):
+        m = re.match(r"^([A-Za-z]+)[-_](\d+)$", candidate)
+        if not m:
+            continue
+        prefix, digits = m.group(1), m.group(2)
+        prefixes = [prefix, prefix.upper()]
+        if prefix.upper() == "MBR":
+            prefixes.extend(["MEM", "mem"])
+        if prefix.upper() == "MEM":
+            prefixes.append("MBR")
+        for pref in prefixes:
+            add(f"{pref}-{digits}")
+            add(f"{pref}_{digits}")
+            for width in (4, 6):
+                padded = digits.zfill(width)
+                add(f"{pref}-{padded}")
+                add(f"{pref}_{padded}")
+    return out
+
+
 def _candidate_tokens(query: str) -> Tuple[List[str], List[str]]:
     """``(identifier-like tokens, name-like phrases)`` found in a question."""
     ids: List[str] = []
@@ -69,8 +108,11 @@ def _candidate_tokens(query: str) -> Tuple[List[str], List[str]]:
             continue
         has_digit = any(ch.isdigit() for ch in token)
         coded = bool(re.search(r"[-_]", token)) and token.upper() == token and len(token) >= 4
-        if (has_digit or coded) and token not in ids:
-            ids.append(token)
+        if not (has_digit or coded):
+            continue
+        for alias in _id_aliases(token):
+            if alias not in ids:
+                ids.append(alias)
     # Name candidates: quoted phrases, then every run of 1-4 consecutive words
     # (longest first). They are only ever matched exactly against label columns.
     names: List[str] = [p.strip() for p in _QUOTED_RE.findall(query or "") if p.strip()]
@@ -86,7 +128,7 @@ def _candidate_tokens(query: str) -> Tuple[List[str], List[str]]:
             phrase = " ".join(gram)
             if phrase not in names:
                 names.append(phrase)
-    return ids[:8], names[:60]
+    return ids[:16], names[:60]
 
 
 def _row_dict(table: Dict[str, Any], columns: List[str], row: List[Any]) -> Dict[str, Any]:

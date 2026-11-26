@@ -4911,6 +4911,10 @@ async def query_knowledge_base(
                     if context_profile:
                         preamble = context_profiles.render_agent_preamble(context_profile)
                         memory_context = f"{preamble}\n\n{memory_context}".strip()
+                        system_prompt = (
+                            system_prompt
+                            + context_profiles.render_decision_system_addendum(context_profile)
+                        )
                         # Prefer profile ontology lens when set
                         if context_profile.get("ontology_version_id"):
                             fabric = dict(fabric)

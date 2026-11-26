@@ -1,9 +1,27 @@
 import * as d3 from 'd3';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Link } from 'react-router-dom';
 import { apiRequest } from '../../utils/api';
 import { ontologyApi, OntologyProject, KnowledgeFabricLite } from '../../utils/ontologyApi';
 import { renderLlmGraphInsight } from '../../utils/renderLlmGraphInsight';
+
+type PublishedContext = {
+  id: string;
+  name: string;
+  status: string;
+  version: number;
+  purpose?: string;
+  primary_fabric_id?: string | null;
+  playbook?: { routes?: string[]; default_route?: string };
+};
+
+function shortRecordId(value?: string): string {
+  const id = String(value || '').trim();
+  if (!id) return '';
+  if (id.length <= 18) return id;
+  return `${id.slice(0, 8)}…${id.slice(-4)}`;
+}
 
 type FabricDocPayload = {
   documents?: string[];
@@ -228,39 +246,54 @@ function ChunkTypeScatterPack({
 function buildCodingAssistantSnippets(
   fabricId: string,
   query: string,
-  apiBase: string
+  apiBase: string,
+  contextId?: string
 ): CodeSnippet[] {
   const escapedQuery = query.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const pyContextLine = contextId
+    ? `\n    "context_id": "${contextId}",`
+    : '';
+  const curlPayload = contextId
+    ? `{"query":"${escapedQuery || 'Return duplicate counts by label'}","llm_provider":"openai","context_id":"${contextId}"}`
+    : `{"query":"${escapedQuery || 'Return duplicate counts by label'}","llm_provider":"openai"}`;
   return [
     {
-      title: 'Python · Query fabric (same as Talk to Data)',
+      title: contextId
+        ? 'Python · Query with Context Layer'
+        : 'Python · Query fabric (same as Talk to Data)',
       language: 'python',
       code: `import requests
 
 FABRIC_ID = "${fabricId}"
 API = "${apiBase}"
-
+${contextId ? `CONTEXT_ID = "${contextId}"\n` : ''}
 resp = requests.post(
     f"{API}/api/v1/knowledge/query/{FABRIC_ID}",
-    json={"query": """${escapedQuery || 'Your prompt here'}""", "llm_provider": "openai"},
+    json={
+        "query": """${escapedQuery || 'Your prompt here'}""",
+        "llm_provider": "openai",${pyContextLine}
+    },
     timeout=60,
 )
 resp.raise_for_status()
 data = resp.json()
-print(data.get("data", {}).get("answer", ""))`,
+print(data.get("data", {}).get("answer", ""))
+print("context:", data.get("data", {}).get("context_id"))
+print("route:", data.get("data", {}).get("route"))`,
     },
     {
       title: 'curl · Smoke test',
       language: 'bash',
       code: `curl -s -X POST "${apiBase}/api/v1/knowledge/query/${fabricId}" \\
   -H "Content-Type: application/json" \\
-  -d '{"query":"${escapedQuery || 'Return duplicate counts by label'}","llm_provider":"openai"}' | jq .`,
+  -d '${curlPayload}' | jq .`,
     },
     {
       title: 'Prompt pattern · Structured agent output',
       language: 'text',
       code: `Return JSON only with keys: decision, confidence_0_1, evidence_fields[], reasoning_one_line.
-Ground every field in fabric chunks. If uncertain, set decision to "human_review".`,
+Ground every field in fabric chunks. If uncertain, set decision to "human_review".
+${contextId ? 'A published Context Layer is attached — honor its rules, playbook routes, and evidence schema.' : ''}`,
     },
   ];
 }
@@ -604,6 +637,10 @@ const AgentDataUtilities: React.FC = () => {
   const [talkResult, setTalkResult] = useState<Record<string, unknown> | null>(null);
   const [recommendations, setRecommendations] = useState<string[]>([]);
   const [tips, setTips] = useState<string[]>([]);
+  const [contextProfiles, setContextProfiles] = useState<PublishedContext[]>([]);
+  const [loadingContexts, setLoadingContexts] = useState(false);
+  const [selectedContextId, setSelectedContextId] = useState('');
+  const [contextMode, setContextMode] = useState<'fabric' | 'layer'>('fabric');
 
   const [ontologyOpen, setOntologyOpen] = useState(false);
   const [ontologyQuery, setOntologyQuery] = useState('');
@@ -663,6 +700,35 @@ const AgentDataUtilities: React.FC = () => {
     refreshFabricData(selectedFabricId);
   }, [selectedFabricId, refreshFabricData]);
 
+  const loadContextsForFabric = useCallback(async (fabricId: string) => {
+    if (!fabricId) {
+      setContextProfiles([]);
+      setSelectedContextId('');
+      setContextMode('fabric');
+      return;
+    }
+    setLoadingContexts(true);
+    try {
+      const response = await apiRequest(
+        `api/v1/agent/context-profiles?fabric_id=${encodeURIComponent(fabricId)}`
+      );
+      const data = await response.json();
+      const rows = ((data?.data?.profiles || []) as PublishedContext[]).filter(Boolean);
+      setContextProfiles(rows);
+      const published = rows.filter((p) => p.status === 'published');
+      setSelectedContextId((prev) => (prev && published.some((p) => p.id === prev) ? prev : ''));
+      setContextMode((prev) => (prev === 'layer' && published.length === 0 ? 'fabric' : prev));
+    } catch {
+      setContextProfiles([]);
+    } finally {
+      setLoadingContexts(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadContextsForFabric(selectedFabricId);
+  }, [selectedFabricId, loadContextsForFabric]);
+
   useEffect(() => {
     if (!selectedProjectId) {
       setVersions([]);
@@ -677,6 +743,16 @@ const AgentDataUtilities: React.FC = () => {
   const activeFabric = useMemo(
     () => fabrics.find((f) => f.id === selectedFabricId),
     [fabrics, selectedFabricId]
+  );
+
+  const publishedContexts = useMemo(
+    () => contextProfiles.filter((p) => p.status === 'published'),
+    [contextProfiles]
+  );
+
+  const selectedContext = useMemo(
+    () => contextProfiles.find((p) => p.id === selectedContextId) || null,
+    [contextProfiles, selectedContextId]
   );
 
   const fabricDetails = graphPayload?.fabric_details ?? {};
@@ -733,19 +809,35 @@ const AgentDataUtilities: React.FC = () => {
   }, [evergreenAgentTips, tips]);
   const analytics = (graphPayload?.analytics ?? {}) as Record<string, unknown>;
 
-  const talkAnswer = String((talkResult?.data as Record<string, unknown> | undefined)?.answer ?? '');
-  const talkConfidence = Number((talkResult?.data as Record<string, unknown> | undefined)?.confidence ?? 0);
-  const talkProvider = String((talkResult?.data as Record<string, unknown> | undefined)?.llm_provider ?? '');
+  const talkData = (talkResult?.data as Record<string, unknown> | undefined) || undefined;
+  const talkAnswer = String(talkData?.answer ?? '');
+  const talkConfidence = Number(talkData?.confidence ?? 0);
+  const talkProvider = String(talkData?.llm_provider ?? '');
+  const talkContextId = String(talkData?.context_id ?? '');
+  const talkRoute = String(talkData?.route ?? '');
+  const talkContextName = String(
+    (talkData?.context_envelope as Record<string, unknown> | undefined)?.context_name
+      ?? selectedContext?.name
+      ?? ''
+  );
 
   const runTalkToData = async () => {
     if (!talkQuery.trim() || !selectedFabricId) return;
+    if (contextMode === 'layer' && !selectedContextId) return;
     setTalkLoading(true);
     setTalkResult(null);
     try {
+      const payload: Record<string, unknown> = {
+        query: talkQuery.trim(),
+        llm_provider: 'openai',
+      };
+      if (contextMode === 'layer' && selectedContextId) {
+        payload.context_id = selectedContextId;
+      }
       const response = await apiRequest(`api/v1/knowledge/query/${selectedFabricId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: talkQuery.trim(), llm_provider: 'openai' }),
+        body: JSON.stringify(payload),
       });
       const data = await response.json();
       setTalkResult(data);
@@ -773,8 +865,14 @@ const AgentDataUtilities: React.FC = () => {
   };
 
   const codingSnippets = useMemo(
-    () => buildCodingAssistantSnippets(selectedFabricId, talkQuery, apiBase),
-    [selectedFabricId, talkQuery, apiBase]
+    () =>
+      buildCodingAssistantSnippets(
+        selectedFabricId,
+        talkQuery,
+        apiBase,
+        contextMode === 'layer' ? selectedContextId || undefined : undefined
+      ),
+    [selectedFabricId, talkQuery, apiBase, contextMode, selectedContextId]
   );
 
   const runOntologyQuery = async () => {
@@ -849,7 +947,12 @@ const AgentDataUtilities: React.FC = () => {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">
               <select
                 value={selectedFabricId}
-                onChange={(e) => setSelectedFabricId(e.target.value)}
+                onChange={(e) => {
+                  setSelectedFabricId(e.target.value);
+                  setSelectedContextId('');
+                  setContextMode('fabric');
+                  setTalkResult(null);
+                }}
                 style={{ backgroundImage: FABRIC_SELECT_BG }}
                 className="h-12 min-h-[48px] w-full flex-1 appearance-none rounded-2xl border border-[rgba(148,163,184,0.25)] bg-[#0c1220]/90 bg-[length:1rem] bg-[position:right_0.75rem_center] bg-no-repeat px-4 pr-10 text-sm font-medium leading-normal text-[#e2e8f0] shadow-inner shadow-black/20 backdrop-blur-sm transition focus:border-[rgba(94,200,242,0.45)] focus:outline-none focus:ring-2 focus:ring-[rgba(94,200,242,0.25)]"
               >
@@ -900,15 +1003,124 @@ const AgentDataUtilities: React.FC = () => {
               <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-[#a78bfa]">01 · Talk to Data</p>
               <h2 className="mt-2 text-xl font-semibold text-[#f8fafc]">Validate prompts against live fabric context</h2>
               <p className="mt-2 max-w-2xl text-sm text-[#94a3b8]">
-                Same API your agents use. You get the answer, confidence, tailored recommendations, and integration snippets for this fabric.
+                Same API your agents use — fabric alone, or with a published Context Layer attached so rules and playbook ride along.
               </p>
             </div>
+            <Link
+              to="/context"
+              className="text-[11px] font-medium text-[#5ec8f2] hover:underline"
+            >
+              Open Context Layer →
+            </Link>
+          </div>
+
+          <div className="mt-6 rounded-2xl border border-[rgba(94,200,242,0.22)] bg-[linear-gradient(145deg,rgba(94,200,242,0.08),rgba(15,23,42,0.4))] p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#5ec8f2]">Context Layer</p>
+                <p className="mt-1 text-sm font-semibold text-[#f8fafc]">Attach a published contract</p>
+                <p className="mt-1 text-xs text-[#94a3b8]">Toggle fabric-only vs governed run — identical question, different legitimacy.</p>
+              </div>
+              <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${
+                contextMode === 'layer'
+                  ? 'bg-[rgba(62,207,155,0.15)] text-[#9af0ca]'
+                  : 'bg-white/10 text-[#cbd5e1]'
+              }`}>
+                {contextMode === 'layer' ? 'Fabric + context' : 'Fabric only'}
+              </span>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-[#020617]/70 p-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setContextMode('fabric');
+                  setSelectedContextId('');
+                }}
+                className={`rounded-lg px-3 py-2.5 text-left transition ${
+                  contextMode === 'fabric'
+                    ? 'bg-white/[0.1] text-[#e8edf4] shadow-sm ring-1 ring-[rgba(148,163,184,0.25)]'
+                    : 'text-[#8b9cb0] hover:text-[#cbd5e1]'
+                }`}
+              >
+                <p className="text-[11px] font-semibold">Fabric only</p>
+                <p className="mt-0.5 text-[10px] opacity-80">No designed contract</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setContextMode('layer');
+                  if (!selectedContextId && publishedContexts[0]) {
+                    setSelectedContextId(publishedContexts[0].id);
+                  }
+                }}
+                disabled={loadingContexts || publishedContexts.length === 0}
+                className={`rounded-lg px-3 py-2.5 text-left transition disabled:opacity-40 ${
+                  contextMode === 'layer'
+                    ? 'bg-gradient-to-br from-[rgba(94,200,242,0.22)] to-[rgba(62,207,155,0.14)] text-[#e8edf4] shadow-sm ring-1 ring-[rgba(94,200,242,0.4)]'
+                    : 'text-[#8b9cb0] hover:text-[#cbd5e1]'
+                }`}
+              >
+                <p className="text-[11px] font-semibold">With Context Layer</p>
+                <p className="mt-0.5 text-[10px] opacity-80">
+                  {loadingContexts
+                    ? 'Loading…'
+                    : publishedContexts.length
+                      ? `${publishedContexts.length} published`
+                      : 'None published'}
+                </p>
+              </button>
+            </div>
+
+            {contextMode === 'layer' && (
+              <div className="mt-3 space-y-2">
+                {publishedContexts.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-[rgba(148,163,184,0.25)] px-3 py-3 text-xs text-[#8b9cb0]">
+                    No published contexts on this fabric. Create and publish one in Context Layer, then come back.
+                  </p>
+                ) : (
+                  publishedContexts.map((ctx) => {
+                    const active = selectedContextId === ctx.id;
+                    return (
+                      <button
+                        key={ctx.id}
+                        type="button"
+                        onClick={() => setSelectedContextId(ctx.id)}
+                        className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${
+                          active
+                            ? 'border-[rgba(62,207,155,0.5)] bg-[rgba(62,207,155,0.1)]'
+                            : 'border-[rgba(148,163,184,0.16)] bg-[#0b0f16]/50 hover:border-[rgba(94,200,242,0.35)]'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-[#e8edf4]">{ctx.name}</p>
+                            <p className="mt-0.5 font-mono text-[10px] text-[#8b9cb0]">
+                              v{ctx.version} · {shortRecordId(ctx.id)}
+                            </p>
+                            {ctx.purpose && (
+                              <p className="mt-1 line-clamp-2 text-[11px] text-[#9fb0c5]">{ctx.purpose}</p>
+                            )}
+                          </div>
+                          {active && (
+                            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#3ecf9b]">
+                              Attached
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            )}
           </div>
 
           <div className="mt-6 flex flex-wrap gap-2">
             {[
               'Return duplicate counts by duplicate_match_type as JSON.',
               'For claim CLM101820: prior match, match type, route, and key field deltas.',
+              'Should we pay claim CLM-000008 for member MEM-0004 on plan PLN-CSNP-SILVER? Return a decision with rationale.',
               'List 3 near-duplicate pairs with claim_id and risk score.',
             ].map((chip) => (
               <button
@@ -934,10 +1146,22 @@ const AgentDataUtilities: React.FC = () => {
                 <button
                   type="button"
                   onClick={runTalkToData}
-                  disabled={talkLoading || !talkQuery.trim()}
-                  className="rounded-2xl bg-gradient-to-r from-[#0ea5e9] to-[#6366f1] px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-110 disabled:opacity-40"
+                  disabled={
+                    talkLoading
+                    || !talkQuery.trim()
+                    || (contextMode === 'layer' && !selectedContextId)
+                  }
+                  className={`rounded-2xl px-6 py-3 text-sm font-semibold text-white shadow-lg transition hover:brightness-110 disabled:opacity-40 ${
+                    contextMode === 'layer'
+                      ? 'bg-gradient-to-r from-[#0ea5e9] to-[#10b981] shadow-cyan-500/25'
+                      : 'bg-gradient-to-r from-[#0ea5e9] to-[#6366f1] shadow-indigo-500/25'
+                  }`}
                 >
-                  {talkLoading ? 'Running…' : 'Run prompt'}
+                  {talkLoading
+                    ? 'Running…'
+                    : contextMode === 'layer'
+                      ? 'Run with Context Layer'
+                      : 'Run · Fabric only'}
                 </button>
                 {talkResult && talkConfidence > 0 && (
                   <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 font-mono text-xs text-[#94a3b8]">
@@ -949,7 +1173,23 @@ const AgentDataUtilities: React.FC = () => {
 
               {talkResult && (
                 <div className="rounded-2xl border border-[rgba(94,200,242,0.2)] bg-[#020617]/50 p-5">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#64748b]">Answer</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#64748b]">Answer</p>
+                    {talkContextId ? (
+                      <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-cyan-200">
+                        Context · {talkContextName || shortRecordId(talkContextId)}
+                      </span>
+                    ) : (
+                      <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-[#94a3b8]">
+                        Fabric only
+                      </span>
+                    )}
+                    {talkRoute && (
+                      <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-emerald-200">
+                        Route · {talkRoute}
+                      </span>
+                    )}
+                  </div>
                   <div className="mt-3 whitespace-pre-wrap font-mono text-sm leading-relaxed text-[#e2e8f0]">
                     {talkAnswer || String((talkResult as { error?: string }).error || JSON.stringify(talkResult, null, 2))}
                   </div>
