@@ -41,7 +41,7 @@ const navigation: Array<{
   { name: 'Train ML Models', short: 'Train', href: '/train-ml', icon: CpuChipIcon, sublabel: 'Model training', feature: 'train_ml', group: 'Build' },
   { name: 'Ontology Discovery', short: 'Ontology', href: '/ontology', icon: CircleStackIcon, sublabel: 'Schema discovery', feature: 'ontology', group: 'Understand' },
   { name: 'Ontology Enrichment', short: 'Enrich', href: '/ontology/enrichment', icon: BoltIcon, sublabel: 'Governance queue', feature: 'ontology_enrichment', group: 'Understand' },
-  { name: 'Context Analysis', short: 'Context', href: '/context', icon: MagnifyingGlassIcon, sublabel: 'Answer packets', feature: 'context', group: 'Understand' },
+  { name: 'Context Layer', short: 'Context', href: '/context', icon: MagnifyingGlassIcon, sublabel: 'Fabric → agents', feature: 'context', group: 'Understand' },
   { name: 'Test with LLM', short: 'Ask', href: '/test-llm', icon: ChatBubbleLeftRightIcon, sublabel: 'Ask a fabric', feature: 'test_llm', group: 'Use' },
   { name: 'Agent Data Utilities', short: 'Tools', href: '/ontology/agent-utilities', icon: CommandLineIcon, sublabel: 'Agent toolkit', feature: 'agent_utilities', group: 'Use' },
   // User Management lives in the account badge on desktop so the top bar does not clip "Users" to "Use".

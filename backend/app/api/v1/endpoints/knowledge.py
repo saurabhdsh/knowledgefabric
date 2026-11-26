@@ -4900,6 +4900,25 @@ async def query_knowledge_base(
             except Exception as memory_exc:
                 print(f"Session memory context skipped for {fabric_id}: {memory_exc}")
                 memory_context = ""
+            # Designed Context Layer (between fabric and agents)
+            context_id = str(request.get("context_id") or "").strip()
+            context_profile = None
+            if context_id:
+                try:
+                    from app.services.context import profiles as context_profiles
+
+                    context_profile = context_profiles.get_profile(context_id)
+                    if context_profile:
+                        preamble = context_profiles.render_agent_preamble(context_profile)
+                        memory_context = f"{preamble}\n\n{memory_context}".strip()
+                        # Prefer profile ontology lens when set
+                        if context_profile.get("ontology_version_id"):
+                            fabric = dict(fabric)
+                            fabric["approved_ontology_version_id"] = context_profile.get(
+                                "ontology_version_id"
+                            )
+                except Exception as ctx_exc:
+                    print(f"Context profile {context_id} skipped: {ctx_exc}")
             ontology_context = ""
             retrieval = None
             try:
@@ -4929,12 +4948,26 @@ async def query_knowledge_base(
             )
             processing_time = f"{time.time() - processing_start:.1f}s"
             answer = result.get("answer") or ""
+            envelope = result.get("context_envelope")
+            if context_profile and isinstance(envelope, dict):
+                envelope = dict(envelope)
+                envelope["context_id"] = context_profile.get("id")
+                envelope["context_name"] = context_profile.get("name")
+                envelope["context_version"] = context_profile.get("version")
+            elif context_profile:
+                envelope = {
+                    "context_id": context_profile.get("id"),
+                    "context_name": context_profile.get("name"),
+                    "context_version": context_profile.get("version"),
+                    "lines": [],
+                }
             return APIResponse(
                 success=True,
                 message="Knowledge base query completed",
                 data={
                     "fabric_id": fabric_id,
                     "fabric_name": fabric["name"],
+                    "context_id": (context_profile or {}).get("id") if context_profile else None,
                     "query": query,
                     "answer": answer,
                     "confidence": result.get("confidence"),
@@ -4963,9 +4996,9 @@ async def query_knowledge_base(
                         analytics_intent=(result.get("analytics") or {}).get("intent") or result.get("route"),
                         relevant_chunks=int(result.get("relevant_chunks") or 0),
                         processing_time=processing_time,
-                        context_envelope=result.get("context_envelope"),
+                        context_envelope=envelope,
                         route=result.get("route"),
-                        ontology_version_id=(result.get("context_envelope") or {}).get("ontology_version_id"),
+                        ontology_version_id=(envelope or {}).get("ontology_version_id") if isinstance(envelope, dict) else None,
                         confidence=result.get("confidence"),
                     ),
                 },

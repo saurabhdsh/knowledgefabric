@@ -1,11 +1,12 @@
-"""Agent session memory, episodic log, and fabric feedback loop."""
-from typing import Optional
+"""Agent session memory, episodic log, fabric feedback, and Context Layer profiles."""
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.models.knowledge import APIResponse
 from app.services import agent_memory_service
+from app.services.context import profiles as context_profiles
 from app.services.platform.fabric_store import fabric_store
 
 router = APIRouter()
@@ -27,6 +28,45 @@ class FeedbackRequest(BaseModel):
         default=None,
         description="Optional destination: memory, ontology_alias, ontology_constraint, session, discard",
     )
+
+
+class ContextProfileCreate(BaseModel):
+    name: str
+    fabric_id: str
+    fabric_name: Optional[str] = None
+    purpose: Optional[str] = None
+    ontology_project_id: Optional[str] = None
+    ontology_version_id: Optional[str] = None
+    scope: Optional[Dict[str, Any]] = None
+    rules: Optional[List[Any]] = None
+    playbook: Optional[Dict[str, Any]] = None
+    evidence_policy: Optional[Dict[str, Any]] = None
+    decision_schema: Optional[Dict[str, Any]] = None
+    memory_notes: Optional[List[Any]] = None
+
+
+class ContextProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    purpose: Optional[str] = None
+    fabric_id: Optional[str] = None
+    fabric_name: Optional[str] = None
+    fabric_ids: Optional[List[str]] = None
+    primary_fabric_id: Optional[str] = None
+    ontology_project_id: Optional[str] = None
+    ontology_version_id: Optional[str] = None
+    scope: Optional[Dict[str, Any]] = None
+    rules: Optional[List[Any]] = None
+    playbook: Optional[Dict[str, Any]] = None
+    evidence_policy: Optional[Dict[str, Any]] = None
+    decision_schema: Optional[Dict[str, Any]] = None
+    memory_notes: Optional[List[Any]] = None
+    agent_bindings: Optional[List[Any]] = None
+    status: Optional[str] = None
+
+
+class BindAgentRequest(BaseModel):
+    agent_key: str
+    label: Optional[str] = None
 
 
 def _require_fabric(fabric_id: str) -> None:
@@ -110,11 +150,88 @@ async def fabric_context_studio(fabric_id: str, limit: int = 30):
     _require_fabric(fabric_id)
     from app.services.context.studio import build_studio
 
+    studio = build_studio(fabric_id, limit=limit)
+    studio["profiles"] = context_profiles.list_profiles(fabric_id)
     return APIResponse(
         success=True,
         message="Context studio",
-        data=build_studio(fabric_id, limit=limit),
+        data=studio,
     )
+
+
+@router.get("/context-profiles", response_model=APIResponse)
+async def list_context_profiles(fabric_id: Optional[str] = None):
+    rows = context_profiles.list_profiles(fabric_id)
+    return APIResponse(success=True, message="Context profiles", data={"profiles": rows})
+
+
+@router.post("/context-profiles", response_model=APIResponse)
+async def create_context_profile(body: ContextProfileCreate):
+    _require_fabric(body.fabric_id)
+    try:
+        profile = context_profiles.create_profile(body.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return APIResponse(success=True, message="Context profile created", data=profile)
+
+
+@router.get("/context-profiles/{context_id}", response_model=APIResponse)
+async def get_context_profile(context_id: str):
+    profile = context_profiles.get_profile(context_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Context profile not found")
+    profile = dict(profile)
+    profile["agent_snippet"] = context_profiles.agent_attach_snippet(profile)
+    profile["preamble_preview"] = context_profiles.render_agent_preamble(profile)
+    return APIResponse(success=True, message="Context profile", data=profile)
+
+
+@router.patch("/context-profiles/{context_id}", response_model=APIResponse)
+async def patch_context_profile(context_id: str, body: ContextProfileUpdate):
+    patch = body.model_dump(exclude_none=True)
+    if patch.get("fabric_id"):
+        _require_fabric(str(patch["fabric_id"]))
+    try:
+        profile = context_profiles.update_profile(context_id, patch)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return APIResponse(success=True, message="Context profile updated", data=profile)
+
+
+@router.post("/context-profiles/{context_id}/publish", response_model=APIResponse)
+async def publish_context_profile(context_id: str):
+    try:
+        profile = context_profiles.publish_profile(context_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return APIResponse(success=True, message="Context profile published", data=profile)
+
+
+@router.delete("/context-profiles/{context_id}", response_model=APIResponse)
+async def delete_context_profile(context_id: str):
+    try:
+        context_profiles.delete_profile(context_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return APIResponse(success=True, message="Context profile deleted", data={"id": context_id})
+
+
+@router.post("/context-profiles/{context_id}/bind-agent", response_model=APIResponse)
+async def bind_agent_to_context(context_id: str, body: BindAgentRequest):
+    try:
+        profile = context_profiles.bind_agent(context_id, body.agent_key, body.label or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return APIResponse(success=True, message="Agent bound to context layer", data=profile)
+
+
+@router.post("/context-profiles/{context_id}/unbind-agent", response_model=APIResponse)
+async def unbind_agent_from_context(context_id: str, body: BindAgentRequest):
+    try:
+        profile = context_profiles.unbind_agent(context_id, body.agent_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return APIResponse(success=True, message="Agent unbound", data=profile)
 
 
 @router.post("/fabrics/{fabric_id}/memory/{candidate_id}/promote", response_model=APIResponse)
