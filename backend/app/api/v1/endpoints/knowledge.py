@@ -4952,12 +4952,35 @@ async def query_knowledge_base(
             )
             processing_time = f"{time.time() - processing_start:.1f}s"
             answer = result.get("answer") or ""
+            locked_decision = None
+            if context_profile:
+                try:
+                    from app.services.context.decision import lock_context_decision
+
+                    answer, locked_decision = lock_context_decision(
+                        context_profile,
+                        query=query,
+                        answer=answer,
+                        entities=result.get("entities") or [],
+                        entity_rows=result.get("entity_rows") or [],
+                    )
+                    if locked_decision and locked_decision.get("confidence_0_1") is not None:
+                        result["confidence"] = float(locked_decision["confidence_0_1"])
+                        result["confidence_basis"] = (
+                            "Deterministic Context Layer adjudication over retrieved claim/plan facts."
+                        )
+                except Exception as lock_exc:
+                    print(f"Context decision lock skipped for {context_id}: {lock_exc}")
             envelope = result.get("context_envelope")
             if context_profile and isinstance(envelope, dict):
                 envelope = dict(envelope)
                 envelope["context_id"] = context_profile.get("id")
                 envelope["context_name"] = context_profile.get("name")
                 envelope["context_version"] = context_profile.get("version")
+                if locked_decision:
+                    envelope["decision"] = locked_decision.get("decision")
+                    envelope["decision_resolver"] = locked_decision.get("resolver")
+                    envelope["decision_facts"] = locked_decision.get("facts")
             elif context_profile:
                 envelope = {
                     "context_id": context_profile.get("id"),
@@ -4965,6 +4988,9 @@ async def query_knowledge_base(
                     "context_version": context_profile.get("version"),
                     "lines": [],
                 }
+                if locked_decision:
+                    envelope["decision"] = locked_decision.get("decision")
+                    envelope["decision_resolver"] = locked_decision.get("resolver")
             return APIResponse(
                 success=True,
                 message="Knowledge base query completed",
@@ -4977,6 +5003,8 @@ async def query_knowledge_base(
                     "confidence": result.get("confidence"),
                     "confidence_basis": result.get("confidence_basis"),
                     "route": result.get("route"),
+                    "decision": (locked_decision or {}).get("decision") if locked_decision else None,
+                    "decision_resolver": (locked_decision or {}).get("resolver") if locked_decision else None,
                     "citations": result.get("citations") or [],
                     "sql": result.get("sql"),
                     "analytics": result.get("analytics"),

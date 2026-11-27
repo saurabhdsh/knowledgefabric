@@ -303,6 +303,18 @@ def answer_query(
                 }
                 for e in entities
             ]
+            # Full rows for deterministic Context Layer adjudication (not always sent to clients).
+            out["entity_rows"] = [
+                {
+                    "table": e.get("table"),
+                    "matched_column": e.get("matched_column"),
+                    "matched_value": e.get("matched_value"),
+                    "row": e.get("row") or {},
+                    "parents": e.get("parents") or [],
+                    "children": e.get("children") or [],
+                }
+                for e in entities
+            ]
             if "ambiguous_name" in entity_bases:
                 out["notes"].append(
                     "A name in the question matches more than one row. Say that there are several "
@@ -525,6 +537,9 @@ def answer_query(
         "- evidence_fields: <fields used>\n"
         "- reasoning_one_line: <one sentence>\n"
         "- Apply the Context Layer business rules literally; do not stop at IMPLICATIONS/UNKNOWNS.\n"
+        "- Prefer a specific route (pay/deny/hold) over human_review when the claim row is present "
+        "and a rule matches. Use human_review only when the claim row is missing or required "
+        "fields (e.g. denial_reason on Denied) are absent.\n"
         if context_contract
         else ""
     )
@@ -544,10 +559,12 @@ def answer_query(
     )
     if out["notes"]:
         user_prompt += "\nNote: " + " ".join(out["notes"])
+    # Context Layer runs colder so narration varies less before deterministic lock.
+    temperature = 0.0 if context_contract else 0.2
     out["answer"] = llm(
         [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
         int(settings.QUERY_MAX_COMPLETION_TOKENS),
-        0.2,
+        temperature,
     )
     return _seal(chunks)
 

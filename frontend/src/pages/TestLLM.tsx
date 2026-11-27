@@ -220,6 +220,8 @@ const TestLLM: React.FC = () => {
         contextId: usedContextId as string | undefined,
         contextName: usedContextName as string | undefined,
         route: failure ? undefined : data.data?.route,
+        decision: failure ? undefined : (data.data?.decision || undefined),
+        decisionResolver: failure ? undefined : (data.data?.decision_resolver || undefined),
         feedbackState: null as string | null,
       };
 
@@ -624,9 +626,16 @@ const TestLLM: React.FC = () => {
                             Fabric only
                           </span>
                         )}
-                        {result.route && (
+                        {(result.decision || result.route) && (
                           <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-emerald-800">
-                            Route · {result.route}
+                            {result.decision
+                              ? `Decision · ${result.decision}`
+                              : `Route · ${result.route}`}
+                          </span>
+                        )}
+                        {result.decisionResolver === 'deterministic' && (
+                          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-amber-800">
+                            Locked
                           </span>
                         )}
                       </div>
