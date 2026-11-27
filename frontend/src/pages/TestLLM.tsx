@@ -81,11 +81,11 @@ function splitScientificSections(markdown: string): Array<{ title: string; body:
 
 function decisionTone(decision?: string): string {
   const d = String(decision || '').toLowerCase();
-  if (d === 'pay') return 'bg-[#e8f8ef] text-[#1b7a45] border-[#b7ebc9]';
-  if (d === 'deny') return 'bg-[#fdecee] text-[#b42318] border-[#f3c0c0]';
-  if (d === 'hold') return 'bg-[#fff6e5] text-[#b54708] border-[#f7d7a8]';
-  if (d === 'human_review') return 'bg-[#eef2ff] text-[#3538cd] border-[#c7d2fe]';
-  return 'bg-[#f3f4f6] text-[#52525b] border-[#e4e4e7]';
+  if (d === 'pay') return 'bg-[rgba(62,207,155,0.12)] text-[#9af0ca] border-[rgba(62,207,155,0.35)]';
+  if (d === 'deny') return 'bg-[rgba(240,137,132,0.12)] text-[#f3b4b0] border-[rgba(240,137,132,0.35)]';
+  if (d === 'hold') return 'bg-[rgba(251,191,36,0.12)] text-[#fcd34d] border-[rgba(251,191,36,0.35)]';
+  if (d === 'human_review') return 'bg-[rgba(155,139,212,0.14)] text-[#d7cff5] border-[rgba(155,139,212,0.35)]';
+  return 'bg-white/[0.06] text-[#cbd5e1] border-[rgba(148,163,184,0.2)]';
 }
 
 const ScientificAnswer: React.FC<{ markdown: string; decision?: string }> = ({ markdown, decision }) => {
@@ -99,12 +99,12 @@ const ScientificAnswer: React.FC<{ markdown: string; decision?: string }> = ({ m
             key={`${section.title}-${section.body.slice(0, 24)}`}
             className={`rounded-2xl border px-4 py-3 ${
               isDecision
-                ? 'border-[#d7dde7] bg-gradient-to-b from-white to-[#f7f8fa] shadow-[0_1px_0_rgba(255,255,255,0.8)_inset]'
-                : 'border-[#eceef2] bg-white/80'
+                ? 'border-[rgba(94,200,242,0.28)] bg-[linear-gradient(160deg,rgba(94,200,242,0.1),rgba(16,20,29,0.55))]'
+                : 'border-[rgba(148,163,184,0.12)] bg-[#0b0f16]/55'
             }`}
           >
             <div className="flex items-center justify-between gap-2">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b93a7]">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b9cb0]">
                 {section.title}
               </p>
               {isDecision && decision && (
@@ -113,8 +113,8 @@ const ScientificAnswer: React.FC<{ markdown: string; decision?: string }> = ({ m
                 </span>
               )}
             </div>
-            <div className="mt-2 text-[14px] leading-[1.65] text-[#1d1d1f] [&_strong]:text-[#111]">
-              {renderLlmMarkdown(section.body, 'light')}
+            <div className="mt-2 text-[14px] leading-[1.65] text-[#e8edf4]">
+              {renderLlmMarkdown(section.body, 'dark')}
             </div>
           </div>
         );
@@ -426,33 +426,31 @@ const TestLLM: React.FC = () => {
 
   return (
     <div
-      className="relative -mx-4 -mb-8 min-h-[calc(100vh-4.5rem)] overflow-hidden px-4 pb-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8"
-      style={{ fontFamily: "Outfit, 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif" }}
+      className="relative -mx-4 -mb-8 min-h-[calc(100vh-4.5rem)] overflow-hidden px-4 pb-4 text-[#e8edf4] sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8"
+      style={{ fontFamily: "Outfit, 'Plus Jakarta Sans', system-ui, sans-serif" }}
     >
-      {/* Atmosphere */}
-      <div className="pointer-events-none absolute inset-0 bg-[#f5f5f7]" />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(255,255,255,0.95),_transparent_55%),radial-gradient(ellipse_at_bottom_right,_rgba(210,220,235,0.55),_transparent_45%)]" />
+      {/* Soft weave atmosphere only — no white plate */}
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(94,200,242,0.08),_transparent_50%),radial-gradient(ellipse_at_bottom_right,_rgba(62,207,155,0.06),_transparent_45%)]" />
       <div
-        className="pointer-events-none absolute inset-0 opacity-[0.35]"
+        className="pointer-events-none absolute inset-0 opacity-[0.22]"
         style={{
           backgroundImage:
-            'linear-gradient(rgba(15,23,42,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(15,23,42,0.03) 1px, transparent 1px)',
+            'linear-gradient(rgba(148,163,184,0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,0.07) 1px, transparent 1px)',
           backgroundSize: '48px 48px',
         }}
       />
 
       <div className="relative mx-auto flex h-[calc(100vh-5.5rem)] max-w-[1400px] flex-col gap-3 pt-3">
-        {/* Top bar */}
-        <header className="flex shrink-0 items-center justify-between gap-3 rounded-[22px] border border-white/70 bg-white/70 px-5 py-3 shadow-[0_10px_40px_-28px_rgba(15,23,42,0.35)] backdrop-blur-2xl">
+        <header className="flex shrink-0 items-center justify-between gap-3 rounded-[22px] border border-[rgba(148,163,184,0.14)] bg-[#101822]/78 px-5 py-3 shadow-[0_18px_50px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#8b93a7]">Weave · Agent lab</p>
-            <h1 className="truncate text-[22px] font-semibold tracking-[-0.03em] text-[#1d1d1f]">Test with LLM</h1>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#8b9cb0]">Weave · Agent lab</p>
+            <h1 className="truncate text-[22px] font-semibold tracking-[-0.03em] text-[#e8edf4]">Test with LLM</h1>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setRailOpen((v) => !v)}
-              className="rounded-full border border-[#e5e7eb] bg-white px-3 py-1.5 text-[11px] font-medium text-[#52525b] transition hover:bg-[#f9fafb] lg:hidden"
+              className="rounded-full border border-[rgba(148,163,184,0.2)] bg-white/[0.04] px-3 py-1.5 text-[11px] font-medium text-[#cbd5e1] transition hover:bg-white/[0.08] lg:hidden"
             >
               {railOpen ? 'Hide setup' : 'Setup'}
             </button>
@@ -464,13 +462,13 @@ const TestLLM: React.FC = () => {
                   setFeedbackDrafts({});
                   setStatusBanner({ type: 'info', message: 'Conversation cleared.' });
                 }}
-                className="inline-flex items-center gap-1.5 rounded-full border border-[#e5e7eb] bg-white px-3 py-1.5 text-[11px] font-medium text-[#52525b] transition hover:bg-[#f9fafb]"
+                className="inline-flex items-center gap-1.5 rounded-full border border-[rgba(148,163,184,0.2)] bg-white/[0.04] px-3 py-1.5 text-[11px] font-medium text-[#cbd5e1] transition hover:bg-white/[0.08]"
               >
                 <TrashIcon className="h-3.5 w-3.5" />
                 Clear
               </button>
             )}
-            <span className="hidden rounded-full bg-[#1d1d1f] px-3 py-1.5 text-[11px] font-medium text-white sm:inline">
+            <span className="hidden rounded-full border border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.12)] px-3 py-1.5 text-[11px] font-medium text-[#9adfff] sm:inline">
               {contextMode === 'layer' ? 'Fabric + Context' : 'Fabric only'}
             </span>
           </div>
@@ -480,10 +478,10 @@ const TestLLM: React.FC = () => {
           <div
             className={`shrink-0 rounded-2xl border px-4 py-2.5 text-[13px] ${
               statusBanner.type === 'success'
-                ? 'border-[#b7ebc9] bg-[#e8f8ef] text-[#1b7a45]'
+                ? 'border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.1)] text-[#9af0ca]'
                 : statusBanner.type === 'error'
-                  ? 'border-[#f3c0c0] bg-[#fdecee] text-[#b42318]'
-                  : 'border-[#c7d2fe] bg-[#eef2ff] text-[#3538cd]'
+                  ? 'border-[rgba(240,137,132,0.35)] bg-[rgba(240,137,132,0.1)] text-[#f3b4b0]'
+                  : 'border-[rgba(94,200,242,0.35)] bg-[rgba(94,200,242,0.1)] text-[#9adfff]'
             }`}
           >
             {statusBanner.message}
@@ -491,12 +489,11 @@ const TestLLM: React.FC = () => {
         )}
 
         <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[320px_minmax(0,1fr)]">
-          {/* Setup rail */}
           <aside
-            className={`${railOpen ? 'flex' : 'hidden'} min-h-0 flex-col gap-3 overflow-y-auto rounded-[26px] border border-white/80 bg-white/75 p-4 shadow-[0_20px_60px_-40px_rgba(15,23,42,0.45)] backdrop-blur-2xl lg:flex`}
+            className={`${railOpen ? 'flex' : 'hidden'} min-h-0 flex-col gap-3 overflow-y-auto rounded-[26px] border border-[rgba(148,163,184,0.14)] bg-[#0c121c]/88 p-4 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.65)] backdrop-blur-2xl lg:flex`}
           >
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b93a7]">1 · Fabric</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b9cb0]">1 · Fabric</p>
               <select
                 value={selectedFabric}
                 onChange={(e) => {
@@ -505,7 +502,7 @@ const TestLLM: React.FC = () => {
                   setContextMode('fabric');
                 }}
                 disabled={loadingFabrics}
-                className="mt-2 w-full appearance-none rounded-2xl border border-[#e8eaef] bg-[#f7f8fa] px-3 py-2.5 text-[13px] text-[#1d1d1f] outline-none transition focus:border-[#c5ccd8] focus:bg-white"
+                className="mt-2 w-full appearance-none rounded-2xl border border-[rgba(148,163,184,0.2)] bg-[#10141d]/80 px-3 py-2.5 text-[13px] text-[#e8edf4] outline-none transition focus:border-[rgba(94,200,242,0.45)]"
               >
                 <option value="">{loadingFabrics ? 'Loading…' : 'Choose a fabric'}</option>
                 {fabrics.map((fabric) => (
@@ -515,9 +512,9 @@ const TestLLM: React.FC = () => {
                 ))}
               </select>
               {activeFabric && (
-                <div className="mt-2 rounded-2xl bg-[#f7f8fa] px-3 py-2">
-                  <p className="truncate text-[12px] font-medium text-[#1d1d1f]">{activeFabric.name}</p>
-                  <p className="mt-0.5 font-mono text-[10px] text-[#8b93a7]">
+                <div className="mt-2 rounded-2xl border border-[rgba(148,163,184,0.12)] bg-white/[0.03] px-3 py-2">
+                  <p className="truncate text-[12px] font-medium text-[#e8edf4]">{activeFabric.name}</p>
+                  <p className="mt-0.5 font-mono text-[10px] text-[#8b9cb0]">
                     {fabricKindLabel(activeFabric.weave_domain)} · {activeFabric.document_count} docs
                     {sessionByFabric[selectedFabric] ? ` · sess ${shortRecordId(sessionByFabric[selectedFabric])}` : ''}
                   </p>
@@ -525,17 +522,17 @@ const TestLLM: React.FC = () => {
               )}
             </div>
 
-            <div className="rounded-[22px] border border-[#eceef2] bg-gradient-to-b from-white to-[#f7f8fa] p-3">
+            <div className="rounded-[22px] border border-[rgba(94,200,242,0.22)] bg-[linear-gradient(160deg,rgba(94,200,242,0.08),rgba(12,18,28,0.9))] p-3">
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b93a7]">2 · Context Layer</p>
-                  <p className="mt-1 text-[13px] font-medium text-[#1d1d1f]">Operating contract</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#5ec8f2]">2 · Context Layer</p>
+                  <p className="mt-1 text-[13px] font-medium text-[#e8edf4]">Operating contract</p>
                 </div>
-                <Link to="/context" className="text-[11px] font-medium text-[#0071e3] hover:underline">
+                <Link to="/context" className="text-[11px] font-medium text-[#5ec8f2] hover:underline">
                   Design →
                 </Link>
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-1 rounded-2xl bg-[#eceef2]/80 p-1">
+              <div className="mt-3 grid grid-cols-2 gap-1 rounded-2xl bg-[#070b12]/70 p-1">
                 <button
                   type="button"
                   onClick={() => {
@@ -543,7 +540,9 @@ const TestLLM: React.FC = () => {
                     setSelectedContextId('');
                   }}
                   className={`rounded-xl px-2.5 py-2 text-left transition ${
-                    contextMode === 'fabric' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#6b7280]'
+                    contextMode === 'fabric'
+                      ? 'bg-white/[0.1] text-[#e8edf4] shadow-sm ring-1 ring-[rgba(148,163,184,0.25)]'
+                      : 'text-[#8b9cb0] hover:text-[#cbd5e1]'
                   }`}
                 >
                   <p className="text-[11px] font-semibold">Fabric only</p>
@@ -559,7 +558,9 @@ const TestLLM: React.FC = () => {
                     }
                   }}
                   className={`rounded-xl px-2.5 py-2 text-left transition disabled:opacity-40 ${
-                    contextMode === 'layer' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#6b7280]'
+                    contextMode === 'layer'
+                      ? 'bg-gradient-to-br from-[rgba(94,200,242,0.22)] to-[rgba(62,207,155,0.12)] text-[#e8edf4] ring-1 ring-[rgba(94,200,242,0.35)]'
+                      : 'text-[#8b9cb0] hover:text-[#cbd5e1]'
                   }`}
                 >
                   <p className="text-[11px] font-semibold">+ Context</p>
@@ -579,15 +580,15 @@ const TestLLM: React.FC = () => {
                         onClick={() => setSelectedContextId(ctx.id)}
                         className={`w-full rounded-xl border px-2.5 py-2 text-left transition ${
                           active
-                            ? 'border-[#1d1d1f] bg-[#1d1d1f] text-white'
-                            : 'border-[#e8eaef] bg-white text-[#1d1d1f] hover:border-[#c5ccd8]'
+                            ? 'border-[rgba(62,207,155,0.5)] bg-[rgba(62,207,155,0.12)] text-[#e8edf4]'
+                            : 'border-[rgba(148,163,184,0.14)] bg-[#0b0f16]/50 text-[#cbd5e1] hover:border-[rgba(94,200,242,0.35)]'
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2">
                           <p className="truncate text-[12px] font-medium">{ctx.name}</p>
-                          {active ? <CheckCircleIcon className="h-4 w-4 shrink-0" /> : <LinkIcon className="h-3.5 w-3.5 shrink-0 opacity-40" />}
+                          {active ? <CheckCircleIcon className="h-4 w-4 shrink-0 text-[#3ecf9b]" /> : <LinkIcon className="h-3.5 w-3.5 shrink-0 text-[#8b9cb0]" />}
                         </div>
-                        <p className={`mt-0.5 font-mono text-[10px] ${active ? 'text-white/60' : 'text-[#8b93a7]'}`}>
+                        <p className="mt-0.5 font-mono text-[10px] text-[#8b9cb0]">
                           v{ctx.version} · {shortRecordId(ctx.id)}
                         </p>
                       </button>
@@ -598,11 +599,11 @@ const TestLLM: React.FC = () => {
             </div>
 
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b93a7]">3 · Model</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b9cb0]">3 · Model</p>
               <select
                 value={selectedLLM}
                 onChange={(e) => setSelectedLLM(e.target.value)}
-                className="mt-2 w-full appearance-none rounded-2xl border border-[#e8eaef] bg-[#f7f8fa] px-3 py-2.5 text-[13px] text-[#1d1d1f] outline-none focus:border-[#c5ccd8] focus:bg-white"
+                className="mt-2 w-full appearance-none rounded-2xl border border-[rgba(148,163,184,0.2)] bg-[#10141d]/80 px-3 py-2.5 text-[13px] text-[#e8edf4] outline-none focus:border-[rgba(94,200,242,0.45)]"
               >
                 {(llmProviders.length > 0 ? llmProviders : [{ id: 'openai', name: 'Azure OpenAI' }]).map((provider) => (
                   <option key={provider.id} value={provider.id}>
@@ -612,12 +613,12 @@ const TestLLM: React.FC = () => {
               </select>
             </div>
 
-            <div className="mt-auto rounded-[22px] border border-[#eceef2] bg-[#f7f8fa] p-3">
+            <div className="mt-auto rounded-[22px] border border-[rgba(148,163,184,0.14)] bg-[#10141d]/55 p-3">
               <div className="flex items-center gap-2">
-                <SparklesIcon className="h-4 w-4 text-[#0071e3]" />
-                <p className="text-[11px] font-semibold text-[#1d1d1f]">Prove the layer</p>
+                <SparklesIcon className="h-4 w-4 text-[#5ec8f2]" />
+                <p className="text-[11px] font-semibold text-[#e8edf4]">Prove the layer</p>
               </div>
-              <p className="mt-1 text-[11px] leading-relaxed text-[#6b7280]">
+              <p className="mt-1 text-[11px] leading-relaxed text-[#8b9cb0]">
                 {selectedFabric ? demoAdjudication.hint : 'Select a fabric to load the right demo anchors.'}
               </p>
               <div className="mt-2 grid grid-cols-2 gap-1.5">
@@ -630,10 +631,10 @@ const TestLLM: React.FC = () => {
                     setSelectedContextId('');
                     composerRef.current?.focus();
                   }}
-                  className="rounded-xl bg-white px-2 py-2 text-left text-[10px] font-semibold text-[#1d1d1f] shadow-sm disabled:opacity-40"
+                  className="rounded-xl border border-[rgba(148,163,184,0.16)] bg-white/[0.04] px-2 py-2 text-left text-[10px] font-semibold text-[#e8edf4] disabled:opacity-40"
                 >
                   Step 1 · Fabric
-                  <span className="mt-0.5 block font-normal text-[#8b93a7]">{demoAdjudication.label}</span>
+                  <span className="mt-0.5 block font-normal text-[#8b9cb0]">{demoAdjudication.label}</span>
                 </button>
                 <button
                   type="button"
@@ -644,10 +645,10 @@ const TestLLM: React.FC = () => {
                     if (publishedContexts[0]) setSelectedContextId(publishedContexts[0].id);
                     composerRef.current?.focus();
                   }}
-                  className="rounded-xl bg-[#1d1d1f] px-2 py-2 text-left text-[10px] font-semibold text-white disabled:opacity-40"
+                  className="rounded-xl bg-gradient-to-r from-[#0ea5e9] to-[#10b981] px-2 py-2 text-left text-[10px] font-semibold text-white disabled:opacity-40"
                 >
                   Step 2 · Context
-                  <span className="mt-0.5 block font-normal text-white/55">
+                  <span className="mt-0.5 block font-normal text-white/70">
                     expect {demoAdjudication.expectWithContext}
                   </span>
                 </button>
@@ -655,32 +656,29 @@ const TestLLM: React.FC = () => {
             </div>
           </aside>
 
-          {/* Chat stage */}
-          <section className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white/65 shadow-[0_24px_80px_-48px_rgba(15,23,42,0.55)] backdrop-blur-2xl">
-            <div className="flex shrink-0 items-center justify-between border-b border-[#eceef2]/90 px-5 py-3">
+          <section className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-[rgba(148,163,184,0.14)] bg-[#0c121c]/82 shadow-[0_24px_80px_-40px_rgba(0,0,0,0.7)] backdrop-blur-2xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-[rgba(148,163,184,0.12)] px-5 py-3">
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b93a7]">Conversation</p>
-                <p className="text-[13px] font-medium text-[#1d1d1f]">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b9cb0]">Conversation</p>
+                <p className="text-[13px] font-medium text-[#e8edf4]">
                   {testResults.length === 0
                     ? 'No episodes yet'
                     : `${testResults.length} episode${testResults.length === 1 ? '' : 's'} · newest at bottom`}
                 </p>
               </div>
-              <div className="flex items-center gap-2 text-[10px] text-[#8b93a7]">
-                <span className="rounded-full bg-[#f3f4f6] px-2 py-1 font-mono">
-                  {activeFabric ? shortRecordId(activeFabric.id) : 'no fabric'}
-                </span>
-              </div>
+              <span className="rounded-full border border-[rgba(148,163,184,0.16)] bg-white/[0.04] px-2 py-1 font-mono text-[10px] text-[#8b9cb0]">
+                {activeFabric ? shortRecordId(activeFabric.id) : 'no fabric'}
+              </span>
             </div>
 
             <div ref={transcriptRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
               {testResults.length === 0 && !isLoading && (
                 <div className="flex h-full min-h-[280px] flex-col items-center justify-center text-center">
-                  <div className="flex h-16 w-16 items-center justify-center rounded-[22px] bg-gradient-to-b from-white to-[#eef1f6] shadow-[0_12px_40px_-20px_rgba(15,23,42,0.35)]">
-                    <SparklesIcon className="h-7 w-7 text-[#1d1d1f]" />
+                  <div className="flex h-16 w-16 items-center justify-center rounded-[22px] border border-[rgba(94,200,242,0.25)] bg-[linear-gradient(160deg,rgba(94,200,242,0.14),rgba(16,20,29,0.7))] shadow-[0_16px_40px_-20px_rgba(94,200,242,0.45)]">
+                    <SparklesIcon className="h-7 w-7 text-[#5ec8f2]" />
                   </div>
-                  <p className="mt-5 text-[20px] font-semibold tracking-[-0.03em] text-[#1d1d1f]">Ask the fabric</p>
-                  <p className="mt-2 max-w-sm text-[13px] leading-relaxed text-[#6b7280]">
+                  <p className="mt-5 text-[20px] font-semibold tracking-[-0.03em] text-[#e8edf4]">Ask the fabric</p>
+                  <p className="mt-2 max-w-sm text-[13px] leading-relaxed text-[#8b9cb0]">
                     Setup stays on the left. Outcomes stream here like a lab notebook — structured sections, locked decisions, no endless page scroll.
                   </p>
                 </div>
@@ -688,21 +686,19 @@ const TestLLM: React.FC = () => {
 
               {testResults.map((result, index) => (
                 <article key={`${result.timestamp}-${index}`} className="mx-auto w-full max-w-3xl space-y-3">
-                  {/* User bubble */}
                   <div className="flex justify-end">
-                    <div className="max-w-[85%] rounded-[22px] rounded-br-md bg-[#0071e3] px-4 py-3 text-[14px] leading-relaxed text-white shadow-[0_10px_30px_-18px_rgba(0,113,227,0.8)]">
+                    <div className="max-w-[85%] rounded-[22px] rounded-br-md bg-gradient-to-br from-[#0ea5e9] to-[#0891b2] px-4 py-3 text-[14px] leading-relaxed text-white shadow-[0_12px_32px_-16px_rgba(14,165,233,0.75)]">
                       {result.query}
                     </div>
                   </div>
 
-                  {/* Assistant scientific card */}
-                  <div className="rounded-[24px] border border-[#e8eaef] bg-white p-4 shadow-[0_16px_40px_-32px_rgba(15,23,42,0.4)] sm:p-5">
+                  <div className="rounded-[24px] border border-[rgba(148,163,184,0.14)] bg-[#10141d]/75 p-4 shadow-[0_16px_40px_-28px_rgba(0,0,0,0.55)] sm:p-5">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="rounded-full bg-[#f3f4f6] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#52525b]">
+                      <span className="rounded-full border border-[rgba(148,163,184,0.16)] bg-white/[0.04] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#cbd5e1]">
                         {result.contextId ? 'Fabric + Context' : 'Fabric only'}
                       </span>
                       {result.contextName && (
-                        <span className="rounded-full border border-[#dbeafe] bg-[#eff6ff] px-2 py-0.5 text-[10px] font-medium text-[#1d4ed8]">
+                        <span className="rounded-full border border-[rgba(94,200,242,0.3)] bg-[rgba(94,200,242,0.1)] px-2 py-0.5 text-[10px] font-medium text-[#9adfff]">
                           {result.contextName}
                         </span>
                       )}
@@ -712,16 +708,16 @@ const TestLLM: React.FC = () => {
                         </span>
                       )}
                       {result.decisionResolver === 'deterministic' && (
-                        <span className="rounded-full border border-[#fde68a] bg-[#fffbeb] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#b45309]">
+                        <span className="rounded-full border border-[rgba(251,191,36,0.35)] bg-[rgba(251,191,36,0.1)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#fcd34d]">
                           Locked
                         </span>
                       )}
                       {result.route && !result.decision && (
-                        <span className="rounded-full bg-[#f3f4f6] px-2 py-0.5 text-[10px] font-medium text-[#6b7280]">
+                        <span className="rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-[#8b9cb0]">
                           {result.route}
                         </span>
                       )}
-                      <span className="ml-auto text-[10px] text-[#8b93a7]">
+                      <span className="ml-auto text-[10px] text-[#8b9cb0]">
                         {new Date(result.timestamp).toLocaleTimeString()}
                       </span>
                     </div>
@@ -730,46 +726,46 @@ const TestLLM: React.FC = () => {
                       <ScientificAnswer markdown={result.response} decision={result.decision} />
                     </div>
 
-                    <div className="mt-4 flex flex-wrap gap-2 border-t border-[#f0f1f4] pt-3 text-[10px] text-[#8b93a7]">
-                      <span className="rounded-lg bg-[#f7f8fa] px-2 py-1">
+                    <div className="mt-4 flex flex-wrap gap-2 border-t border-[rgba(148,163,184,0.12)] pt-3 text-[10px] text-[#8b9cb0]">
+                      <span className="rounded-lg border border-[rgba(148,163,184,0.12)] bg-white/[0.03] px-2 py-1">
                         Confidence {(result.confidence * 100).toFixed(0)}%
                       </span>
-                      <span className="rounded-lg bg-[#f7f8fa] px-2 py-1">{result.processingTime}</span>
-                      <span className="rounded-lg bg-[#f7f8fa] px-2 py-1">
+                      <span className="rounded-lg border border-[rgba(148,163,184,0.12)] bg-white/[0.03] px-2 py-1">{result.processingTime}</span>
+                      <span className="rounded-lg border border-[rgba(148,163,184,0.12)] bg-white/[0.03] px-2 py-1">
                         Chunks {result.relevantChunks}
                         {result.packedChunks && result.packedChunks !== result.relevantChunks
                           ? ` · packed ${result.packedChunks}`
                           : ''}
                       </span>
                       {result.sessionId && (
-                        <span className="rounded-lg bg-[#f7f8fa] px-2 py-1 font-mono" title={result.sessionId}>
+                        <span className="rounded-lg border border-[rgba(148,163,184,0.12)] bg-white/[0.03] px-2 py-1 font-mono" title={result.sessionId}>
                           sess {shortRecordId(result.sessionId)}
                         </span>
                       )}
                       {result.episodeId && (
-                        <span className="rounded-lg bg-[#f7f8fa] px-2 py-1 font-mono" title={result.episodeId}>
+                        <span className="rounded-lg border border-[rgba(148,163,184,0.12)] bg-white/[0.03] px-2 py-1 font-mono" title={result.episodeId}>
                           ep {shortRecordId(result.episodeId)}
                         </span>
                       )}
                     </div>
 
                     {result.episodeId && (
-                      <div className="mt-3 space-y-2 rounded-2xl bg-[#f7f8fa] p-3">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#8b93a7]">
+                      <div className="mt-3 space-y-2 rounded-2xl border border-[rgba(148,163,184,0.12)] bg-[#0b0f16]/55 p-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#8b9cb0]">
                           Closed loop
                         </p>
                         <div className="flex flex-wrap gap-2">
                           <button
                             type="button"
                             onClick={() => submitFeedback(index, 'up', false)}
-                            className="rounded-full bg-white px-3 py-1 text-[11px] font-medium text-[#1b7a45] shadow-sm"
+                            className="rounded-full border border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.1)] px-3 py-1 text-[11px] font-medium text-[#9af0ca]"
                           >
                             Helpful
                           </button>
                           <button
                             type="button"
                             onClick={() => submitFeedback(index, 'down', false)}
-                            className="rounded-full bg-white px-3 py-1 text-[11px] font-medium text-[#b42318] shadow-sm"
+                            className="rounded-full border border-[rgba(240,137,132,0.35)] bg-[rgba(240,137,132,0.1)] px-3 py-1 text-[11px] font-medium text-[#f3b4b0]"
                           >
                             Incorrect
                           </button>
@@ -779,17 +775,17 @@ const TestLLM: React.FC = () => {
                           onChange={(e) => setFeedbackDrafts((prev) => ({ ...prev, [index]: e.target.value }))}
                           placeholder="Correction to write back into this fabric"
                           rows={2}
-                          className="w-full rounded-xl border border-[#e8eaef] bg-white px-3 py-2 text-[12px] text-[#1d1d1f] outline-none focus:border-[#c5ccd8]"
+                          className="w-full rounded-xl border border-[rgba(148,163,184,0.2)] bg-[#10141d]/80 px-3 py-2 text-[12px] text-[#e8edf4] outline-none placeholder:text-[#8b9cb0] focus:border-[rgba(94,200,242,0.4)]"
                         />
                         <button
                           type="button"
                           onClick={() => submitFeedback(index, 'down', true)}
-                          className="rounded-full bg-[#1d1d1f] px-3 py-1.5 text-[11px] font-medium text-white"
+                          className="rounded-full bg-emerald-600 px-3 py-1.5 text-[11px] font-medium text-white"
                         >
                           Apply correction to fabric
                         </button>
                         {result.feedbackState && (
-                          <p className="text-[11px] text-[#1b7a45]">{result.feedbackState}</p>
+                          <p className="text-[11px] text-[#9af0ca]">{result.feedbackState}</p>
                         )}
                       </div>
                     )}
@@ -798,22 +794,21 @@ const TestLLM: React.FC = () => {
               ))}
 
               {isLoading && (
-                <div className="mx-auto flex w-full max-w-3xl items-center gap-3 rounded-[22px] border border-[#e8eaef] bg-white/90 px-4 py-3">
+                <div className="mx-auto flex w-full max-w-3xl items-center gap-3 rounded-[22px] border border-[rgba(148,163,184,0.16)] bg-[#10141d]/80 px-4 py-3">
                   <div className="flex gap-1">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#1d1d1f]" />
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#1d1d1f] [animation-delay:120ms]" />
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#1d1d1f] [animation-delay:240ms]" />
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#5ec8f2]" />
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#5ec8f2] [animation-delay:120ms]" />
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#5ec8f2] [animation-delay:240ms]" />
                   </div>
-                  <p className="text-[12px] text-[#6b7280]">
+                  <p className="text-[12px] text-[#8b9cb0]">
                     {contextMode === 'layer' ? 'Adjudicating with Context Layer…' : 'Retrieving from fabric…'}
                   </p>
                 </div>
               )}
             </div>
 
-            {/* Composer */}
-            <div className="shrink-0 border-t border-[#eceef2]/90 bg-white/80 p-3 backdrop-blur-xl sm:p-4">
-              <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-[26px] border border-[#e5e7eb] bg-[#f7f8fa] p-2 shadow-[0_12px_40px_-28px_rgba(15,23,42,0.35)] focus-within:border-[#c5ccd8] focus-within:bg-white">
+            <div className="shrink-0 border-t border-[rgba(148,163,184,0.12)] bg-[#0b0f16]/70 p-3 backdrop-blur-xl sm:p-4">
+              <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-[26px] border border-[rgba(148,163,184,0.2)] bg-[#10141d]/85 p-2 shadow-[0_12px_40px_-24px_rgba(0,0,0,0.7)] focus-within:border-[rgba(94,200,242,0.4)]">
                 <textarea
                   ref={composerRef}
                   value={testQuery}
@@ -832,19 +827,19 @@ const TestLLM: React.FC = () => {
                         : 'Ask the fabric…'
                       : 'Select a fabric to begin'
                   }
-                  className="max-h-36 min-h-[52px] flex-1 resize-none bg-transparent px-3 py-2.5 text-[14px] leading-relaxed text-[#1d1d1f] outline-none placeholder:text-[#9ca3af]"
+                  className="max-h-36 min-h-[52px] flex-1 resize-none bg-transparent px-3 py-2.5 text-[14px] leading-relaxed text-[#e8edf4] outline-none placeholder:text-[#8b9cb0]"
                 />
                 <button
                   type="button"
                   disabled={!canSend}
                   onClick={() => void handleTestQuery()}
-                  className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#0071e3] text-white shadow-[0_8px_24px_-10px_rgba(0,113,227,0.9)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-[#d1d5db] disabled:shadow-none"
+                  className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#0ea5e9] to-[#10b981] text-white shadow-[0_8px_24px_-10px_rgba(94,200,242,0.85)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:from-[#334155] disabled:to-[#334155] disabled:shadow-none"
                   aria-label="Send"
                 >
                   <ArrowUpIcon className="h-5 w-5" />
                 </button>
               </div>
-              <p className="mx-auto mt-2 max-w-3xl text-center text-[10px] text-[#8b93a7]">
+              <p className="mx-auto mt-2 max-w-3xl text-center text-[10px] text-[#8b9cb0]">
                 Enter to send · Shift+Enter for newline · Outcomes stay in this panel
               </p>
             </div>
