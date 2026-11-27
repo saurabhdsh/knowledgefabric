@@ -69,6 +69,34 @@ const TestLLM: React.FC = () => {
     [contextProfiles]
   );
 
+  const demoAdjudication = useMemo(() => {
+    const fabric = fabrics.find((f) => f.id === selectedFabric);
+    const hay = `${fabric?.id || ''} ${fabric?.name || ''}`.toLowerCase();
+    // Databricks claims_demo seed uses underscore IDs (CLM_00004 / MBR_0004 / PLN_CSNP).
+    const databricks =
+      hay.includes('claims_demo')
+      || hay.includes('claims_databricks')
+      || hay.includes('databricks')
+      || hay.includes('workspace_claims');
+    if (databricks) {
+      return {
+        label: 'CLM_00004 · MBR_0004 · PLN_CSNP',
+        query:
+          'Should we pay claim CLM_00004 for member MBR_0004 on plan PLN_CSNP? Return a decision with rationale.',
+        expectWithContext: 'hold',
+        hint: 'Databricks claims_demo — CSNP + non-chronic M54.5 → hold',
+      };
+    }
+    // Local Cost of Care Agents fabric uses hyphen IDs.
+    return {
+      label: 'CLM-000008 · MEM-0004 · PLN-CSNP-SILVER',
+      query:
+        'Should we pay claim CLM-000008 for member MEM-0004 on plan PLN-CSNP-SILVER? Return a decision with rationale.',
+      expectWithContext: 'pay',
+      hint: 'Cost of Care — paid CSNP COPD-aligned claim → pay',
+    };
+  }, [fabrics, selectedFabric]);
+
   const loadContextsForFabric = useCallback(async (fabricId: string) => {
     if (!fabricId) {
       setContextProfiles([]);
@@ -744,32 +772,34 @@ const TestLLM: React.FC = () => {
             <p className="mt-1 text-sm text-slate-300">
               Run the claim once on Fabric only, then again with a published Context Layer attached. Watch the route and decision shift.
             </p>
+            <p className="mt-2 text-xs text-cyan-200/80">
+              {selectedFabric
+                ? `Anchors for this fabric: ${demoAdjudication.hint}`
+                : 'Select a fabric first — demo IDs switch for Databricks vs Cost of Care.'}
+            </p>
           </div>
           <SparklesIcon className="h-8 w-8 shrink-0 text-cyan-300/80" />
         </div>
         <div className="mt-5 grid gap-3 md:grid-cols-2">
           <button
             type="button"
+            disabled={!selectedFabric}
             onClick={() => {
-              setTestQuery(
-                'Should we pay claim CLM-000008 for member MEM-0004 on plan PLN-CSNP-SILVER? Return a decision with rationale.'
-              );
+              setTestQuery(demoAdjudication.query);
               setContextMode('fabric');
               setSelectedContextId('');
             }}
-            className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left transition hover:border-white/25 hover:bg-white/10"
+            className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left transition hover:border-white/25 hover:bg-white/10 disabled:opacity-40"
           >
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Step 1</p>
             <p className="mt-1 text-sm font-semibold text-white">Load demo query · Fabric only</p>
-            <p className="mt-1 text-xs text-slate-400">CLM-000008 · MEM-0004 · PLN-CSNP-SILVER</p>
+            <p className="mt-1 text-xs text-slate-400">{demoAdjudication.label}</p>
           </button>
           <button
             type="button"
-            disabled={!publishedContexts.length}
+            disabled={!selectedFabric || !publishedContexts.length}
             onClick={() => {
-              setTestQuery(
-                'Should we pay claim CLM-000008 for member MEM-0004 on plan PLN-CSNP-SILVER? Return a decision with rationale.'
-              );
+              setTestQuery(demoAdjudication.query);
               setContextMode('layer');
               if (publishedContexts[0]) setSelectedContextId(publishedContexts[0].id);
             }}
@@ -779,7 +809,7 @@ const TestLLM: React.FC = () => {
             <p className="mt-1 text-sm font-semibold text-white">Same query · attach Context Layer</p>
             <p className="mt-1 text-xs text-cyan-200/80">
               {publishedContexts.length
-                ? `Uses ${publishedContexts[0]?.name || 'published context'} → expect decision=pay`
+                ? `Uses ${publishedContexts[0]?.name || 'published context'} → expect decision=${demoAdjudication.expectWithContext}`
                 : 'Publish a context on this fabric first'}
             </p>
           </button>

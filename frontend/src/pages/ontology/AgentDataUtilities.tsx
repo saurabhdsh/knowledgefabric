@@ -1120,6 +1120,7 @@ const AgentDataUtilities: React.FC = () => {
             {[
               'Return duplicate counts by duplicate_match_type as JSON.',
               'For claim CLM101820: prior match, match type, route, and key field deltas.',
+              'Should we pay claim CLM_00004 for member MBR_0004 on plan PLN_CSNP? Return a decision with rationale.',
               'Should we pay claim CLM-000008 for member MEM-0004 on plan PLN-CSNP-SILVER? Return a decision with rationale.',
               'List 3 near-duplicate pairs with claim_id and risk score.',
             ].map((chip) => (
