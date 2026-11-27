@@ -1,12 +1,11 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  ChatBubbleLeftRightIcon,
-  SparklesIcon,
-  DocumentTextIcon,
-  CpuChipIcon,
-  LinkIcon,
+  ArrowUpIcon,
   CheckCircleIcon,
+  LinkIcon,
+  SparklesIcon,
+  TrashIcon,
 } from '@heroicons/react/24/outline';
 import { apiRequest } from '../utils/api';
 import { renderLlmMarkdown } from '../utils/renderLlmGraphInsight';
@@ -35,6 +34,26 @@ interface PublishedContext {
   agent_bindings?: Array<{ agent_key: string; label?: string }>;
 }
 
+type TestResult = {
+  fabricId: string;
+  llmProvider: string;
+  query: string;
+  response: string;
+  confidence: number;
+  timestamp: string;
+  relevantChunks: number;
+  packedChunks?: number;
+  processingTime: string;
+  sessionId?: string;
+  episodeId?: string;
+  contextId?: string;
+  contextName?: string;
+  route?: string;
+  decision?: string;
+  decisionResolver?: string;
+  feedbackState?: string | null;
+};
+
 function shortRecordId(value?: string): string {
   const id = String(value || '').trim();
   if (!id) return '';
@@ -42,12 +61,74 @@ function shortRecordId(value?: string): string {
   return `${id.slice(0, 8)}…${id.slice(-4)}`;
 }
 
+function splitScientificSections(markdown: string): Array<{ title: string; body: string }> {
+  const text = String(markdown || '').trim();
+  if (!text) return [];
+  const parts = text.split(/\n(?=##\s+)/);
+  if (parts.length <= 1 && !/^##\s+/m.test(text)) {
+    return [{ title: 'Answer', body: text }];
+  }
+  return parts
+    .map((block) => {
+      const lines = block.trim().split('\n');
+      const head = lines[0] || '';
+      const title = head.replace(/^#+\s*/, '').trim() || 'Section';
+      const body = lines.slice(1).join('\n').trim();
+      return { title, body: body || head.replace(/^#+\s*/, '').trim() };
+    })
+    .filter((s) => s.body);
+}
+
+function decisionTone(decision?: string): string {
+  const d = String(decision || '').toLowerCase();
+  if (d === 'pay') return 'bg-[#e8f8ef] text-[#1b7a45] border-[#b7ebc9]';
+  if (d === 'deny') return 'bg-[#fdecee] text-[#b42318] border-[#f3c0c0]';
+  if (d === 'hold') return 'bg-[#fff6e5] text-[#b54708] border-[#f7d7a8]';
+  if (d === 'human_review') return 'bg-[#eef2ff] text-[#3538cd] border-[#c7d2fe]';
+  return 'bg-[#f3f4f6] text-[#52525b] border-[#e4e4e7]';
+}
+
+const ScientificAnswer: React.FC<{ markdown: string; decision?: string }> = ({ markdown, decision }) => {
+  const sections = splitScientificSections(markdown);
+  return (
+    <div className="space-y-3">
+      {sections.map((section) => {
+        const isDecision = /^decision$/i.test(section.title);
+        return (
+          <div
+            key={`${section.title}-${section.body.slice(0, 24)}`}
+            className={`rounded-2xl border px-4 py-3 ${
+              isDecision
+                ? 'border-[#d7dde7] bg-gradient-to-b from-white to-[#f7f8fa] shadow-[0_1px_0_rgba(255,255,255,0.8)_inset]'
+                : 'border-[#eceef2] bg-white/80'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b93a7]">
+                {section.title}
+              </p>
+              {isDecision && decision && (
+                <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${decisionTone(decision)}`}>
+                  {decision}
+                </span>
+              )}
+            </div>
+            <div className="mt-2 text-[14px] leading-[1.65] text-[#1d1d1f] [&_strong]:text-[#111]">
+              {renderLlmMarkdown(section.body, 'light')}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 const TestLLM: React.FC = () => {
   const [selectedFabric, setSelectedFabric] = useState<string>('');
   const [selectedLLM, setSelectedLLM] = useState<string>('openai');
   const [llmProviders, setLlmProviders] = useState<Array<{ id: string; name: string; description?: string }>>([]);
   const [testQuery, setTestQuery] = useState<string>('');
-  const [testResults, setTestResults] = useState<any[]>([]);
+  const [testResults, setTestResults] = useState<TestResult[]>([]);
   const [sessionByFabric, setSessionByFabric] = useState<Record<string, string>>({});
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<number, string>>({});
   const [isLoading, setIsLoading] = useState(false);
@@ -56,8 +137,12 @@ const TestLLM: React.FC = () => {
   const [statusBanner, setStatusBanner] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [contextProfiles, setContextProfiles] = useState<PublishedContext[]>([]);
   const [loadingContexts, setLoadingContexts] = useState(false);
-  const [selectedContextId, setSelectedContextId] = useState<string>(''); // '' = fabric only
+  const [selectedContextId, setSelectedContextId] = useState<string>('');
   const [contextMode, setContextMode] = useState<'fabric' | 'layer'>('fabric');
+  const [railOpen, setRailOpen] = useState(true);
+
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const selectedContext = useMemo(
     () => contextProfiles.find((p) => p.id === selectedContextId) || null,
@@ -69,10 +154,14 @@ const TestLLM: React.FC = () => {
     [contextProfiles]
   );
 
+  const activeFabric = useMemo(
+    () => fabrics.find((f) => f.id === selectedFabric) || null,
+    [fabrics, selectedFabric]
+  );
+
   const demoAdjudication = useMemo(() => {
     const fabric = fabrics.find((f) => f.id === selectedFabric);
     const hay = `${fabric?.id || ''} ${fabric?.name || ''}`.toLowerCase();
-    // Databricks claims_demo seed uses underscore IDs (CLM_00004 / MBR_0004 / PLN_CSNP).
     const databricks =
       hay.includes('claims_demo')
       || hay.includes('claims_databricks')
@@ -87,7 +176,6 @@ const TestLLM: React.FC = () => {
         hint: 'Databricks claims_demo — CSNP + non-chronic M54.5 → hold',
       };
     }
-    // Local Cost of Care Agents fabric uses hyphen IDs.
     return {
       label: 'CLM-000008 · MEM-0004 · PLN-CSNP-SILVER',
       query:
@@ -113,7 +201,6 @@ const TestLLM: React.FC = () => {
       const rows = ((data?.data?.profiles || []) as PublishedContext[]).filter(Boolean);
       setContextProfiles(rows);
       const published = rows.filter((p) => p.status === 'published');
-      // Keep selection if still valid; otherwise clear
       setSelectedContextId((prev) => {
         if (prev && published.some((p) => p.id === prev)) return prev;
         return '';
@@ -126,13 +213,11 @@ const TestLLM: React.FC = () => {
     }
   }, []);
 
-  // Fetch available fabrics on component mount
   useEffect(() => {
     const fetchFabrics = async () => {
       try {
         const response = await apiRequest('api/v1/knowledge/');
         const data = await response.json();
-        
         if (data.success && data.data) {
           setFabrics(data.data);
           if (selectedFabric && !data.data.some((fabric: KnowledgeFabric) => fabric.id === selectedFabric)) {
@@ -143,14 +228,12 @@ const TestLLM: React.FC = () => {
             });
           }
         } else {
-          console.error('Failed to fetch fabrics:', data.message);
           setStatusBanner({
             type: 'error',
             message: data.message || 'Unable to load knowledge fabrics.',
           });
         }
-      } catch (error) {
-        console.error('Error fetching fabrics:', error);
+      } catch {
         setStatusBanner({
           type: 'error',
           message: 'Unable to load knowledge fabrics. Please check backend connectivity.',
@@ -171,8 +254,8 @@ const TestLLM: React.FC = () => {
           setLlmProviders(providers);
           setSelectedLLM(data?.data?.default_provider || providers[0].id);
         }
-      } catch (error) {
-        console.error('Error fetching LLM providers:', error);
+      } catch {
+        /* keep default */
       }
     };
     fetchProviders();
@@ -181,6 +264,12 @@ const TestLLM: React.FC = () => {
   useEffect(() => {
     loadContextsForFabric(selectedFabric);
   }, [selectedFabric, loadContextsForFabric]);
+
+  useEffect(() => {
+    const el = transcriptRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  }, [testResults, isLoading]);
 
   const handleTestQuery = async () => {
     if (!selectedFabric) {
@@ -196,12 +285,13 @@ const TestLLM: React.FC = () => {
       return;
     }
 
+    const pendingQuery = testQuery.trim();
     setIsLoading(true);
     setStatusBanner(null);
-    
+
     try {
       const payload: Record<string, unknown> = {
-        query: testQuery,
+        query: pendingQuery,
         llm_provider: selectedLLM,
         top_k: 8,
         session_id: sessionByFabric[selectedFabric] || undefined,
@@ -212,9 +302,7 @@ const TestLLM: React.FC = () => {
 
       const response = await apiRequest(`api/v1/knowledge/query/${selectedFabric}`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
 
@@ -226,17 +314,19 @@ const TestLLM: React.FC = () => {
       const answer = failure
         ? (detail || 'The model did not answer. Check the Azure OpenAI key on the VM.')
         : (data?.data?.answer || 'The model returned an empty answer.');
-      const usedContextId = failure ? undefined : (data.data?.context_id || (contextMode === 'layer' ? selectedContextId : undefined));
+      const usedContextId = failure
+        ? undefined
+        : (data.data?.context_id || (contextMode === 'layer' ? selectedContextId : undefined));
       const usedContextName = failure
         ? undefined
         : (data.data?.context_envelope?.context_name
           || selectedContext?.name
           || (usedContextId ? shortRecordId(usedContextId) : undefined));
-      
-      const result = {
+
+      const result: TestResult = {
         fabricId: selectedFabric,
         llmProvider: selectedLLM,
-        query: testQuery,
+        query: pendingQuery,
         response: answer,
         confidence: failure ? 0 : (data.data?.confidence || 0.85),
         timestamp: new Date().toISOString(),
@@ -250,38 +340,40 @@ const TestLLM: React.FC = () => {
         route: failure ? undefined : data.data?.route,
         decision: failure ? undefined : (data.data?.decision || undefined),
         decisionResolver: failure ? undefined : (data.data?.decision_resolver || undefined),
-        feedbackState: null as string | null,
+        feedbackState: null,
       };
 
       if (!failure && data.data?.session_id) {
         setSessionByFabric((prev) => ({ ...prev, [selectedFabric]: data.data.session_id }));
       }
 
-      setTestResults(prev => [result, ...prev]);
+      setTestResults((prev) => [...prev, result]);
+      setTestQuery('');
       setStatusBanner({
         type: failure ? 'error' : 'success',
-        message: failure ? String(detail || 'Query failed.') : 'Query completed successfully.',
+        message: failure ? String(detail || 'Query failed.') : 'Episode recorded.',
       });
-    } catch (error) {
-      const errorResult = {
-        fabricId: selectedFabric,
-        llmProvider: selectedLLM,
-        query: testQuery,
-        response: 'Sorry, I encountered an error. Please try again.',
-        confidence: 0.0,
-        timestamp: new Date().toISOString(),
-        relevantChunks: 0,
-        processingTime: '0s',
-        contextId: contextMode === 'layer' ? selectedContextId || undefined : undefined,
-        contextName: contextMode === 'layer' ? selectedContext?.name : undefined,
-      };
-      setTestResults(prev => [errorResult, ...prev]);
-      setStatusBanner({
-        type: 'error',
-        message: 'Query failed. Please try again.',
-      });
+    } catch {
+      setTestResults((prev) => [
+        ...prev,
+        {
+          fabricId: selectedFabric,
+          llmProvider: selectedLLM,
+          query: pendingQuery,
+          response: 'Sorry, I encountered an error. Please try again.',
+          confidence: 0,
+          timestamp: new Date().toISOString(),
+          relevantChunks: 0,
+          processingTime: '0s',
+          contextId: contextMode === 'layer' ? selectedContextId || undefined : undefined,
+          contextName: contextMode === 'layer' ? selectedContext?.name : undefined,
+          feedbackState: null,
+        },
+      ]);
+      setStatusBanner({ type: 'error', message: 'Query failed. Please try again.' });
     } finally {
       setIsLoading(false);
+      composerRef.current?.focus();
     }
   };
 
@@ -326,572 +418,441 @@ const TestLLM: React.FC = () => {
     }
   };
 
+  const canSend =
+    Boolean(selectedFabric)
+    && Boolean(testQuery.trim())
+    && !isLoading
+    && !(contextMode === 'layer' && !selectedContextId);
+
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 text-[#cbd5e1] [&_.bg-white]:bg-[#10141d]/75 [&_.bg-gray-50]:bg-white/[0.03] [&_.bg-gray-100]:bg-white/[0.05] [&_.text-gray-900]:text-[#e8edf4] [&_.text-gray-800]:text-[#cbd5e1] [&_.text-gray-700]:text-[#cbd5e1] [&_.text-gray-600]:text-[#8b9cb0] [&_.text-gray-500]:text-[#8b9cb0] [&_.text-gray-400]:text-[#8b9cb0] [&_.text-gray-300]:text-[#8b9cb0] [&_.border-gray-200]:border-[rgba(148,163,184,0.11)] [&_.border-gray-300]:border-[rgba(148,163,184,0.2)] [&_input]:bg-[#10141d]/70 [&_input]:text-[#e8edf4] [&_input]:border-[rgba(148,163,184,0.2)] [&_input]:placeholder:text-[#8b9cb0] [&_textarea]:bg-[#10141d]/70 [&_textarea]:text-[#e8edf4] [&_textarea]:border-[rgba(148,163,184,0.2)] [&_textarea]:placeholder:text-[#8b9cb0] [&_select]:bg-[#10141d]/70 [&_select]:text-[#e8edf4] [&_select]:border-[rgba(148,163,184,0.2)]">
-      <div className="mb-8">
-        <div className="flex items-center space-x-3 mb-4">
-          <div className="w-12 h-12 bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-xl flex items-center justify-center">
-            <ChatBubbleLeftRightIcon className="w-7 h-7 text-white" />
+    <div
+      className="relative -mx-4 -mb-8 min-h-[calc(100vh-4.5rem)] overflow-hidden px-4 pb-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8"
+      style={{ fontFamily: "Outfit, 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif" }}
+    >
+      {/* Atmosphere */}
+      <div className="pointer-events-none absolute inset-0 bg-[#f5f5f7]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(255,255,255,0.95),_transparent_55%),radial-gradient(ellipse_at_bottom_right,_rgba(210,220,235,0.55),_transparent_45%)]" />
+      <div
+        className="pointer-events-none absolute inset-0 opacity-[0.35]"
+        style={{
+          backgroundImage:
+            'linear-gradient(rgba(15,23,42,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(15,23,42,0.03) 1px, transparent 1px)',
+          backgroundSize: '48px 48px',
+        }}
+      />
+
+      <div className="relative mx-auto flex h-[calc(100vh-5.5rem)] max-w-[1400px] flex-col gap-3 pt-3">
+        {/* Top bar */}
+        <header className="flex shrink-0 items-center justify-between gap-3 rounded-[22px] border border-white/70 bg-white/70 px-5 py-3 shadow-[0_10px_40px_-28px_rgba(15,23,42,0.35)] backdrop-blur-2xl">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#8b93a7]">Weave · Agent lab</p>
+            <h1 className="truncate text-[22px] font-semibold tracking-[-0.03em] text-[#1d1d1f]">Test with LLM</h1>
           </div>
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Test with LLM</h1>
-            <p className="text-gray-600">
-              Ask a fabric alone — or attach a published Context Layer so the agent honors your rules and playbook.
-            </p>
-          </div>
-        </div>
-      </div>
-      {statusBanner && (
-        <div
-          className={`mb-6 rounded-xl border px-4 py-3 text-sm ${
-            statusBanner.type === 'success'
-              ? 'border-emerald-400/35 bg-emerald-500/10 text-emerald-200'
-              : statusBanner.type === 'error'
-                ? 'border-rose-400/35 bg-rose-500/10 text-rose-200'
-                : 'border-cyan-400/35 bg-cyan-500/10 text-cyan-100'
-          }`}
-        >
-          {statusBanner.message}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Test Configuration */}
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
-            <SparklesIcon className="w-5 h-5 mr-2 text-emerald-500" />
-            Test Configuration
-          </h2>
-          
-                      <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Select Knowledge Fabric
-                </label>
-                <select
-                  value={selectedFabric}
-                  onChange={(e) => {
-                    setSelectedFabric(e.target.value);
-                    setSelectedContextId('');
-                    setContextMode('fabric');
-                  }}
-                  className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                  disabled={loadingFabrics}
-                >
-                  <option value="">
-                    {loadingFabrics ? 'Loading fabrics...' : 'Choose a fabric...'}
-                  </option>
-                  {fabrics.map((fabric) => (
-                    <option key={fabric.id} value={fabric.id}>
-                      {fabric.name} · {fabricKindLabel(fabric.weave_domain)} ({fabric.document_count} docs)
-                    </option>
-                  ))}
-                </select>
-                {selectedFabric && (
-                  <div className="mt-3 rounded-xl border border-[rgba(148,163,184,0.14)] bg-white/[0.03] px-3 py-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-[10px] uppercase tracking-[0.16em] text-[#8b9cb0]">Selected fabric</p>
-                        <p className="mt-1 text-sm font-medium leading-snug text-[#e8edf4]">
-                          {fabrics.find(f => f.id === selectedFabric)?.name}
-                        </p>
-                      </div>
-                      <span className="shrink-0 rounded-full border border-[rgba(155,139,212,0.4)] bg-gradient-to-r from-[rgba(94,200,242,0.12)] to-[rgba(155,139,212,0.18)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#d7cff5]">
-                        CKF ready
-                      </span>
-                    </div>
-                    <p className="mt-2 text-xs leading-relaxed text-[#8b9cb0]">
-                      <span className="text-[#cbd5e1]">
-                        {fabricKindLabel(fabrics.find(f => f.id === selectedFabric)?.weave_domain)}
-                      </span>
-                      {' · '}domain-aware reasoning is applied automatically for complex questions.
-                    </p>
-                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <div className="rounded-lg border border-[rgba(148,163,184,0.11)] bg-[#10141d]/55 px-2.5 py-2">
-                        <p className="text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">CKF session</p>
-                        <p
-                          className="mt-1 truncate font-mono text-[11px] text-[#5ec8f2]"
-                          title={sessionByFabric[selectedFabric] || 'Starts on the first query'}
-                        >
-                          {sessionByFabric[selectedFabric]
-                            ? shortRecordId(sessionByFabric[selectedFabric])
-                            : 'Starts on first query'}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-[rgba(148,163,184,0.11)] bg-[#10141d]/55 px-2.5 py-2">
-                        <p className="text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">CKF closed loop</p>
-                        <p className="mt-1 text-[11px] text-[#cbd5e1]">Approved corrections rewrite this fabric</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {selectedFabric && (
-                <div className="rounded-2xl border border-[rgba(94,200,242,0.28)] bg-[linear-gradient(145deg,rgba(94,200,242,0.1),rgba(16,20,29,0.55))] p-4 shadow-[0_16px_40px_-28px_rgba(94,200,242,0.55)]">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#5ec8f2]">Context Layer</p>
-                      <p className="mt-1 text-sm font-semibold text-[#e8edf4]">Attach a published contract</p>
-                      <p className="mt-1 text-xs text-[#8b9cb0]">
-                        Fabric alone vs fabric + governed rules — same question, different legitimacy.
-                      </p>
-                    </div>
-                    <Link
-                      to="/context"
-                      className="text-[11px] font-medium text-[#5ec8f2] hover:underline"
-                    >
-                      Open Context Layer →
-                    </Link>
-                  </div>
-
-                  <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-[#070b12]/55 p-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setContextMode('fabric');
-                        setSelectedContextId('');
-                      }}
-                      className={`rounded-lg px-3 py-2.5 text-left transition ${
-                        contextMode === 'fabric'
-                          ? 'bg-white/[0.1] text-[#e8edf4] shadow-sm ring-1 ring-[rgba(148,163,184,0.25)]'
-                          : 'text-[#8b9cb0] hover:text-[#cbd5e1]'
-                      }`}
-                    >
-                      <p className="text-[11px] font-semibold">Fabric only</p>
-                      <p className="mt-0.5 text-[10px] opacity-80">No designed contract</p>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setContextMode('layer');
-                        if (!selectedContextId && publishedContexts[0]) {
-                          setSelectedContextId(publishedContexts[0].id);
-                        }
-                      }}
-                      disabled={loadingContexts || publishedContexts.length === 0}
-                      className={`rounded-lg px-3 py-2.5 text-left transition disabled:opacity-40 ${
-                        contextMode === 'layer'
-                          ? 'bg-gradient-to-br from-[rgba(94,200,242,0.22)] to-[rgba(62,207,155,0.14)] text-[#e8edf4] shadow-sm ring-1 ring-[rgba(94,200,242,0.4)]'
-                          : 'text-[#8b9cb0] hover:text-[#cbd5e1]'
-                      }`}
-                    >
-                      <p className="text-[11px] font-semibold">With Context Layer</p>
-                      <p className="mt-0.5 text-[10px] opacity-80">
-                        {loadingContexts
-                          ? 'Loading…'
-                          : publishedContexts.length
-                            ? `${publishedContexts.length} published`
-                            : 'None published'}
-                      </p>
-                    </button>
-                  </div>
-
-                  {contextMode === 'layer' && (
-                    <div className="mt-3 space-y-2">
-                      {publishedContexts.length === 0 ? (
-                        <p className="rounded-xl border border-dashed border-[rgba(148,163,184,0.25)] px-3 py-3 text-xs text-[#8b9cb0]">
-                          No published contexts on this fabric yet. Create one in Context Layer, publish it, then refresh.
-                        </p>
-                      ) : (
-                        publishedContexts.map((ctx) => {
-                          const active = selectedContextId === ctx.id;
-                          return (
-                            <button
-                              key={ctx.id}
-                              type="button"
-                              onClick={() => setSelectedContextId(ctx.id)}
-                              className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${
-                                active
-                                  ? 'border-[rgba(62,207,155,0.5)] bg-[rgba(62,207,155,0.1)]'
-                                  : 'border-[rgba(148,163,184,0.16)] bg-[#0b0f16]/50 hover:border-[rgba(94,200,242,0.35)]'
-                              }`}
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="min-w-0">
-                                  <p className="truncate text-sm font-medium text-[#e8edf4]">{ctx.name}</p>
-                                  <p className="mt-0.5 font-mono text-[10px] text-[#8b9cb0]">
-                                    v{ctx.version} · {shortRecordId(ctx.id)}
-                                  </p>
-                                  {ctx.purpose && (
-                                    <p className="mt-1 line-clamp-2 text-[11px] text-[#9fb0c5]">{ctx.purpose}</p>
-                                  )}
-                                  {(ctx.playbook?.routes || []).length > 0 && (
-                                    <p className="mt-1 text-[10px] text-[#7ad4c0]">
-                                      Playbook: {(ctx.playbook?.routes || []).join(' · ')}
-                                    </p>
-                                  )}
-                                </div>
-                                {active ? (
-                                  <CheckCircleIcon className="h-5 w-5 shrink-0 text-[#3ecf9b]" />
-                                ) : (
-                                  <LinkIcon className="h-4 w-4 shrink-0 text-[#8b9cb0]" />
-                                )}
-                              </div>
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
-                  )}
-
-                  <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">
-                    <span className={`rounded-full px-2 py-0.5 ${contextMode === 'fabric' ? 'bg-white/10 text-[#cbd5e1]' : 'bg-[rgba(62,207,155,0.15)] text-[#9af0ca]'}`}>
-                      {contextMode === 'fabric' ? 'Mode · fabric only' : 'Mode · fabric + context'}
-                    </span>
-                    {contextMode === 'layer' && selectedContext && (
-                      <span className="truncate rounded-full bg-[rgba(94,200,242,0.12)] px-2 py-0.5 text-[#9adfff] normal-case tracking-normal">
-                        Attached: {selectedContext.name}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Select LLM Provider
-                </label>
-                <select
-                  value={selectedLLM}
-                  onChange={(e) => setSelectedLLM(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                >
-                  {(llmProviders.length > 0 ? llmProviders : [{ id: 'openai', name: 'Azure OpenAI' }]).map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.name}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-gray-500 mt-1">
-                  {llmProviders.find((p) => p.id === selectedLLM)?.description
-                    || (selectedLLM === 'bedrock'
-                      ? 'Using AWS Bedrock via IAM (no OpenAI key required on AWS)'
-                      : 'Questions are answered by the Azure OpenAI deployment on this VM.')}
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Test Query
-                </label>
-                <textarea
-                  value={testQuery}
-                  onChange={(e) => setTestQuery(e.target.value)}
-                  placeholder="Enter your test query here..."
-                  rows={4}
-                  className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                />
-              </div>
-
+          <div className="flex items-center gap-2">
             <button
-              onClick={handleTestQuery}
-              disabled={
-                !selectedFabric
-                || !testQuery.trim()
-                || isLoading
-                || (contextMode === 'layer' && !selectedContextId)
-              }
-              className={`w-full px-6 py-3 rounded-lg font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center ${
-                contextMode === 'layer'
-                  ? 'bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-600 hover:to-emerald-600 shadow-[0_12px_28px_-16px_rgba(94,200,242,0.8)]'
-                  : 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700'
-              }`}
+              type="button"
+              onClick={() => setRailOpen((v) => !v)}
+              className="rounded-full border border-[#e5e7eb] bg-white px-3 py-1.5 text-[11px] font-medium text-[#52525b] transition hover:bg-[#f9fafb] lg:hidden"
             >
-              {isLoading ? (
-                <>
-                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                  Testing...
-                </>
-              ) : (
-                <>
-                  <CpuChipIcon className="w-5 h-5 mr-2" />
-                  {contextMode === 'layer' ? 'Run with Context Layer' : 'Run · Fabric only'}
-                </>
-              )}
+              {railOpen ? 'Hide setup' : 'Setup'}
             </button>
-          </div>
-        </div>
-
-        {/* Test Results */}
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
-            <DocumentTextIcon className="w-5 h-5 mr-2 text-emerald-500" />
-            Test Results
-          </h2>
-          
-          <div className="space-y-4">
-            {testResults.length === 0 ? (
-              <div className="text-center text-gray-500 py-8">
-                <ChatBubbleLeftRightIcon className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-                <p>No test results yet.</p>
-                <p className="mt-1 text-sm text-gray-400">
-                  Run once on Fabric only, then again with a Context Layer — compare badges side by side.
-                </p>
-              </div>
-            ) : (
-              testResults.map((result, index) => (
-                <div key={index} className="border border-gray-200 rounded-lg p-4">
-                  <div className="mb-3 flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-semibold text-gray-900">
-                          {fabrics.find(f => f.id === result.fabricId)?.name || 'Unknown Fabric'}
-                        </span>
-                        <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-gray-600">
-                          {result.llmProvider || 'LLM'}
-                        </span>
-                        {result.contextId ? (
-                          <span
-                            className="inline-flex items-center gap-1 rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-cyan-800"
-                            title={result.contextId}
-                          >
-                            <LinkIcon className="h-3 w-3" />
-                            Context · {result.contextName || shortRecordId(result.contextId)}
-                          </span>
-                        ) : (
-                          <span className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-gray-500">
-                            Fabric only
-                          </span>
-                        )}
-                        {(result.decision || result.route) && (
-                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-emerald-800">
-                            {result.decision
-                              ? `Decision · ${result.decision}`
-                              : `Route · ${result.route}`}
-                          </span>
-                        )}
-                        {result.decisionResolver === 'deterministic' && (
-                          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-amber-800">
-                            Locked
-                          </span>
-                        )}
-                      </div>
-                      {(result.sessionId || result.episodeId || result.contextId) && (
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {result.sessionId && (
-                            <span
-                              className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-2 py-1"
-                              title={result.sessionId}
-                            >
-                              <span className="text-[10px] uppercase tracking-[0.14em] text-gray-500">Session</span>
-                              <span className="font-mono text-[11px] text-cyan-700">{shortRecordId(result.sessionId)}</span>
-                            </span>
-                          )}
-                          {result.episodeId && (
-                            <span
-                              className="inline-flex items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-2 py-1"
-                              title={result.episodeId}
-                            >
-                              <span className="text-[10px] uppercase tracking-[0.14em] text-gray-500">Episode</span>
-                              <span className="font-mono text-[11px] text-violet-700">{shortRecordId(result.episodeId)}</span>
-                            </span>
-                          )}
-                          {result.contextId && (
-                            <span
-                              className="inline-flex items-center gap-2 rounded-md border border-cyan-200 bg-cyan-50/80 px-2 py-1"
-                              title={result.contextId}
-                            >
-                              <span className="text-[10px] uppercase tracking-[0.14em] text-gray-500">Context id</span>
-                              <span className="font-mono text-[11px] text-cyan-800">{shortRecordId(result.contextId)}</span>
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                    <span className="shrink-0 text-xs text-gray-500">
-                      {new Date(result.timestamp).toLocaleTimeString()}
-                    </span>
-                  </div>
-                  
-                  <div className="mb-3">
-                    <p className="text-sm text-gray-600 mb-2">
-                      <strong>Query:</strong> {result.query}
-                    </p>
-                    <div className="rounded-lg border border-gray-200 bg-white px-3 py-3">
-                      {renderLlmMarkdown(String(result.response || ''), 'light')}
-                    </div>
-                  </div>
-                  
-                  <div className="flex items-center justify-between text-xs text-gray-500">
-                    <span>Confidence: {(result.confidence * 100).toFixed(1)}%</span>
-                    <span>Processing: {result.processingTime}</span>
-                    <span>Chunks: {result.relevantChunks}{result.packedChunks && result.packedChunks !== result.relevantChunks ? ` (packed ${result.packedChunks})` : ''}</span>
-                  </div>
-                  {result.episodeId && (
-                    <div className="mt-3 space-y-2 border-t border-[rgba(148,163,184,0.11)] pt-3">
-                      <p className="text-[10px] uppercase tracking-[0.16em] text-[#8b9cb0]">CKF closed loop</p>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => submitFeedback(index, 'up', false)}
-                          className="rounded-md border border-[rgba(62,207,155,0.35)] bg-[rgba(62,207,155,0.08)] px-2.5 py-1 text-xs text-[#9af0ca]"
-                        >
-                          Helpful
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => submitFeedback(index, 'down', false)}
-                          className="rounded-md border border-[rgba(240,137,132,0.35)] bg-[rgba(240,137,132,0.08)] px-2.5 py-1 text-xs text-[#f3b4b0]"
-                        >
-                          Incorrect
-                        </button>
-                      </div>
-                      <textarea
-                        value={feedbackDrafts[index] || ''}
-                        onChange={(e) => setFeedbackDrafts((prev) => ({ ...prev, [index]: e.target.value }))}
-                        placeholder="Correction to write back into this fabric"
-                        className="w-full rounded-md border px-2 py-1 text-xs"
-                        rows={2}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => submitFeedback(index, 'down', true)}
-                        className="rounded-md bg-emerald-600 px-2 py-1 text-xs text-white"
-                      >
-                        Apply correction to fabric
-                      </button>
-                      {result.feedbackState && (
-                        <p className="text-xs text-emerald-200">{result.feedbackState}</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))
+            {testResults.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setTestResults([]);
+                  setFeedbackDrafts({});
+                  setStatusBanner({ type: 'info', message: 'Conversation cleared.' });
+                }}
+                className="inline-flex items-center gap-1.5 rounded-full border border-[#e5e7eb] bg-white px-3 py-1.5 text-[11px] font-medium text-[#52525b] transition hover:bg-[#f9fafb]"
+              >
+                <TrashIcon className="h-3.5 w-3.5" />
+                Clear
+              </button>
             )}
+            <span className="hidden rounded-full bg-[#1d1d1f] px-3 py-1.5 text-[11px] font-medium text-white sm:inline">
+              {contextMode === 'layer' ? 'Fabric + Context' : 'Fabric only'}
+            </span>
           </div>
-        </div>
-      </div>
+        </header>
 
-      {/* Demo: with vs without Context Layer */}
-      <div className="mt-8 overflow-hidden rounded-2xl border border-cyan-200/70 bg-gradient-to-br from-slate-950 via-slate-900 to-cyan-950 p-6 text-white shadow-xl">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="max-w-2xl">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-cyan-300">Demo · same question, two modes</p>
-            <h3 className="mt-2 text-lg font-semibold tracking-tight">Prove the Context Layer in one minute</h3>
-            <p className="mt-1 text-sm text-slate-300">
-              Run the claim once on Fabric only, then again with a published Context Layer attached. Watch the route and decision shift.
-            </p>
-            <p className="mt-2 text-xs text-cyan-200/80">
-              {selectedFabric
-                ? `Anchors for this fabric: ${demoAdjudication.hint}`
-                : 'Select a fabric first — demo IDs switch for Databricks vs Cost of Care.'}
-            </p>
-          </div>
-          <SparklesIcon className="h-8 w-8 shrink-0 text-cyan-300/80" />
-        </div>
-        <div className="mt-5 grid gap-3 md:grid-cols-2">
-          <button
-            type="button"
-            disabled={!selectedFabric}
-            onClick={() => {
-              setTestQuery(demoAdjudication.query);
-              setContextMode('fabric');
-              setSelectedContextId('');
-            }}
-            className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left transition hover:border-white/25 hover:bg-white/10 disabled:opacity-40"
+        {statusBanner && (
+          <div
+            className={`shrink-0 rounded-2xl border px-4 py-2.5 text-[13px] ${
+              statusBanner.type === 'success'
+                ? 'border-[#b7ebc9] bg-[#e8f8ef] text-[#1b7a45]'
+                : statusBanner.type === 'error'
+                  ? 'border-[#f3c0c0] bg-[#fdecee] text-[#b42318]'
+                  : 'border-[#c7d2fe] bg-[#eef2ff] text-[#3538cd]'
+            }`}
           >
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Step 1</p>
-            <p className="mt-1 text-sm font-semibold text-white">Load demo query · Fabric only</p>
-            <p className="mt-1 text-xs text-slate-400">{demoAdjudication.label}</p>
-          </button>
-          <button
-            type="button"
-            disabled={!selectedFabric || !publishedContexts.length}
-            onClick={() => {
-              setTestQuery(demoAdjudication.query);
-              setContextMode('layer');
-              if (publishedContexts[0]) setSelectedContextId(publishedContexts[0].id);
-            }}
-            className="rounded-xl border border-cyan-400/30 bg-cyan-400/10 px-4 py-3 text-left transition hover:border-cyan-300/50 hover:bg-cyan-400/15 disabled:opacity-40"
-          >
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-300">Step 2</p>
-            <p className="mt-1 text-sm font-semibold text-white">Same query · attach Context Layer</p>
-            <p className="mt-1 text-xs text-cyan-200/80">
-              {publishedContexts.length
-                ? `Uses ${publishedContexts[0]?.name || 'published context'} → expect decision=${demoAdjudication.expectWithContext}`
-                : 'Publish a context on this fabric first'}
-            </p>
-          </button>
-        </div>
-      </div>
-
-      {/* Quick Test Examples */}
-      <div className="mt-8 bg-white rounded-xl shadow-lg p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-          <SparklesIcon className="w-5 h-5 mr-2 text-emerald-500" />
-          Quick Test Examples
-        </h3>
-        
-        {fabrics.length === 0 ? (
-          <div className="text-center text-gray-500 py-4">
-            <DocumentTextIcon className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-            <p>No knowledge fabrics available. Create a fabric first to see test examples.</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {/* Fabric-specific examples */}
-            {fabrics.map((fabric) => (
-              <div key={fabric.id} className="border border-gray-200 rounded-lg p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="font-medium text-gray-900">{fabric.name}</h4>
-                  <span className="text-xs text-gray-500">
-                    {fabric.document_count} docs, {fabric.total_chunks || 0} chunks
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {[
-                    "What are the key stakeholders mentioned in this document?",
-                    "Explain the main procedures described in this document",
-                    "What are the important requirements or policies?",
-                    "Summarize the main topics covered in this document",
-                    "What are the key processes or workflows?",
-                    "What are the main guidelines or best practices?"
-                  ].map((example, index) => (
-                    <button
-                      key={index}
-                      onClick={() => {
-                        setSelectedFabric(fabric.id);
-                        setTestQuery(example);
-                      }}
-                      className="text-left p-3 border border-gray-200 rounded-lg hover:border-emerald-300 hover:bg-emerald-50 transition-colors group"
-                    >
-                      <p className="text-sm text-gray-700 group-hover:text-emerald-700">{example}</p>
-                      <p className="text-xs text-gray-500 mt-1">Click to select fabric & query</p>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-            
-            {/* General examples */}
-            <div className="border border-gray-200 rounded-lg p-4">
-              <h4 className="font-medium text-gray-900 mb-3">General Knowledge Queries</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {[
-                  "What is the main purpose of this document?",
-                  "What are the key findings or conclusions?",
-                  "What are the important dates or timelines mentioned?",
-                  "What are the main challenges or issues discussed?",
-                  "What are the recommendations or next steps?",
-                  "What are the key metrics or data points?"
-                ].map((example, index) => (
-                  <button
-                    key={index}
-                    onClick={() => setTestQuery(example)}
-                    className="text-left p-3 border border-gray-200 rounded-lg hover:border-emerald-300 hover:bg-emerald-50 transition-colors group"
-                  >
-                    <p className="text-sm text-gray-700 group-hover:text-emerald-700">{example}</p>
-                    <p className="text-xs text-gray-500 mt-1">Click to set query only</p>
-                  </button>
-                ))}
-              </div>
-            </div>
+            {statusBanner.message}
           </div>
         )}
+
+        <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[320px_minmax(0,1fr)]">
+          {/* Setup rail */}
+          <aside
+            className={`${railOpen ? 'flex' : 'hidden'} min-h-0 flex-col gap-3 overflow-y-auto rounded-[26px] border border-white/80 bg-white/75 p-4 shadow-[0_20px_60px_-40px_rgba(15,23,42,0.45)] backdrop-blur-2xl lg:flex`}
+          >
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b93a7]">1 · Fabric</p>
+              <select
+                value={selectedFabric}
+                onChange={(e) => {
+                  setSelectedFabric(e.target.value);
+                  setSelectedContextId('');
+                  setContextMode('fabric');
+                }}
+                disabled={loadingFabrics}
+                className="mt-2 w-full appearance-none rounded-2xl border border-[#e8eaef] bg-[#f7f8fa] px-3 py-2.5 text-[13px] text-[#1d1d1f] outline-none transition focus:border-[#c5ccd8] focus:bg-white"
+              >
+                <option value="">{loadingFabrics ? 'Loading…' : 'Choose a fabric'}</option>
+                {fabrics.map((fabric) => (
+                  <option key={fabric.id} value={fabric.id}>
+                    {fabric.name} · {fabricKindLabel(fabric.weave_domain)}
+                  </option>
+                ))}
+              </select>
+              {activeFabric && (
+                <div className="mt-2 rounded-2xl bg-[#f7f8fa] px-3 py-2">
+                  <p className="truncate text-[12px] font-medium text-[#1d1d1f]">{activeFabric.name}</p>
+                  <p className="mt-0.5 font-mono text-[10px] text-[#8b93a7]">
+                    {fabricKindLabel(activeFabric.weave_domain)} · {activeFabric.document_count} docs
+                    {sessionByFabric[selectedFabric] ? ` · sess ${shortRecordId(sessionByFabric[selectedFabric])}` : ''}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-[22px] border border-[#eceef2] bg-gradient-to-b from-white to-[#f7f8fa] p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b93a7]">2 · Context Layer</p>
+                  <p className="mt-1 text-[13px] font-medium text-[#1d1d1f]">Operating contract</p>
+                </div>
+                <Link to="/context" className="text-[11px] font-medium text-[#0071e3] hover:underline">
+                  Design →
+                </Link>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-1 rounded-2xl bg-[#eceef2]/80 p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setContextMode('fabric');
+                    setSelectedContextId('');
+                  }}
+                  className={`rounded-xl px-2.5 py-2 text-left transition ${
+                    contextMode === 'fabric' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#6b7280]'
+                  }`}
+                >
+                  <p className="text-[11px] font-semibold">Fabric only</p>
+                  <p className="text-[10px] opacity-70">No contract</p>
+                </button>
+                <button
+                  type="button"
+                  disabled={loadingContexts || publishedContexts.length === 0}
+                  onClick={() => {
+                    setContextMode('layer');
+                    if (!selectedContextId && publishedContexts[0]) {
+                      setSelectedContextId(publishedContexts[0].id);
+                    }
+                  }}
+                  className={`rounded-xl px-2.5 py-2 text-left transition disabled:opacity-40 ${
+                    contextMode === 'layer' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#6b7280]'
+                  }`}
+                >
+                  <p className="text-[11px] font-semibold">+ Context</p>
+                  <p className="text-[10px] opacity-70">
+                    {loadingContexts ? '…' : publishedContexts.length ? `${publishedContexts.length} live` : 'None'}
+                  </p>
+                </button>
+              </div>
+              {contextMode === 'layer' && (
+                <div className="mt-2 max-h-40 space-y-1.5 overflow-y-auto">
+                  {publishedContexts.map((ctx) => {
+                    const active = selectedContextId === ctx.id;
+                    return (
+                      <button
+                        key={ctx.id}
+                        type="button"
+                        onClick={() => setSelectedContextId(ctx.id)}
+                        className={`w-full rounded-xl border px-2.5 py-2 text-left transition ${
+                          active
+                            ? 'border-[#1d1d1f] bg-[#1d1d1f] text-white'
+                            : 'border-[#e8eaef] bg-white text-[#1d1d1f] hover:border-[#c5ccd8]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="truncate text-[12px] font-medium">{ctx.name}</p>
+                          {active ? <CheckCircleIcon className="h-4 w-4 shrink-0" /> : <LinkIcon className="h-3.5 w-3.5 shrink-0 opacity-40" />}
+                        </div>
+                        <p className={`mt-0.5 font-mono text-[10px] ${active ? 'text-white/60' : 'text-[#8b93a7]'}`}>
+                          v{ctx.version} · {shortRecordId(ctx.id)}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b93a7]">3 · Model</p>
+              <select
+                value={selectedLLM}
+                onChange={(e) => setSelectedLLM(e.target.value)}
+                className="mt-2 w-full appearance-none rounded-2xl border border-[#e8eaef] bg-[#f7f8fa] px-3 py-2.5 text-[13px] text-[#1d1d1f] outline-none focus:border-[#c5ccd8] focus:bg-white"
+              >
+                {(llmProviders.length > 0 ? llmProviders : [{ id: 'openai', name: 'Azure OpenAI' }]).map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="mt-auto rounded-[22px] border border-[#eceef2] bg-[#f7f8fa] p-3">
+              <div className="flex items-center gap-2">
+                <SparklesIcon className="h-4 w-4 text-[#0071e3]" />
+                <p className="text-[11px] font-semibold text-[#1d1d1f]">Prove the layer</p>
+              </div>
+              <p className="mt-1 text-[11px] leading-relaxed text-[#6b7280]">
+                {selectedFabric ? demoAdjudication.hint : 'Select a fabric to load the right demo anchors.'}
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  disabled={!selectedFabric}
+                  onClick={() => {
+                    setTestQuery(demoAdjudication.query);
+                    setContextMode('fabric');
+                    setSelectedContextId('');
+                    composerRef.current?.focus();
+                  }}
+                  className="rounded-xl bg-white px-2 py-2 text-left text-[10px] font-semibold text-[#1d1d1f] shadow-sm disabled:opacity-40"
+                >
+                  Step 1 · Fabric
+                  <span className="mt-0.5 block font-normal text-[#8b93a7]">{demoAdjudication.label}</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={!selectedFabric || !publishedContexts.length}
+                  onClick={() => {
+                    setTestQuery(demoAdjudication.query);
+                    setContextMode('layer');
+                    if (publishedContexts[0]) setSelectedContextId(publishedContexts[0].id);
+                    composerRef.current?.focus();
+                  }}
+                  className="rounded-xl bg-[#1d1d1f] px-2 py-2 text-left text-[10px] font-semibold text-white disabled:opacity-40"
+                >
+                  Step 2 · Context
+                  <span className="mt-0.5 block font-normal text-white/55">
+                    expect {demoAdjudication.expectWithContext}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </aside>
+
+          {/* Chat stage */}
+          <section className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white/65 shadow-[0_24px_80px_-48px_rgba(15,23,42,0.55)] backdrop-blur-2xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-[#eceef2]/90 px-5 py-3">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#8b93a7]">Conversation</p>
+                <p className="text-[13px] font-medium text-[#1d1d1f]">
+                  {testResults.length === 0
+                    ? 'No episodes yet'
+                    : `${testResults.length} episode${testResults.length === 1 ? '' : 's'} · newest at bottom`}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] text-[#8b93a7]">
+                <span className="rounded-full bg-[#f3f4f6] px-2 py-1 font-mono">
+                  {activeFabric ? shortRecordId(activeFabric.id) : 'no fabric'}
+                </span>
+              </div>
+            </div>
+
+            <div ref={transcriptRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
+              {testResults.length === 0 && !isLoading && (
+                <div className="flex h-full min-h-[280px] flex-col items-center justify-center text-center">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-[22px] bg-gradient-to-b from-white to-[#eef1f6] shadow-[0_12px_40px_-20px_rgba(15,23,42,0.35)]">
+                    <SparklesIcon className="h-7 w-7 text-[#1d1d1f]" />
+                  </div>
+                  <p className="mt-5 text-[20px] font-semibold tracking-[-0.03em] text-[#1d1d1f]">Ask the fabric</p>
+                  <p className="mt-2 max-w-sm text-[13px] leading-relaxed text-[#6b7280]">
+                    Setup stays on the left. Outcomes stream here like a lab notebook — structured sections, locked decisions, no endless page scroll.
+                  </p>
+                </div>
+              )}
+
+              {testResults.map((result, index) => (
+                <article key={`${result.timestamp}-${index}`} className="mx-auto w-full max-w-3xl space-y-3">
+                  {/* User bubble */}
+                  <div className="flex justify-end">
+                    <div className="max-w-[85%] rounded-[22px] rounded-br-md bg-[#0071e3] px-4 py-3 text-[14px] leading-relaxed text-white shadow-[0_10px_30px_-18px_rgba(0,113,227,0.8)]">
+                      {result.query}
+                    </div>
+                  </div>
+
+                  {/* Assistant scientific card */}
+                  <div className="rounded-[24px] border border-[#e8eaef] bg-white p-4 shadow-[0_16px_40px_-32px_rgba(15,23,42,0.4)] sm:p-5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="rounded-full bg-[#f3f4f6] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#52525b]">
+                        {result.contextId ? 'Fabric + Context' : 'Fabric only'}
+                      </span>
+                      {result.contextName && (
+                        <span className="rounded-full border border-[#dbeafe] bg-[#eff6ff] px-2 py-0.5 text-[10px] font-medium text-[#1d4ed8]">
+                          {result.contextName}
+                        </span>
+                      )}
+                      {result.decision && (
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${decisionTone(result.decision)}`}>
+                          Decision · {result.decision}
+                        </span>
+                      )}
+                      {result.decisionResolver === 'deterministic' && (
+                        <span className="rounded-full border border-[#fde68a] bg-[#fffbeb] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#b45309]">
+                          Locked
+                        </span>
+                      )}
+                      {result.route && !result.decision && (
+                        <span className="rounded-full bg-[#f3f4f6] px-2 py-0.5 text-[10px] font-medium text-[#6b7280]">
+                          {result.route}
+                        </span>
+                      )}
+                      <span className="ml-auto text-[10px] text-[#8b93a7]">
+                        {new Date(result.timestamp).toLocaleTimeString()}
+                      </span>
+                    </div>
+
+                    <div className="mt-4">
+                      <ScientificAnswer markdown={result.response} decision={result.decision} />
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap gap-2 border-t border-[#f0f1f4] pt-3 text-[10px] text-[#8b93a7]">
+                      <span className="rounded-lg bg-[#f7f8fa] px-2 py-1">
+                        Confidence {(result.confidence * 100).toFixed(0)}%
+                      </span>
+                      <span className="rounded-lg bg-[#f7f8fa] px-2 py-1">{result.processingTime}</span>
+                      <span className="rounded-lg bg-[#f7f8fa] px-2 py-1">
+                        Chunks {result.relevantChunks}
+                        {result.packedChunks && result.packedChunks !== result.relevantChunks
+                          ? ` · packed ${result.packedChunks}`
+                          : ''}
+                      </span>
+                      {result.sessionId && (
+                        <span className="rounded-lg bg-[#f7f8fa] px-2 py-1 font-mono" title={result.sessionId}>
+                          sess {shortRecordId(result.sessionId)}
+                        </span>
+                      )}
+                      {result.episodeId && (
+                        <span className="rounded-lg bg-[#f7f8fa] px-2 py-1 font-mono" title={result.episodeId}>
+                          ep {shortRecordId(result.episodeId)}
+                        </span>
+                      )}
+                    </div>
+
+                    {result.episodeId && (
+                      <div className="mt-3 space-y-2 rounded-2xl bg-[#f7f8fa] p-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#8b93a7]">
+                          Closed loop
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => submitFeedback(index, 'up', false)}
+                            className="rounded-full bg-white px-3 py-1 text-[11px] font-medium text-[#1b7a45] shadow-sm"
+                          >
+                            Helpful
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => submitFeedback(index, 'down', false)}
+                            className="rounded-full bg-white px-3 py-1 text-[11px] font-medium text-[#b42318] shadow-sm"
+                          >
+                            Incorrect
+                          </button>
+                        </div>
+                        <textarea
+                          value={feedbackDrafts[index] || ''}
+                          onChange={(e) => setFeedbackDrafts((prev) => ({ ...prev, [index]: e.target.value }))}
+                          placeholder="Correction to write back into this fabric"
+                          rows={2}
+                          className="w-full rounded-xl border border-[#e8eaef] bg-white px-3 py-2 text-[12px] text-[#1d1d1f] outline-none focus:border-[#c5ccd8]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => submitFeedback(index, 'down', true)}
+                          className="rounded-full bg-[#1d1d1f] px-3 py-1.5 text-[11px] font-medium text-white"
+                        >
+                          Apply correction to fabric
+                        </button>
+                        {result.feedbackState && (
+                          <p className="text-[11px] text-[#1b7a45]">{result.feedbackState}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </article>
+              ))}
+
+              {isLoading && (
+                <div className="mx-auto flex w-full max-w-3xl items-center gap-3 rounded-[22px] border border-[#e8eaef] bg-white/90 px-4 py-3">
+                  <div className="flex gap-1">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#1d1d1f]" />
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#1d1d1f] [animation-delay:120ms]" />
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#1d1d1f] [animation-delay:240ms]" />
+                  </div>
+                  <p className="text-[12px] text-[#6b7280]">
+                    {contextMode === 'layer' ? 'Adjudicating with Context Layer…' : 'Retrieving from fabric…'}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Composer */}
+            <div className="shrink-0 border-t border-[#eceef2]/90 bg-white/80 p-3 backdrop-blur-xl sm:p-4">
+              <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-[26px] border border-[#e5e7eb] bg-[#f7f8fa] p-2 shadow-[0_12px_40px_-28px_rgba(15,23,42,0.35)] focus-within:border-[#c5ccd8] focus-within:bg-white">
+                <textarea
+                  ref={composerRef}
+                  value={testQuery}
+                  onChange={(e) => setTestQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      if (canSend) void handleTestQuery();
+                    }
+                  }}
+                  rows={2}
+                  placeholder={
+                    selectedFabric
+                      ? contextMode === 'layer'
+                        ? 'Ask under the attached Context Layer…'
+                        : 'Ask the fabric…'
+                      : 'Select a fabric to begin'
+                  }
+                  className="max-h-36 min-h-[52px] flex-1 resize-none bg-transparent px-3 py-2.5 text-[14px] leading-relaxed text-[#1d1d1f] outline-none placeholder:text-[#9ca3af]"
+                />
+                <button
+                  type="button"
+                  disabled={!canSend}
+                  onClick={() => void handleTestQuery()}
+                  className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#0071e3] text-white shadow-[0_8px_24px_-10px_rgba(0,113,227,0.9)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-[#d1d5db] disabled:shadow-none"
+                  aria-label="Send"
+                >
+                  <ArrowUpIcon className="h-5 w-5" />
+                </button>
+              </div>
+              <p className="mx-auto mt-2 max-w-3xl text-center text-[10px] text-[#8b93a7]">
+                Enter to send · Shift+Enter for newline · Outcomes stay in this panel
+              </p>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   );
 };
 
-export default TestLLM; 
+export default TestLLM;
