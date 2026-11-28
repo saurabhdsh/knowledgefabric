@@ -5,6 +5,28 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Carlito:wght@700&display=swap');
+
+/* Brand wordmark: Carlito Bold — cover = 42pt (slide / login) */
+.weave-wordmark {
+  font-family: 'Carlito', 'Calibri', Candara, Segoe, 'Segoe UI', Optima, Arial, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: #e8edf4;
+}
+
+.weave-wordmark--cover {
+  font-size: 42pt;
+}
+
+.weave-wordmark--nav {
+  font-size: 0.95rem;
+}
+
+.weave-wordmark--inline {
+  font-size: inherit;
+}
 
 html {
   /* Slightly tighter global type scale for sleek UI density */

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import LoginWaves from '../components/LoginWaves';
 import WeaveLogo from '../components/WeaveLogo';
+import WeaveWordmark, { WEAVE_BRAND } from '../components/WeaveWordmark';
 import { useAuth } from '../contexts/AuthContext';
 
 const Login: React.FC = () => {
@@ -79,7 +80,7 @@ const Login: React.FC = () => {
             <div className="mx-auto w-16 h-16 mb-4">
               <WeaveLogo gradientId="weave-grad-login" />
             </div>
-            <h1 className="text-2xl font-semibold tracking-tight text-[#e8edf4]">Weave</h1>
+            <WeaveWordmark as="h1" size="cover" />
             <p className="mt-1 text-[10px] uppercase tracking-[0.22em] text-[#8b9cb0]">
               Knowledge Fabric Platform
             </p>
@@ -183,7 +184,7 @@ const Login: React.FC = () => {
                 disabled={submitting || isLoading}
                 className="w-full rounded-xl border border-[rgba(94,200,242,0.35)] bg-gradient-to-r from-violet-600/80 via-fuchsia-600/70 to-cyan-600/70 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-900/20 transition hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                {submitting ? 'Signing in…' : 'Sign in to Weave'}
+                {submitting ? 'Signing in…' : `Sign in to ${WEAVE_BRAND}`}
               </button>
             </form>
           )}

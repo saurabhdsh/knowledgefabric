@@ -1289,7 +1289,7 @@ const FabricKnowledgeGraph: React.FC = () => {
                   </ul>
                 </div>
                 <div className="rounded-lg border border-[rgba(148,163,184,0.2)] bg-white/[0.03] p-3">
-                  <p className="font-semibold text-gray-800 mb-1">Weave domain</p>
+                  <p className="font-semibold text-gray-800 mb-1">weave. domain</p>
                   <p className="text-[#cbd5e1]">
                     {fabricDetails?.weave_domain === 'pharma' || (fabricDetails?.tags || []).some((t) => /pharma|weave:pharma/i.test(t))
                       ? 'Pharma Drug Manufacturing (tagged fabric)'
@@ -1355,7 +1355,7 @@ const FabricKnowledgeGraph: React.FC = () => {
 
             <div className="absolute top-3 left-3 rounded-xl p-3 border border-cyan-300/20 bg-gradient-to-br from-slate-950/95 via-slate-900/92 to-cyan-950/90 backdrop-blur-xl shadow-lg shadow-cyan-950/35 w-[250px]">
               <h3 className="text-xs font-semibold text-white mb-1">Fabric Details</h3>
-              <p className="text-xs text-slate-100/90">Weave domain: <span className="font-semibold text-violet-200">{fabricDetails?.weave_domain || 'generic'}</span></p>
+              <p className="text-xs text-slate-100/90">weave. domain: <span className="font-semibold text-violet-200">{fabricDetails?.weave_domain || 'generic'}</span></p>
               <p className="text-xs text-slate-100/90">Status: <span className="font-semibold text-cyan-200">{fabricDetails?.status || '-'}</span></p>
               <p className="text-xs text-slate-100/90">Model: <span className="font-semibold text-fuchsia-200">{fabricDetails?.model_status || '-'}</span></p>
               <p className="text-xs text-slate-100/90">Documents: <span className="font-semibold text-emerald-200">{fabricDetails?.document_count ?? 0}</span></p>
@@ -1510,7 +1510,7 @@ const FabricKnowledgeGraph: React.FC = () => {
             <div className="pointer-events-none absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
             <h3 className="text-[18px] font-semibold tracking-[-0.03em] text-[#e8edf4]">How this graph is built</h3>
             <p className="mt-2 max-w-3xl text-[13px] leading-relaxed text-[#cbd5e1]">
-              Weave reads the fabric and records what is in it. An edge is drawn when it can name the two things being connected, the evidence that tied them together, and how sure that tie is. The six steps below are that path, from the raw source to the canvas in front of you.
+              weave. reads the fabric and records what is in it. An edge is drawn when it can name the two things being connected, the evidence that tied them together, and how sure that tie is. The six steps below are that path, from the raw source to the canvas in front of you.
             </p>
             <ol className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {[

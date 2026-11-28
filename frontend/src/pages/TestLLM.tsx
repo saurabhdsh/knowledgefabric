@@ -440,7 +440,10 @@ const TestLLM: React.FC = () => {
       <div className="relative mx-auto flex h-[calc(100vh-5.5rem)] max-w-[1400px] flex-col gap-3 pt-3">
         <header className="flex shrink-0 items-center justify-between gap-3 rounded-[22px] border border-[rgba(148,163,184,0.14)] bg-[#101822]/78 px-5 py-3 shadow-[0_18px_50px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl">
           <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.22em] text-[#5ec8f2]">Weave · Agent lab</p>
+            <p className="text-xs uppercase tracking-[0.22em] text-[#5ec8f2]">
+              <span className="weave-wordmark weave-wordmark--inline normal-case tracking-[-0.02em]">weave.</span>
+              {' · Agent lab'}
+            </p>
             <h1 className="truncate text-3xl font-semibold text-[#e8edf4]">Test with LLM</h1>
           </div>
           <div className="flex items-center gap-2">

@@ -14,6 +14,7 @@ import {
   UsersIcon,
 } from '@heroicons/react/24/outline';
 import WeaveLogo from './WeaveLogo';
+import WeaveWordmark from './WeaveWordmark';
 import UserAccountBadge from './UserAccountBadge';
 import { useAuth } from '../contexts/AuthContext';
 import { WeaveFeatureKey } from '../utils/authStorage';
@@ -134,7 +135,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             <div className="flex items-center gap-3">
               <WeaveLogo gradientId="weave-grad-mobile" className="w-11 h-11" />
               <div>
-                <h1 className="text-lg font-semibold text-[#e8edf4] tracking-tight">Weave</h1>
+                <WeaveWordmark as="h1" size="nav" />
                 <p className="text-[10px] uppercase tracking-[0.2em] text-[#8b9cb0]">Knowledge Fabric Platform</p>
               </div>
             </div>
@@ -209,7 +210,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             </button>
             <Link to="/" className="flex shrink-0 items-center gap-2 rounded-full px-1.5 py-1">
               <WeaveLogo gradientId="weave-grad-ribbon" className="h-8 w-8" />
-              <span className="hidden text-sm font-semibold tracking-[-0.03em] text-[#e8edf4] sm:block">Weave</span>
+              <WeaveWordmark size="nav" className="hidden sm:block" />
             </Link>
 
             <nav className="ml-3 hidden min-w-0 items-center gap-0.5 overflow-x-auto lg:flex [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
