@@ -808,7 +808,7 @@ const TestLLM: React.FC = () => {
             </div>
 
             <div className="shrink-0 border-t border-[rgba(148,163,184,0.12)] bg-[#0b0f16]/70 p-3 backdrop-blur-xl sm:p-4">
-              <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-[26px] border border-[rgba(148,163,184,0.2)] bg-[#10141d]/85 p-2 shadow-[0_12px_40px_-24px_rgba(0,0,0,0.7)] focus-within:border-[rgba(94,200,242,0.4)]">
+              <div className="mx-auto flex max-w-3xl items-center gap-2 rounded-[26px] border border-[rgba(148,163,184,0.2)] bg-[#10141d]/85 p-2 shadow-[0_12px_40px_-24px_rgba(0,0,0,0.7)] focus-within:border-[rgba(94,200,242,0.4)]">
                 <textarea
                   ref={composerRef}
                   value={testQuery}
@@ -819,7 +819,7 @@ const TestLLM: React.FC = () => {
                       if (canSend) void handleTestQuery();
                     }
                   }}
-                  rows={2}
+                  rows={1}
                   placeholder={
                     selectedFabric
                       ? contextMode === 'layer'
@@ -827,13 +827,13 @@ const TestLLM: React.FC = () => {
                         : 'Ask the fabric…'
                       : 'Select a fabric to begin'
                   }
-                  className="max-h-36 min-h-[52px] flex-1 resize-none bg-transparent px-3 py-2.5 text-[14px] leading-relaxed text-[#e8edf4] outline-none placeholder:text-[#8b9cb0]"
+                  className="max-h-36 min-h-[44px] flex-1 resize-none bg-transparent px-3 py-2.5 text-[14px] leading-[1.4] text-[#e8edf4] outline-none placeholder:text-[#8b9cb0]"
                 />
                 <button
                   type="button"
                   disabled={!canSend}
                   onClick={() => void handleTestQuery()}
-                  className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#0ea5e9] to-[#10b981] text-white shadow-[0_8px_24px_-10px_rgba(94,200,242,0.85)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:from-[#334155] disabled:to-[#334155] disabled:shadow-none"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center self-center rounded-full bg-gradient-to-br from-[#0ea5e9] to-[#10b981] text-white shadow-[0_8px_24px_-10px_rgba(94,200,242,0.85)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:from-[#334155] disabled:to-[#334155] disabled:shadow-none"
                   aria-label="Send"
                 >
                   <ArrowUpIcon className="h-5 w-5" />
