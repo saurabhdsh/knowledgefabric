@@ -2,9 +2,9 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom';
 import {
   ArrowUpIcon,
+  ChatBubbleLeftRightIcon,
   CheckCircleIcon,
   LinkIcon,
-  SparklesIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
 import { apiRequest } from '../utils/api';
@@ -425,10 +425,7 @@ const TestLLM: React.FC = () => {
     && !(contextMode === 'layer' && !selectedContextId);
 
   return (
-    <div
-      className="relative -mx-4 -mb-8 min-h-[calc(100vh-4.5rem)] overflow-hidden px-4 pb-4 text-[#e8edf4] sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8"
-      style={{ fontFamily: "Outfit, 'Plus Jakarta Sans', system-ui, sans-serif" }}
-    >
+    <div className="relative -mx-4 -mb-8 min-h-[calc(100vh-4.5rem)] overflow-hidden px-4 pb-4 text-[#e8edf4] sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
       {/* Soft weave atmosphere only — no white plate */}
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(94,200,242,0.08),_transparent_50%),radial-gradient(ellipse_at_bottom_right,_rgba(62,207,155,0.06),_transparent_45%)]" />
       <div
@@ -443,8 +440,8 @@ const TestLLM: React.FC = () => {
       <div className="relative mx-auto flex h-[calc(100vh-5.5rem)] max-w-[1400px] flex-col gap-3 pt-3">
         <header className="flex shrink-0 items-center justify-between gap-3 rounded-[22px] border border-[rgba(148,163,184,0.14)] bg-[#101822]/78 px-5 py-3 shadow-[0_18px_50px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#8b9cb0]">Weave · Agent lab</p>
-            <h1 className="truncate text-[22px] font-semibold tracking-[-0.03em] text-[#e8edf4]">Test with LLM</h1>
+            <p className="text-xs uppercase tracking-[0.22em] text-[#5ec8f2]">Weave · Agent lab</p>
+            <h1 className="truncate text-3xl font-semibold text-[#e8edf4]">Test with LLM</h1>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -615,7 +612,7 @@ const TestLLM: React.FC = () => {
 
             <div className="mt-auto rounded-[22px] border border-[rgba(148,163,184,0.14)] bg-[#10141d]/55 p-3">
               <div className="flex items-center gap-2">
-                <SparklesIcon className="h-4 w-4 text-[#5ec8f2]" />
+                <LinkIcon className="h-4 w-4 text-[#5ec8f2]" />
                 <p className="text-[11px] font-semibold text-[#e8edf4]">Prove the layer</p>
               </div>
               <p className="mt-1 text-[11px] leading-relaxed text-[#8b9cb0]">
@@ -674,11 +671,11 @@ const TestLLM: React.FC = () => {
             <div ref={transcriptRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
               {testResults.length === 0 && !isLoading && (
                 <div className="flex h-full min-h-[280px] flex-col items-center justify-center text-center">
-                  <div className="flex h-16 w-16 items-center justify-center rounded-[22px] border border-[rgba(94,200,242,0.25)] bg-[linear-gradient(160deg,rgba(94,200,242,0.14),rgba(16,20,29,0.7))] shadow-[0_16px_40px_-20px_rgba(94,200,242,0.45)]">
-                    <SparklesIcon className="h-7 w-7 text-[#5ec8f2]" />
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-[rgba(148,163,184,0.16)] bg-[#10141d]/70">
+                    <ChatBubbleLeftRightIcon className="h-7 w-7 text-[#5ec8f2]" />
                   </div>
-                  <p className="mt-5 text-[20px] font-semibold tracking-[-0.03em] text-[#e8edf4]">Ask the fabric</p>
-                  <p className="mt-2 max-w-sm text-[13px] leading-relaxed text-[#8b9cb0]">
+                  <p className="mt-5 text-xl font-semibold text-[#e8edf4]">Ask the fabric</p>
+                  <p className="mt-2 max-w-sm text-sm leading-relaxed text-[#8b9cb0]">
                     Setup stays on the left. Outcomes stream here like a lab notebook — structured sections, locked decisions, no endless page scroll.
                   </p>
                 </div>
