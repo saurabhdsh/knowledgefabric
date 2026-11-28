@@ -178,7 +178,7 @@ function buildGraphLegend(
     addNode('class', 'Ontology class', 'bg-violet-400');
     addNode('collection', 'Table', 'bg-emerald-400');
     addNode('entity', 'Instance', 'bg-cyan-300');
-    const typed = [...presentRelations].filter(
+    const typed = Array.from(presentRelations).filter(
       (r) => !['mentions', 'related_to', 'references', 'contains', 'includes'].includes(r)
     );
     if (typed.length > 0) {
@@ -198,7 +198,7 @@ function buildGraphLegend(
     addNode('class', 'Ontology class', 'bg-violet-400');
     addEdge('mentions', 'Mentions', 'bg-cyan-400');
     addEdge('related_to', 'Related to', 'bg-fuchsia-400');
-    const other = [...presentRelations].some(
+    const other = Array.from(presentRelations).some(
       (r) => !['mentions', 'related_to'].includes(r)
     );
     if (other) {
@@ -220,7 +220,7 @@ function buildGraphLegend(
     addEdge('references', DATA_EDGE_LABELS.references, 'bg-emerald-400');
     addEdge('contains', DATA_EDGE_LABELS.contains, 'bg-emerald-400');
     addEdge('includes', DATA_EDGE_LABELS.includes, 'bg-emerald-400');
-    const leftover = [...presentRelations].filter(
+    const leftover = Array.from(presentRelations).filter(
       (r) => !['mentions', 'related_to', 'references', 'contains', 'includes'].includes(r)
     );
     if (leftover.length > 0) {
