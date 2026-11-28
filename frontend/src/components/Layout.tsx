@@ -193,7 +193,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           }`}
         >
           <div
-            className={`mx-auto flex h-14 max-w-7xl items-center gap-2 rounded-full border px-2.5 transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+            className={`mx-auto flex h-14 max-w-7xl items-center gap-1.5 rounded-full border px-2.5 transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
               scrolled
                 ? 'border-white/16 bg-[#101822]/78 shadow-[0_12px_40px_rgba(0,0,0,0.32),0_0_0_1px_rgba(94,200,242,0.08),inset_0_1px_0_rgba(255,255,255,0.2)] backdrop-blur-2xl'
                 : 'border-white/12 bg-[#101822]/72 shadow-[0_18px_50px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.16)] backdrop-blur-xl'
@@ -207,12 +207,12 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             >
               <Bars3Icon className="h-5 w-5" />
             </button>
-            <Link to="/" className="flex shrink-0 items-center gap-2 rounded-full px-1.5 py-1">
+            <Link to="/" className="flex shrink-0 items-center gap-2 rounded-full pl-1.5 pr-0.5 py-1">
               <WeaveLogo gradientId="weave-grad-ribbon" className="h-8 w-8" />
               <span className="hidden text-sm font-semibold tracking-[-0.03em] text-[#e8edf4] sm:block">Weave</span>
             </Link>
 
-            <nav className="ml-2 hidden min-w-0 items-center gap-0.5 overflow-x-auto lg:flex [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <nav className="hidden min-w-0 items-center gap-0.5 overflow-x-auto lg:flex [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {GROUP_ORDER.map((group, groupIndex) => {
                 const items = visibleNavigation.filter((item) => item.group === group && !item.mobileOnly);
                 if (items.length === 0) return null;
