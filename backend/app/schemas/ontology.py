@@ -1,5 +1,4 @@
 """Ontology API request/response schemas (DTOs)."""
-import re
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
@@ -132,58 +131,6 @@ class CreateProjectFromFabricRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     domain: Optional[str] = None
-
-
-class AgentQueryRequest(BaseModel):
-    """Execute an agent-focused query against a selected ontology version."""
-    project_id: str
-    version_id: str
-    query: str
-    top_k: int = 5
-    role: str = "agent_developer"
-    include_debug: bool = True
-
-
-class AgentDataContractUpsertRequest(BaseModel):
-    """Create or update a versioned agent data contract."""
-    contract_id: str
-    name: str
-    version: str
-    description: Optional[str] = None
-    input_schema: Dict[str, Any] = Field(default_factory=dict)
-    output_schema: Dict[str, Any] = Field(default_factory=dict)
-    compatibility: str = "backward_compatible"
-    owner: str = "platform"
-    tags: List[str] = Field(default_factory=list)
-
-    @classmethod
-    def _is_semver(cls, value: str) -> bool:
-        return bool(re.match(r"^\d+\.\d+\.\d+$", value or ""))
-
-    @classmethod
-    def _valid_compatibility(cls, value: str) -> bool:
-        return value in {"backward_compatible", "forward_compatible", "breaking_change"}
-
-    def model_post_init(self, __context: Any) -> None:
-        if not self._is_semver(self.version):
-            raise ValueError("version must follow semantic versioning (e.g. 1.0.0)")
-        if not self._valid_compatibility(self.compatibility):
-            raise ValueError("compatibility must be backward_compatible, forward_compatible, or breaking_change")
-
-
-class AgentDataContractDeleteRequest(BaseModel):
-    """Delete a saved agent data contract by id and semver version."""
-
-    contract_id: str
-    version: str
-
-
-class AgentPolicyEvaluateRequest(BaseModel):
-    """Evaluate policy and masking rules for a query result."""
-    role: str
-    purpose: Optional[str] = "general"
-    payload: Dict[str, Any] = Field(default_factory=dict)
-    strict_mode: bool = False
 
 
 # --- Response DTOs ---

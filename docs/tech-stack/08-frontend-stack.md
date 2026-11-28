@@ -62,7 +62,6 @@ frontend/src/
 | /ontology | OntologyDashboard | Ontology project list |
 | /ontology/workspace/:projectId | OntologyWorkspace | Discovery, review, approve and build |
 | /ontology/enrichment | OntologyEnrichment | Enrichment workflows |
-| /ontology/agent-utilities | AgentDataUtilities | Agent tooling |
 | /train-ml | TrainMLModels | ML training UI |
 | /test-llm | TestLLM | LLM provider testing |
 | /context | ContextAnalysis | Context inspection |

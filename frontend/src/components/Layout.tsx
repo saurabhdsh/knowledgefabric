@@ -11,7 +11,6 @@ import {
   CpuChipIcon,
   CircleStackIcon,
   BoltIcon,
-  CommandLineIcon,
   UsersIcon,
 } from '@heroicons/react/24/outline';
 import WeaveLogo from './WeaveLogo';
@@ -43,7 +42,6 @@ const navigation: Array<{
   { name: 'Ontology Enrichment', short: 'Enrich', href: '/ontology/enrichment', icon: BoltIcon, sublabel: 'Governance queue', feature: 'ontology_enrichment', group: 'Understand' },
   { name: 'Context Layer', short: 'Context', href: '/context', icon: MagnifyingGlassIcon, sublabel: 'Fabric → agents', feature: 'context', group: 'Understand' },
   { name: 'Test with LLM', short: 'Ask', href: '/test-llm', icon: ChatBubbleLeftRightIcon, sublabel: 'Ask a fabric', feature: 'test_llm', group: 'Use' },
-  { name: 'Agent Data Utilities', short: 'Tools', href: '/ontology/agent-utilities', icon: CommandLineIcon, sublabel: 'Agent toolkit', feature: 'agent_utilities', group: 'Use' },
   // User Management lives in the account badge on desktop so the top bar does not clip "Users" to "Use".
   { name: 'User Management', short: 'Users', href: '/users', icon: UsersIcon, sublabel: 'Platform users', feature: 'user_management', group: 'Use', mobileOnly: true },
 ];

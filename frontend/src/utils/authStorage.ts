@@ -12,7 +12,6 @@ export type WeaveFeatureKey =
   | 'context'
   | 'ontology'
   | 'ontology_enrichment'
-  | 'agent_utilities'
   | 'user_management';
 
 export interface WeaveUser {

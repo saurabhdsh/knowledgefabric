@@ -137,29 +137,6 @@ export interface KnowledgeFabricLite {
   document_count?: number;
 }
 
-export interface AgentQueryResult {
-  element_id: string;
-  element_type: string;
-  element_name: string;
-  rank_score: number;
-  citations: Array<Record<string, unknown>>;
-  provenance: Record<string, unknown>;
-}
-
-export interface AgentContract {
-  contract_id: string;
-  name: string;
-  version: string;
-  description?: string;
-  input_schema: Record<string, unknown>;
-  output_schema: Record<string, unknown>;
-  compatibility: string;
-  owner: string;
-  tags: string[];
-  created_at?: string;
-  updated_at?: string;
-}
-
 async function apiGet<T>(path: string): Promise<T> {
   const endpoint = `${ONTOLOGY_BASE}${path.startsWith('/') ? '' : '/'}${path}`;
   const url = path.startsWith('http') ? path : getApiUrl(endpoint);
@@ -322,53 +299,6 @@ export const ontologyApi = {
     apiGet<{ success: boolean; data: { mode: string } }>('/settings/governance-mode').then(r => r.data),
   updateGovernanceMode: (mode: 'manual' | 'assisted' | 'controlled_auto_apply', updatedBy = 'admin') =>
     apiPut<{ success: boolean; data: { governance_mode: string; updated_by: string; updated_at: string } }>('/settings/governance-mode', { mode, updated_by: updatedBy }).then(r => r.data),
-  agentQuery: (payload: { project_id: string; version_id: string; query: string; top_k?: number; role?: string; include_debug?: boolean }) =>
-    apiPost<{ success: boolean; data: { answer_preview: string; generated_query: Record<string, unknown>; results: AgentQueryResult[]; trust_score: Record<string, unknown>; debug?: Record<string, unknown> } }>('/agent/query', payload).then(r => r.data),
-  listAgentContracts: () =>
-    apiGet<{ success: boolean; data: AgentContract[] }>('/agent/contracts').then(r => r.data),
-  upsertAgentContract: (payload: {
-    contract_id: string;
-    name: string;
-    version: string;
-    description?: string;
-    input_schema?: Record<string, unknown>;
-    output_schema?: Record<string, unknown>;
-    compatibility?: string;
-    owner?: string;
-    tags?: string[];
-  }) => apiPost<{ success: boolean; data: AgentContract }>('/agent/contracts', payload).then(r => r.data),
-  deleteAgentContract: async (contractId: string, version: string) => {
-    // POST matches project delete pattern — some SPA/proxy setups mishandle DELETE.
-    const res = await fetch(getApiUrl(`${ONTOLOGY_BASE}/agent/contracts/delete`), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ contract_id: contractId, version }),
-    });
-    const text = await res.text();
-    let payload: { success?: boolean; message?: string; detail?: string | unknown };
-    try {
-      payload = text ? JSON.parse(text) : {};
-    } catch {
-      throw new Error(text || `HTTP ${res.status}`);
-    }
-    if (!res.ok) {
-      const detail =
-        typeof payload.detail === 'string'
-          ? payload.detail
-          : typeof payload.message === 'string'
-            ? payload.message
-            : text;
-      throw new Error(detail || `HTTP ${res.status}`);
-    }
-    if (payload.success === false) {
-      throw new Error(typeof payload.message === 'string' ? payload.message : 'Delete failed');
-    }
-    return payload as { success: boolean; data?: { contract_id: string; version: string } };
-  },
-  getAgentTrustScore: (projectId: string, versionId: string, elementId?: string) =>
-    apiGet<{ success: boolean; data: Record<string, unknown> }>(`/agent/trust-score/${encodeURIComponent(projectId)}/${encodeURIComponent(versionId)}${elementId ? `?element_id=${encodeURIComponent(elementId)}` : ''}`).then(r => r.data),
-  evaluateAgentPolicy: (payload: { role: string; purpose?: string; payload: Record<string, unknown>; strict_mode?: boolean }) =>
-    apiPost<{ success: boolean; data: Record<string, unknown> }>('/agent/policy/evaluate', payload).then(r => r.data),
   listKnowledgeFabrics: async () => {
     const res = await fetch(getApiUrl('api/v1/knowledge/'), { headers: getAuthHeaders() });
     if (!res.ok) {

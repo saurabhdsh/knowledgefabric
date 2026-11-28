@@ -39,7 +39,6 @@ FEATURE_CATALOG: List[Dict[str, str]] = [
     {"key": "context", "label": "Context Analysis", "description": "Semantic insights"},
     {"key": "ontology", "label": "Ontology Discovery", "description": "Schema explorer and workspace"},
     {"key": "ontology_enrichment", "label": "Ontology Enrichment", "description": "AI governance queue"},
-    {"key": "agent_utilities", "label": "Agent Data Utilities", "description": "Agent toolkit"},
     {
         "key": FEATURE_USER_MANAGEMENT,
         "label": "User Management",

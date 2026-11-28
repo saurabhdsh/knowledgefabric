@@ -30,7 +30,6 @@ _PATH_FEATURE_RULES: List[Tuple[str, str]] = [
     ("/api/v1/upload", "create_knowledge"),
     ("/api/v1/database", "create_knowledge"),
     ("/api/v1/ontology/enrichment", "ontology_enrichment"),
-    ("/api/v1/ontology/agent", "agent_utilities"),
     ("/api/v1/ontology", "ontology"),
     ("/api/v1/graph", "fabrics"),
     ("/api/v1/search", "context"),

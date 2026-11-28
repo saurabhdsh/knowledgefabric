@@ -156,7 +156,6 @@ Each route has an assigned Tailwind color family for documentation only; dark UI
 | Context Analysis | orange |
 | Ontology Discovery | teal |
 | Ontology Enrichment | cyan |
-| Agent Data Utilities | violet |
 
 ### 4.5 Enterprise platform panel accent
 
@@ -446,7 +445,6 @@ Native `window.confirm` / `window.prompt` still used in some flows (rename, dele
 | `/ontology` | Ontology Discovery | — |
 | `/ontology/workspace/:projectId` | Ontology Workspace | — |
 | `/ontology/enrichment` | Ontology Enrichment | — |
-| `/ontology/agent-utilities` | Agent Data Utilities | — |
 | `/fabrics/:fabricId/knowledge-graph` | Fabric Knowledge Graph | — |
 
 Reference: `frontend/src/App.tsx`

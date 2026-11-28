@@ -14,7 +14,6 @@ import OntologyDashboard from './pages/ontology/OntologyDashboard';
 import OntologyWorkspace from './pages/ontology/OntologyWorkspace';
 import OntologyEnrichment from './pages/ontology/OntologyEnrichment';
 import FabricKnowledgeGraph from './pages/FabricKnowledgeGraph';
-import AgentDataUtilities from './pages/ontology/AgentDataUtilities';
 import UserManagement from './pages/UserManagement';
 
 function App() {
@@ -97,14 +96,6 @@ function App() {
                     element={
                       <FeatureRoute feature="ontology_enrichment">
                         <OntologyEnrichment />
-                      </FeatureRoute>
-                    }
-                  />
-                  <Route
-                    path="/ontology/agent-utilities"
-                    element={
-                      <FeatureRoute feature="agent_utilities">
-                        <AgentDataUtilities />
                       </FeatureRoute>
                     }
                   />
