@@ -122,6 +122,120 @@ const GRAPH_TYPE_LABELS: Record<string, string> = {
   codebase: 'Code structure',
 };
 
+type GraphLegendItem = {
+  key: string;
+  label: string;
+  kind: 'node' | 'edge';
+  swatchClass: string;
+};
+
+const DATA_GRAPH_TYPES = new Set<GraphViewType>(['profiled_schema', 'database_schema', 'stale_schema']);
+
+/** Human labels for structural / measured edges on data views. */
+const DATA_EDGE_LABELS: Record<string, string> = {
+  references: 'Join (measured FK)',
+  contains: 'Contains table',
+  includes: 'Sample row',
+};
+
+function buildGraphLegend(
+  graphType: GraphViewType,
+  nodes: GraphNode[],
+  edges: GraphEdge[]
+): GraphLegendItem[] {
+  const presentNodeTypes = new Set(nodes.map((n) => n.type));
+  const presentRelations = new Set(
+    edges.map((e) => String(e.relation || '').toLowerCase()).filter(Boolean)
+  );
+  const items: GraphLegendItem[] = [];
+
+  const addNode = (type: GraphNodeType, label: string, swatchClass: string) => {
+    if (presentNodeTypes.has(type)) {
+      items.push({ key: `node:${type}`, label, kind: 'node', swatchClass });
+    }
+  };
+  const addEdge = (relation: string, label: string, swatchClass: string) => {
+    if (presentRelations.has(relation)) {
+      items.push({ key: `edge:${relation}`, label, kind: 'edge', swatchClass });
+    }
+  };
+
+  if (presentNodeTypes.has('fabric') || presentNodeTypes.has('workspace')) {
+    items.push({ key: 'node:fabric', label: 'Fabric', kind: 'node', swatchClass: 'bg-amber-400' });
+  }
+
+  if (DATA_GRAPH_TYPES.has(graphType)) {
+    addNode('collection', 'Table', 'bg-emerald-400');
+    addNode('entity', 'Instance', 'bg-cyan-300');
+    addNode('class', 'Ontology class', 'bg-violet-400');
+    for (const rel of ['references', 'contains', 'includes'] as const) {
+      addEdge(rel, DATA_EDGE_LABELS[rel], 'bg-emerald-400');
+    }
+    // Rare leftovers (e.g. mixed payloads) — only if actually present.
+    addEdge('mentions', 'Mentions', 'bg-cyan-400');
+    addEdge('related_to', 'Related to', 'bg-fuchsia-400');
+  } else if (graphType === 'canonical') {
+    addNode('class', 'Ontology class', 'bg-violet-400');
+    addNode('collection', 'Table', 'bg-emerald-400');
+    addNode('entity', 'Instance', 'bg-cyan-300');
+    const typed = [...presentRelations].filter(
+      (r) => !['mentions', 'related_to', 'references', 'contains', 'includes'].includes(r)
+    );
+    if (typed.length > 0) {
+      items.push({
+        key: 'edge:typed',
+        label: 'Typed relationship',
+        kind: 'edge',
+        swatchClass: 'bg-amber-400',
+      });
+    }
+    addEdge('references', DATA_EDGE_LABELS.references, 'bg-emerald-400');
+    addEdge('contains', DATA_EDGE_LABELS.contains, 'bg-emerald-400');
+    addEdge('includes', DATA_EDGE_LABELS.includes, 'bg-emerald-400');
+  } else if (graphType === 'exploratory') {
+    addNode('collection', 'Collection', 'bg-emerald-400');
+    addNode('entity', 'Entity', 'bg-cyan-300');
+    addNode('class', 'Ontology class', 'bg-violet-400');
+    addEdge('mentions', 'Mentions', 'bg-cyan-400');
+    addEdge('related_to', 'Related to', 'bg-fuchsia-400');
+    const other = [...presentRelations].some(
+      (r) => !['mentions', 'related_to'].includes(r)
+    );
+    if (other) {
+      items.push({
+        key: 'edge:other',
+        label: 'Other relation',
+        kind: 'edge',
+        swatchClass: 'bg-amber-400',
+      });
+    }
+  } else {
+    // codebase / fallback — show what's present with generic labels
+    addNode('collection', 'Table', 'bg-emerald-400');
+    addNode('entity', 'Entity', 'bg-cyan-300');
+    addNode('class', 'Ontology class', 'bg-violet-400');
+    addNode('code', 'Code', 'bg-slate-400');
+    addEdge('mentions', 'Mentions', 'bg-cyan-400');
+    addEdge('related_to', 'Related to', 'bg-fuchsia-400');
+    addEdge('references', DATA_EDGE_LABELS.references, 'bg-emerald-400');
+    addEdge('contains', DATA_EDGE_LABELS.contains, 'bg-emerald-400');
+    addEdge('includes', DATA_EDGE_LABELS.includes, 'bg-emerald-400');
+    const leftover = [...presentRelations].filter(
+      (r) => !['mentions', 'related_to', 'references', 'contains', 'includes'].includes(r)
+    );
+    if (leftover.length > 0) {
+      items.push({
+        key: 'edge:other',
+        label: 'Other relation',
+        kind: 'edge',
+        swatchClass: 'bg-amber-400',
+      });
+    }
+  }
+
+  return items;
+}
+
 function coerceNodeType(raw: unknown): GraphNodeType {
   const t = String(raw || '').toLowerCase();
   if (t === 'fabric' || t === 'workspace') return 'fabric';
@@ -345,6 +459,11 @@ const FabricKnowledgeGraph: React.FC = () => {
       classes: nodes.filter((n) => n.type === 'class').length,
     }),
     [nodes, edges]
+  );
+
+  const legendItems = useMemo(
+    () => buildGraphLegend(graphType, nodes, edges),
+    [graphType, nodes, edges]
   );
 
   const relationFilteredGraph = useMemo(() => {
@@ -1252,15 +1371,20 @@ const FabricKnowledgeGraph: React.FC = () => {
               </div>
             </div>
 
-            <div className="absolute top-3 left-1/2 -translate-x-1/2 rounded-lg border border-[rgba(148,163,184,0.22)] bg-[#0b0f16]/88 backdrop-blur px-3 py-2 flex flex-wrap items-center gap-3 text-[11px] text-[#9fb0c5] max-w-[90%]">
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-amber-400" /> Fabric</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-emerald-400" /> Table</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-cyan-300" /> Instance</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-violet-400" /> Ontology class</span>
-              <span className="inline-flex items-center gap-1"><span className="h-0.5 w-5 bg-emerald-400" /> references</span>
-              <span className="inline-flex items-center gap-1"><span className="h-0.5 w-5 bg-cyan-400" /> mentions</span>
-              <span className="inline-flex items-center gap-1"><span className="h-0.5 w-5 bg-fuchsia-400" /> related_to</span>
-            </div>
+            {legendItems.length > 0 && (
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 rounded-lg border border-[rgba(148,163,184,0.22)] bg-[#0b0f16]/88 backdrop-blur px-3 py-2 flex flex-wrap items-center justify-center gap-3 text-[11px] text-[#9fb0c5] max-w-[90%]">
+                {legendItems.map((item) => (
+                  <span key={item.key} className="inline-flex items-center gap-1">
+                    {item.kind === 'node' ? (
+                      <span className={`h-2.5 w-2.5 rounded-full ${item.swatchClass}`} />
+                    ) : (
+                      <span className={`h-0.5 w-5 ${item.swatchClass}`} />
+                    )}
+                    {item.label}
+                  </span>
+                ))}
+              </div>
+            )}
 
             {visibleGraph.nodes.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
