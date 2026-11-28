@@ -212,78 +212,80 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               <span className="hidden text-sm font-semibold tracking-[-0.03em] text-[#e8edf4] sm:block">Weave</span>
             </Link>
 
-            <nav className="hidden min-w-0 flex-1 items-center gap-0.5 overflow-x-auto pl-1 pr-3 lg:flex [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {GROUP_ORDER.map((group, groupIndex) => {
-                const items = visibleNavigation.filter((item) => item.group === group && !item.mobileOnly);
-                if (items.length === 0) return null;
-                return (
-                  <div key={group} className="flex shrink-0 items-center gap-0.5">
-                    {groupIndex > 0 && <span className="mx-1 h-4 w-px bg-white/10" aria-hidden />}
-                    {items.map((item) => {
-                      const active = activeHref === item.href;
-                      return (
-                        <Link
-                          key={item.href}
-                          to={item.href}
-                          title={item.name}
-                          className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1.5 text-[12px] font-medium tracking-[-0.01em] transition ${
-                            active
-                              ? 'bg-white/[0.1] text-[#e8edf4] shadow-[inset_0_1px_0_rgba(255,255,255,0.28)]'
-                              : 'text-[#8b9cb0] hover:bg-white/[0.05] hover:text-[#e8edf4]'
-                          }`}
-                        >
-                          <item.icon className="h-3.5 w-3.5 shrink-0" />
-                          <span className="whitespace-nowrap">{item.short}</span>
-                        </Link>
-                      );
-                    })}
-                  </div>
-                );
-              })}
-            </nav>
+            <div className="ml-auto flex min-w-0 items-center gap-1.5">
+              <nav className="hidden min-w-0 items-center gap-0.5 overflow-x-auto lg:flex [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {GROUP_ORDER.map((group, groupIndex) => {
+                  const items = visibleNavigation.filter((item) => item.group === group && !item.mobileOnly);
+                  if (items.length === 0) return null;
+                  return (
+                    <div key={group} className="flex shrink-0 items-center gap-0.5">
+                      {groupIndex > 0 && <span className="mx-1 h-4 w-px bg-white/10" aria-hidden />}
+                      {items.map((item) => {
+                        const active = activeHref === item.href;
+                        return (
+                          <Link
+                            key={item.href}
+                            to={item.href}
+                            title={item.name}
+                            className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1.5 text-[12px] font-medium tracking-[-0.01em] transition ${
+                              active
+                                ? 'bg-white/[0.1] text-[#e8edf4] shadow-[inset_0_1px_0_rgba(255,255,255,0.28)]'
+                                : 'text-[#8b9cb0] hover:bg-white/[0.05] hover:text-[#e8edf4]'
+                            }`}
+                          >
+                            <item.icon className="h-3.5 w-3.5 shrink-0" />
+                            <span className="whitespace-nowrap">{item.short}</span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </nav>
 
-            <div className="relative ml-auto flex shrink-0 items-center gap-2">
-              <div className="relative hidden md:block">
-                <div className="flex h-9 items-center rounded-full border border-white/10 bg-black/20 px-3 focus-within:border-[rgba(94,200,242,0.4)]">
-                  <MagnifyingGlassIcon className="h-3.5 w-3.5 text-[#8b9cb0]" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => {
-                      setSearchQuery(e.target.value);
-                      setSearchOpen(true);
-                    }}
-                    onFocus={() => setSearchOpen(true)}
-                    onBlur={() => setTimeout(() => setSearchOpen(false), 140)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && filteredSearchItems.length > 0) {
-                        handleSearchSelect(filteredSearchItems[0].href);
-                      }
-                      if (e.key === 'Escape') setSearchOpen(false);
-                    }}
-                    placeholder="Find"
-                    aria-label="Find a page"
-                    className="ml-2 w-16 bg-transparent text-xs text-[#e8edf4] placeholder:text-[#8b9cb0] focus:w-36 focus:outline-none xl:w-28 xl:focus:w-40 transition-[width]"
-                  />
-                </div>
-                {searchOpen && filteredSearchItems.length > 0 && (
-                  <div className="absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-2xl border border-white/12 bg-[#0b0f16]/95 shadow-[0_18px_50px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-2xl">
-                    {filteredSearchItems.slice(0, 8).map((item) => (
-                      <button
-                        key={item.href}
-                        type="button"
-                        onMouseDown={() => handleSearchSelect(item.href)}
-                        className="block w-full border-b border-white/8 px-3 py-2 text-left last:border-b-0 hover:bg-white/[0.05]"
-                      >
-                        <span className="block text-xs text-[#e8edf4]">{item.label}</span>
-                        <span className="block text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">{item.description}</span>
-                      </button>
-                    ))}
+              <div className="relative flex shrink-0 items-center gap-2">
+                <div className="relative hidden md:block">
+                  <div className="flex h-9 items-center rounded-full border border-white/10 bg-black/20 px-3 focus-within:border-[rgba(94,200,242,0.4)]">
+                    <MagnifyingGlassIcon className="h-3.5 w-3.5 text-[#8b9cb0]" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => {
+                        setSearchQuery(e.target.value);
+                        setSearchOpen(true);
+                      }}
+                      onFocus={() => setSearchOpen(true)}
+                      onBlur={() => setTimeout(() => setSearchOpen(false), 140)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && filteredSearchItems.length > 0) {
+                          handleSearchSelect(filteredSearchItems[0].href);
+                        }
+                        if (e.key === 'Escape') setSearchOpen(false);
+                      }}
+                      placeholder="Find"
+                      aria-label="Find a page"
+                      className="ml-2 w-16 bg-transparent text-xs text-[#e8edf4] placeholder:text-[#8b9cb0] focus:w-36 focus:outline-none xl:w-28 xl:focus:w-40 transition-[width]"
+                    />
                   </div>
-                )}
-              </div>
-              <div className="hidden sm:block">
-                <UserAccountBadge compact />
+                  {searchOpen && filteredSearchItems.length > 0 && (
+                    <div className="absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-2xl border border-white/12 bg-[#0b0f16]/95 shadow-[0_18px_50px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-2xl">
+                      {filteredSearchItems.slice(0, 8).map((item) => (
+                        <button
+                          key={item.href}
+                          type="button"
+                          onMouseDown={() => handleSearchSelect(item.href)}
+                          className="block w-full border-b border-white/8 px-3 py-2 text-left last:border-b-0 hover:bg-white/[0.05]"
+                        >
+                          <span className="block text-xs text-[#e8edf4]">{item.label}</span>
+                          <span className="block text-[10px] uppercase tracking-[0.14em] text-[#8b9cb0]">{item.description}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="hidden sm:block">
+                  <UserAccountBadge compact />
+                </div>
               </div>
             </div>
           </div>
